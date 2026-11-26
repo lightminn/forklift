@@ -29,9 +29,12 @@ grid:
 permission:
   latency_s: 0.30           # memo 4: conservative until the S5 stop is measured (sim 0.15)
   decel_mps2: 0.5           # memo 4: conservative until the S5 stop is measured (sim 1.5)
-  # C13 (operating plan 2026-11-26 6.1, U3e-1): latency_s and decel_mps2 above are the operating stop model; the
-  # operating assembly refuses them until S5 measures the stop (measured: true) or the lead decides an exception
-  provenance: {source: "memo 4: conservative values before the S5 stop", measured: false, until: S5}
+  # C13 (operating plan 2026-11-26 6.1, U3e-1): latency_s and decel_mps2 above are the operating stop model, each
+  # with its own provenance; the operating assembly refuses each until S5 measures it (measured: true) or the lead
+  # decides an exception for that value (config_exceptions key permission.stop_model.<value>)
+  stop_model:
+    latency_s: {provenance: {source: "memo 4: conservative before the S5 stop", measured: false, until: S5}}
+    decel_mps2: {provenance: {source: "memo 4: conservative before the S5 stop", measured: false, until: S5}}
   margin_m: 0.05
   envelope_m: 0.01          # unchanged: the scan skew goes into the age table (memo, Codex round 1 P1)
   envelope_ramp_m: 0.0

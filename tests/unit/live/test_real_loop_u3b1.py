@@ -264,18 +264,28 @@ def test_a_zero_frame_that_never_went_out_does_not_count_as_a_stop():
     assert any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
 
 
-def test_a_start_left_while_the_plan_is_pending_writes_no_arm():
-    """Plan 5 / 6.1 merge table (Codex U3e-1 round 2 P2-4): the submit accepted at the start, the truck's start then
-    taken 0.2 m off before the plan is ready -- with the start_pose bypass on too -- and no ARM or moving DRIVE goes out."""
+def _pending_run(drift_m: float):
     r = rig()
     r.loop.run_deadline_ns = r.now + int(1000 * 1e9)
     ask(r, "check_bypass", check="start_pose", on=True)
     r.tick(2)
     reply = submit(r)
     assert reply["t"] == "ack", reply
-    r.loop.start_rear = (r.loop.start_rear[0] - 0.2, r.loop.start_rear[1], r.loop.start_rear[2])  # truck 0.2 m off
+    assert r.core.commands.status in ("accepted", "preparing")  # the plan not ready yet: the drift lands in the wait
+    r.loop.start_rear = (r.loop.start_rear[0] - drift_m, r.loop.start_rear[1], r.loop.start_rear[2])
     permits = []
     for _ in range(600):
         r.tick()
         permits.append(r.permit.state)
-    assert set(permits) <= {"OFF"}, sorted(set(permits))  # never armed
+    return r, set(permits)
+
+
+def test_a_start_left_while_the_plan_is_pending_writes_no_arm():
+    """Plan 5 / 6.1 verification table (Codex U3e-1 round 2 P2-4, impl round 1): the submit accepted at the start, the
+    truck's start then 0.2 m off while the plan is pending -- with the start_pose bypass on -- ends the mission
+    not_at_start and never arms; the same run without the drift arms and drives (so the refusal is the drift's)."""
+    r, permits = _pending_run(0.2)
+    assert permits <= {"OFF"}, sorted(permits)
+    assert r.core.commands.end_reason == "not_at_start", r.core.commands.end_reason
+    _r, control = _pending_run(0.0)
+    assert {"ARMING", "DRIVING"} <= control, sorted(control)

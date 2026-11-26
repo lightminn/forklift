@@ -134,23 +134,27 @@ def run_real_precheck(args) -> int:
         # the record never goes to a device (the board itself or an alias of it): nothing is written anywhere
         _write({**record, "refused": ["out_not_a_regular_file"]}, None)
         return 2
+    if args.out is not None and os.path.lexists(args.out):
+        # a REAL invocation never cuts an existing file -- another run's record, say (Codex U3e-1 impl round 1 P2-4)
+        _write({**record, "refused": ["out_exists"]}, None)
+        return 2
     if args.device is None:
         record["refused"] = ["real_needs_device"]
-        _write(record, args.out)
+        _write(record, None)
         return 2
     if _is_pty(args.device):
         record["refused"] = ["real_device_is_pty"]  # a real MCU never links by pty (the model's bench is HIL's)
-        _write(record, args.out)
+        _write(record, None)
         return 2
     try:
         tr = rlt.RealTtyTransport.open(args.device)
     except DeviceBusy as busy:
         record["refused"] = [f"device_busy:{busy}"]
-        _write(record, args.out)
+        _write(record, None)
         return 2
     except OSError as err:
         record["refused"] = [f"device_unopenable:{type(err).__name__}:{err}"]
-        _write(record, args.out)
+        _write(record, None)
         return 2
     record["opened"] = [args.device]
     try:
@@ -162,7 +166,7 @@ def run_real_precheck(args) -> int:
                 tr.receive(host, time.monotonic_ns())
             except rlt.DeviceLost as lost:
                 record["refused"] = [f"device_lost:{lost}"]
-                _write(record, args.out)
+                _write(record, None)
                 return 2
             time.sleep(0.005)
         board = rr.board_facts(host, tr)
@@ -170,14 +174,13 @@ def run_real_precheck(args) -> int:
         try:
             facts = rp.gather(record_path=args.preconditions, lidar_path=args.lidar_config, imu_path=args.imu_config,
                               settings_path=args.settings, s10a_path=args.s10a or REPO / "config/real/s10a.yaml",
-                              layer_path=REPO / "config/real/obstacle_layer_real.yaml",
-                              budget_path=REPO / "config/real/obstacle_layer.yaml", vehicle_path=args.vehicle,
+                              layer_path=args.layer, budget_path=args.budget, vehicle_path=args.vehicle,
                               watch_path=args.watch, board=board)
             record["refused"] = rp.operating_preconditions(facts)
             record["imu_qualified"] = rp.imu_qualified(facts)
         except rp.GATHER_ERRORS as err:
             record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
-        written = _write(record, args.out)
+        written = _write(record, args.out, exclusive=True)
         return 2 if record["refused"] or not written else 0
     finally:
         os.close(tr.fd)
@@ -218,6 +221,8 @@ def real_run_refused(args) -> list:
         out.append("duration_s")
     if args.out_dir is not None and os.path.lexists(args.out_dir):
         out.append("out_dir_exists")  # a run's record is never written over an earlier one
+    if args.scan_socket is not None and os.path.lexists(args.scan_socket):
+        out.append("scan_socket_exists")  # never replaced: another run's receiver may be on it
     for name, path in real_inputs(args).items():
         if path is None:
             continue
@@ -263,7 +268,7 @@ def run_real(args, *, transport_factory=None) -> int:
             return 2
         end = {"t": "end", "reason": None, "opened": []}
         held = SimpleNamespace(tr=None, fd_closed=False, server=None, run=None, sources=None, scan_path=None,
-                               prep=None)
+                               scan_ino=None, prep=None)
         code = EXIT_FAILED
         try:
             code = _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
@@ -312,7 +317,12 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     except rr.RunCancelled:
         end["reason"] = "signal_while_preparing"
         return EXIT_FAILED
-    startup = rr.run_time_setting(prep.data, "real_startup_max_s", 30.0)
+    try:
+        startup = rr.run_time_setting(prep.data, "real_startup_max_s", 30.0)
+    except AssemblyRefused as err:  # a malformed setting is a structural refusal, before the device (impl r1 P3)
+        end["reason"] = f"refused:{err.reasons}"
+        end["refused"] = list(err.reasons)
+        return 2
     deadline = time.monotonic() + startup
     record.put(rr.header_row(prep, synthetic=False, extra={"client": "real", "device": str(args.device),
                                                            "duration_s": float(args.duration_s),
@@ -346,13 +356,19 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
             return EXIT_FAILED
         time.sleep(0.005)
     boot = int(tr.first_state.boot_id)
-    # step 6: the sources (the scan socket bound here; a stale socket with no receiver is replaced, a file refused)
+    # step 6: the sources. The scan socket is this run's own: an existing path is refused (never replaced -- an ending
+    # run's cleanup must not unlink a newer run's receiver, impl round 1 P2-2), and only the inode bound here is
+    # removed at the end
+    if os.path.lexists(args.scan_socket):
+        end["reason"] = "scan_socket_exists"
+        return 2
     try:
         sock = bind_socket(args.scan_socket)
+        st = os.lstat(args.scan_socket)
     except OSError as err:
         end["reason"] = f"scan_socket:{type(err).__name__}:{err}"
         return 2
-    held.scan_path = str(args.scan_socket)
+    held.scan_path, held.scan_ino = str(args.scan_socket), (st.st_dev, st.st_ino)
     try:
         held.sources = sources = rr.make_real_sources(prep, host, tr, scan_sock=sock, slam_socket=args.slam_bridge,
                                                       connect_timeout_s=max(0.001, _remaining(deadline)))
@@ -365,12 +381,12 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     if stop.is_set() or _remaining(deadline) <= 0:
         end["reason"] = "signal" if stop.is_set() else "real_startup_slow:assembly"
         return EXIT_FAILED
-    # step 8: the permission -- the STATEs that came during the assembly read first (a reboot or a lost device since
-    # the first STATE refuses), then the judgement the assembly passed on, on the boot the first STATE named
-    try:
-        tr.receive(host, time.monotonic_ns())
-    except rlt.DeviceLost as lost:
-        end["reason"] = f"device_lost:{lost}"
+    # step 8: the permission -- every STATE that came during the assembly read first, until nothing is pending and the
+    # device is not hung up (a reboot, a bad build or a lost device since the first STATE refuses), then the judgement
+    # the assembly passed on, on the boot the first STATE named (impl round 1 P2-1: one read could leave some behind)
+    why = _drain(tr, host, deadline, stop, rlt)
+    if why is not None:
+        end["reason"] = why
         return EXIT_FAILED
     end["judgement"] = run.judgement
     if not tr.grant(run.judgement, boot):
@@ -390,6 +406,9 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
         cancel.set()
         server._ready.wait(2.0)  # noqa: SLF001 -- a bind after the flag closes itself
         end["reason"] = "real_startup_slow:console"
+        return EXIT_FAILED
+    if stop.is_set() or _remaining(deadline) <= 0:  # a signal or the start's end while the console bound
+        end["reason"] = "signal" if stop.is_set() else "real_startup_slow:console"
         return EXIT_FAILED
     started = {"console": f"http://{args.host}:{server.port}/", "port": server.port, "session_epoch": prep.epoch}
     if args.console_lan:
@@ -422,6 +441,30 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     # step 11: the permission revoked and the fd released at once (the lock with it), the blocking cleanup after
     _release_device(held, "closing")
     return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
+
+
+def _drain(tr, host, deadline: float, stop, rlt) -> str | None:
+    """Every byte pending on the board's fd read (each a STATE the transport and host take in order) and a hang-up
+    seen, within the start's deadline; None when the fd is quiet and the device present."""
+    import select
+
+    poller = select.poll()
+    poller.register(tr.fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while True:
+        if stop.is_set():
+            return "signal"
+        if _remaining(deadline) <= 0:
+            return "real_startup_slow:grant"
+        ready = poller.poll(0)
+        if not ready:
+            return None if tr.lost is None else f"device_lost:{tr.lost}"
+        try:
+            tr.receive(host, time.monotonic_ns())
+        except rlt.DeviceLost as lost:
+            return f"device_lost:{lost}"
+        if any(ev & (select.POLLHUP | select.POLLERR) for _fd, ev in ready) and not any(
+                ev & select.POLLIN for _fd, ev in ready):
+            return "device_lost:hangup"
 
 
 def _release_device(held, why: str) -> None:
@@ -469,7 +512,9 @@ def _real_cleanup(held, record, end) -> bool:
                 finally:
                     if held.scan_path is not None:
                         try:
-                            os.unlink(held.scan_path)
+                            st = os.lstat(held.scan_path)
+                            if (st.st_dev, st.st_ino) == held.scan_ino:  # this run's socket, not a newer run's
+                                os.unlink(held.scan_path)
                         except OSError:
                             pass
     return ok
@@ -508,7 +553,7 @@ def _is_pty(device: str) -> bool:
     return stat_.S_ISCHR(st.st_mode) and os.major(st.st_rdev) in model_peer.PTY_SLAVE_MAJORS
 
 
-def _write(record: dict, out: Path | None) -> bool:
+def _write(record: dict, out: Path | None, exclusive: bool = False) -> bool:
     """The record printed (one JSON document) and, with ``out``, written whole to a regular file only: the file is
     opened without following a link and without blocking, and checked on the opened fd itself before one byte is
     written (never a device, a FIFO, a socket -- the real board's own node or an alias of it; Codex unlock U1 review
@@ -519,7 +564,8 @@ def _write(record: dict, out: Path | None) -> bool:
     if out is not None:
         text = json.dumps(record, indent=2, default=str).encode()
         try:
-            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o644)
+            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+                         | (os.O_EXCL if exclusive else 0), 0o644)
         except OSError as exc:
             err = f"{type(exc).__name__}:{exc}"
         else:
@@ -965,6 +1011,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.run and args.client == "real" and args.precheck:
+        if args.hil or args.replay is not None:  # printed only: a REAL invocation never writes --out early
+            _write({"run": False, "refused": ["real_with_hil" if args.hil else "real_with_replay"], "opened": []}, None)
+            return 2
+        return run_real_precheck(args)
     if args.run and args.client == "real" and not args.precheck:
         # the operating run's arguments are judged before any other branch, and its refusals are printed only: an
         # --out given to it never cuts a file (Codex U3e-1 round 3 P2-2)

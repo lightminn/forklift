@@ -494,6 +494,9 @@ def test_the_run_keeps_the_load_of_the_record_it_judged(site, monkeypatch):
 
 
 # --- C13 stop model (operating plan 2026-11-26 6.1, U3e-1) ----------------------------------------------------------
+LAT, DEC = "permission.stop_model.latency_s", "permission.stop_model.decel_mps2"
+
+
 def _layer(site, fn):
     path = site.root / "config/real/obstacle_layer_real.yaml"
     d = yaml.safe_load(path.read_text())
@@ -504,27 +507,47 @@ def _layer(site, fn):
     return rec
 
 
+def _prov(d, key):
+    return d["permission"]["stop_model"][key]["provenance"]
+
+
 def test_the_repositorys_stop_model_is_provisional_and_refused():
     d = yaml.safe_load((REAL / "obstacle_layer_real.yaml").read_text())
-    assert d["permission"]["provenance"]["measured"] is False
+    assert _prov(d, "latency_s")["measured"] is False and _prov(d, "decel_mps2")["measured"] is False
     f = rp.gather(lidar_path=REAL / "lidar.yaml", imu_path=REAL / "imu.yaml", settings_path=REAL / "autonomy.yaml",
                   s10a_path=REAL / "s10a.yaml", layer_path=REAL / "obstacle_layer_real.yaml",
                   budget_path=REAL / "obstacle_layer.yaml", vehicle_path=REAL / "vehicle.yaml",
                   watch_path=REAL / "safety_watch.yaml")
-    assert "precondition:C13:layer:permission:unmeasured" in rp.operating_preconditions(f)
+    out = rp.operating_preconditions(f)
+    assert f"precondition:C13:layer:{LAT}:unmeasured" in out and f"precondition:C13:layer:{DEC}:unmeasured" in out
 
 
-def test_a_provisional_stop_model_needs_a_measurement_or_a_lead_exception(site):
-    rec = _layer(site, lambda d: d["permission"]["provenance"].update(measured=False))
-    assert "precondition:C13:layer:permission:unmeasured" in rp.operating_preconditions(site.facts())
-    rec["config_exceptions"] = [{"file": "layer", "key": "permission", "decision_id": "D-9"}]
+def test_each_stop_model_value_needs_its_own_measurement_or_exception(site):
+    """Codex U3e-1 implementation round 1 P2-5: the latency measured or excepted leaves the deceleration's own state."""
+    rec = _layer(site, lambda d: (_prov(d, "latency_s").update(measured=False),
+                                  _prov(d, "decel_mps2").update(measured=False)))
+    out = rp.operating_preconditions(site.facts())
+    assert f"precondition:C13:layer:{LAT}:unmeasured" in out and f"precondition:C13:layer:{DEC}:unmeasured" in out
+    rec["config_exceptions"] = [{"file": "layer", "key": LAT, "decision_id": "D-9"}]
+    site.write_record(rec)
+    out = rp.operating_preconditions(site.facts())
+    assert f"precondition:C13:layer:{LAT}:unmeasured" not in out and f"precondition:C13:layer:{DEC}:unmeasured" in out
+    rec["config_exceptions"].append({"file": "layer", "key": DEC, "decision_id": "D-10"})
     site.write_record(rec)
     assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
 
 
+@pytest.mark.parametrize("decision", ["", "   ", None, 7])
+def test_a_blank_decision_is_no_exception(site, decision):
+    rec = _layer(site, lambda d: _prov(d, "decel_mps2").update(measured=False))
+    rec["config_exceptions"] = [{"file": "layer", "key": DEC, "decision_id": decision}]
+    site.write_record(rec)
+    assert f"precondition:C13:layer:{DEC}:unmeasured" in rp.operating_preconditions(site.facts())
+
+
 def test_a_missing_stop_model_provenance_is_not_a_pass(site):
-    _layer(site, lambda d: d["permission"].pop("provenance"))
-    assert "precondition:C13:layer:permission:provenance_missing" in rp.operating_preconditions(site.facts())
+    _layer(site, lambda d: d["permission"]["stop_model"].pop("decel_mps2"))
+    assert f"precondition:C13:layer:{DEC}:provenance_missing" in rp.operating_preconditions(site.facts())
 
 
 @pytest.mark.parametrize("key, value", [("latency_s", -0.01), ("latency_s", float("nan")), ("latency_s", True),
@@ -535,11 +558,12 @@ def test_the_stop_models_values_are_checked_whatever_their_provenance(site, key,
     """Codex U3e-1 round 3 P1: measured or excepted, a negative latency or a zero deceleration is refused."""
     def change(d):
         d["permission"][key] = value
-        d["permission"]["provenance"]["measured"] = not exception
+        for k in ("latency_s", "decel_mps2"):
+            _prov(d, k)["measured"] = not exception
 
     rec = _layer(site, change)
     if exception:
-        rec["config_exceptions"] = [{"file": "layer", "key": "permission", "decision_id": "D-9"}]
+        rec["config_exceptions"] = [{"file": "layer", "key": k, "decision_id": "D-9"} for k in (LAT, DEC)]
         site.write_record(rec)
     out = rp.operating_preconditions(site.facts())
     assert f"precondition:C13:layer:{key}:invalid" in out

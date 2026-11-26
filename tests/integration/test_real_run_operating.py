@@ -42,7 +42,7 @@ pytest.importorskip("websockets")
 from websockets.asyncio.client import connect  # noqa: E402
 
 from fake_slam_bridge import FakeBridge  # noqa: E402
-from test_real_run_hil import Console, mcu_model  # noqa: E402,F401
+from test_real_run_hil import Console, accept_rows, accepted, mcu_model  # noqa: E402,F401
 
 REPO = Path(__file__).resolve().parents[2]
 REAL = REPO / "config" / "real"
@@ -302,22 +302,35 @@ class Operating:
         cfg = tmp_path / "child.json"
         cfg.write_text(json.dumps({"argv": site.argv(self.slave_name, self.out, duration_s, tmp_path / "scan.sock",
                                                      self.bridge.path), "product": product, "serial": SERIAL,
-                                   "writes_log": str(self.writes_log), "drop_lock": bool(drop_lock)}))
+                                   "writes_log": str(self.writes_log), "drop_lock": bool(drop_lock),
+                                   "fd": slave}))
         self.proc = subprocess.Popen([sys.executable, str(REPO / "tests/integration/real_operating_child.py"),
                                       str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                     env={**os.environ, "PYTHONPATH": str(REPO / "src")}, start_new_session=True)
+                                     env={**os.environ, "PYTHONPATH": str(REPO / "src")}, start_new_session=True,
+                                     pass_fds=(slave,))
         self.port = None
         self.lines = []
 
     def wait_console(self, timeout=60):
+        """The console line, read with a deadline that holds when the child prints nothing (or hangs)."""
+        import selectors
+
         end = time.monotonic() + timeout
-        for line in self.proc.stdout:
-            self.lines.append(line)
-            if line.startswith('{"console"'):
-                self.port = json.loads(line)["port"]
-                return self.port
-            if time.monotonic() > end:
-                break
+        sel = selectors.DefaultSelector()
+        sel.register(self.proc.stdout, selectors.EVENT_READ)
+        try:
+            while time.monotonic() < end:
+                if not sel.select(timeout=max(0.0, end - time.monotonic())):
+                    break
+                line = self.proc.stdout.readline()
+                if not line:
+                    break
+                self.lines.append(line)
+                if line.startswith('{"console"'):
+                    self.port = json.loads(line)["port"]
+                    return self.port
+        finally:
+            sel.close()
         return None
 
     def finish(self, sig=None, timeout=60):
@@ -410,11 +423,14 @@ def _lease(c):
 
 def _confirm_start(c, timeout=30.0):
     """The session starts by relocalizing (PR 7 design 6.1, 6): the start generation confirmed on the bridge's first
-    instance -- asked again while the evidence of this epoch is not there yet -- until ``confirmed``."""
+    instance -- asked again while the evidence of this epoch is not there yet -- until ``confirmed``. The operating
+    session always opens one: none at all is a failure, not a pass."""
     end = time.monotonic() + timeout
+    assert isinstance(c.status.get("relocalize_generation"), int), c.status.get("relocalize_generation")
     while True:
         gen = c.status.get("relocalize_generation")
         if gen is None:
+            assert (c.status.get("relocalize") or {}).get("state") == "confirmed", c.status.get("relocalize")
             return
         r = c.ask("relocalize_confirm", generation=gen)
         if r["t"] == "ack":
@@ -476,7 +492,7 @@ def test_the_operating_run_drives_to_the_lift_stops_and_disarms(mcu_model, tmp_p
             assert r["t"] == "ack", r
             s = c.wait(lambda s: s["operator_request"] is not None or s["permit"]["state"] == "LATCHED", 120)
             op = s["operator_request"]
-            assert op is not None, s
+            assert op is not None and op["kind"] == "lifted", s
             r = c.ask("operator_answer", kind=op["kind"], serial=op["serial"], verdict="confirm")
             assert r["t"] == "ack", r
             c.wait(lambda s: s["permit"]["state"] == "LATCHED", 60)
@@ -507,7 +523,7 @@ def test_a_submit_without_the_pallet_confirmation_never_moves_the_board(mcu_mode
     """Plan 6.1 case 4: everything else ready, no pallet confirmation -> the submit's exact refusal, and not one ARM
     or DRIVE byte for the whole run."""
     site = Site(tmp_path / "site")
-    with operating(mcu_model, tmp_path, site, duration_s=60) as run:
+    with operating(mcu_model, tmp_path, site, duration_s=150) as run:  # run time to spare: only the confirmation lacks
         assert run.wait_console() is not None, _explain(run)
         c = OperatingConsole(run.port)
         try:
@@ -539,8 +555,10 @@ def test_one_reason_left_in_the_judgement_refuses_the_assembly(mcu_model, tmp_pa
 
 # --- case 5: the scan cut while driving --------------------------------------------------------------------------
 def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, tmp_path):
-    """Plan 6.1 case 5: a moving DRIVE accepted first; the scans then stop -- the host latches (a scan boundary or the
-    receive gap) and its DISARM is confirmed before the test's own signal; from the latch on, no ARM or DRIVE byte."""
+    """Plan 6.1 case 5 (Codex impl round 1 P2-test-1): a moving DRIVE accepted by the board first; then the scans stop
+    -- the host latches on the scan's own evidence (a scan boundary or the scan stale), its DISARM is written and a
+    DISARMED STATE of the same boot naming its seq comes back, all before the test's signal; from the latch on, no
+    ARM or DRIVE byte."""
     site = Site(tmp_path / "site")
     with operating(mcu_model, tmp_path, site, duration_s=150) as run:
         assert run.wait_console() is not None, _explain(run)
@@ -551,13 +569,25 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
             assert c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
                          targets_revision=reg["targets_revision"])["t"] == "ack"
             end_t = time.monotonic() + 90
-            while not _written_moving(run.rows()):
-                assert time.monotonic() < end_t, "no moving DRIVE written"
+            moving_accepted = None
+            while moving_accepted is None:
+                assert time.monotonic() < end_t, "no moving DRIVE accepted by the board"
+                rows = run.rows()
+                speed = {q["seq"]: q["speed_mps"] for q in _events(rows, "frame_queued") if q.get("purpose") == "drive"}
+                written = [w for w in _events(rows, "frame_written")
+                           if w["kind"] == "DRIVE" and speed.get(w["seq"]) not in (None, 0.0)]
+                acc = accept_rows(run.accept_log) if run.accept_log.exists() else []
+                for w in written:
+                    hit = [a for a in acc if a["kind"] == "DRIVE" and a["seq"] == w["seq"] and a["verdict"] == "accepted"
+                           and a["mono_ns"] >= w["written_ns"]]
+                    if hit:
+                        moving_accepted = hit[0]
+                        break
                 time.sleep(0.2)
             run.scan.cut()
-            s = c.wait(lambda s: s["permit"]["state"] == "LATCHED", 30)
-            assert s["permit"]["reason"], s
-            time.sleep(1.5)  # the latch's DISARM goes out and is confirmed before the test's signal
+            c.wait(lambda s: s["permit"]["state"] == "LATCHED", 30)
+            time.sleep(1.5)  # the latch's DISARM goes out and is answered
+            signal_ns = time.monotonic_ns()
         finally:
             with contextlib.suppress(Exception):
                 c.close()
@@ -565,22 +595,22 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
             code = run.finish(signal.SIGINT, timeout=60)
         rows = run.rows()
         perm = _events(rows, "permit")
-        latch = next((p for p in perm if p.get("event") == "latched" and p["ns"] >= run.scan.cut_ns
-                      and p.get("reason") != "signal"), None)
-        assert latch is not None, [p for p in perm if p["ns"] >= run.scan.cut_ns]
-        # the latch's DISARM written, and a DISARMED STATE naming its seq received, before the run's own closing
+        latch = next((p for p in perm if p.get("event") == "latched" and p["ns"] >= run.scan.cut_ns), None)
+        assert latch is not None and "scan" in str(latch.get("reason")), [
+            (p["event"], p.get("reason")) for p in perm if p["ns"] >= run.scan.cut_ns]
+        assert latch["ns"] < signal_ns
         from forklift_core.mcu_link.messages import Mode
 
-        closing = _events(rows, "end")[-1]["closing_started_ns"]
         dis = [w for w in _events(rows, "frame_written") if w["kind"] == "DISARM" and latch["ns"] <= w["written_ns"]
-               < closing]
+               < signal_ns]
         assert dis, [(p["event"], p.get("reason")) for p in perm if p["ns"] >= run.scan.cut_ns]
-        conf = [st for st in _events(rows, "state") if st["last_rx_seq"] == dis[0]["seq"]
+        boot = moving_accepted["boot"]
+        conf = [st for st in _events(rows, "state") if st["boot"] == boot and st["last_rx_seq"] == dis[0]["seq"]
                 and st["mode"] == int(Mode.DISARMED) and st["rx_ns"] > dis[0]["written_ns"]]
-        assert conf and conf[0]["rx_ns"] < closing, (dis[0], conf[:1], closing)
+        assert conf and conf[0]["rx_ns"] < signal_ns, (dis[0], conf[:1], signal_ns)
         assert _motion_bytes(run.writes(), since_ns=latch["ns"]) == 0, [
             w for w in run.writes() if w["kind"] in ("ARM", "DRIVE") and w["ns"] >= latch["ns"]][:5]
-        assert code in (0, 1), _explain(run)
+        assert code == 0, _explain(run)  # the signal's closing confirmed
 
 
 # --- case 2: the command line on the repository's own settings -------------------------------------------------------
@@ -645,9 +675,12 @@ def test_a_signal_while_driving_holds_the_device_until_the_disarm_is_confirmed(m
             _driving(c, run)
             run.bridge.closing()
             run.proc.send_signal(signal.SIGTERM)
+            give_up = time.monotonic() + 60
             while run.proc.poll() is None:
-                tries.append((time.monotonic_ns(), _try_lock(run.slave_name)))
-                time.sleep(0.02)
+                ok = _try_lock(run.slave_name)
+                tries.append((time.monotonic_ns(), ok, run.proc.poll() is None))  # stamped after the attempt returned
+                assert time.monotonic() < give_up, "the run did not end after SIGTERM"
+                time.sleep(0.002)
         finally:
             with contextlib.suppress(Exception):
                 c.close()
@@ -659,9 +692,11 @@ def test_a_signal_while_driving_holds_the_device_until_the_disarm_is_confirmed(m
         assert end["closing"] == "confirmed" and end["reason"] == "signal", end
         assert code == 0, _explain(run)
         confirmed = end["closing_confirmed_ns"]
-        early = [ok for ns, ok in tries if ns < confirmed]
+        early = [ok for ns, ok, _alive in tries if ns < confirmed]
         assert early and not any(early), tries[:5]  # never the competitor's before the DISARM was confirmed
-        assert after is True  # the run let the device go
+        # the device let go by the run itself after the confirmation, while its cleanup still ran -- not by its exit
+        assert any(ok and alive for ns, ok, alive in tries if ns >= confirmed), tries[-5:]
+        assert after is True
 
 
 def test_a_lost_device_while_driving_revokes_and_is_never_reopened(mcu_model, tmp_path):
@@ -687,3 +722,23 @@ def test_a_lost_device_while_driving_revokes_and_is_never_reopened(mcu_model, tm
         assert revoked and str(revoked[0]["reason"]).startswith("device_lost"), revoked
         assert code != 0, _explain(run)
         assert end["opened"] == [run.slave_name]  # opened once
+
+
+
+def test_the_child_takes_only_the_tests_pty(tmp_path):
+    """Codex U3e-1 implementation round 1 P1: the child that drops the lock and hands out a test identity runs only on
+    the pty fd the test gave it -- a regular file's fd (or a real tty's) is refused before anything else."""
+    f = tmp_path / "not-a-pty"
+    f.write_bytes(b"")
+    fd = os.open(f, os.O_RDWR)
+    try:
+        cfg = tmp_path / "child.json"
+        cfg.write_text(json.dumps({"argv": [], "product": PRODUCT, "serial": SERIAL, "drop_lock": True, "fd": fd,
+                                   "writes_log": str(tmp_path / "w.jsonl")}))
+        p = subprocess.run([sys.executable, str(REPO / "tests/integration/real_operating_child.py"), str(cfg)],
+                           capture_output=True, text=True, timeout=60, pass_fds=(fd,),
+                           env={**os.environ, "PYTHONPATH": str(REPO / "src")})
+    finally:
+        os.close(fd)
+    assert p.returncode == 2 and json.loads(p.stdout)["refused"] == ["child_fd_not_a_pty"], p.stdout + p.stderr
+    assert not (tmp_path / "w.jsonl").exists()

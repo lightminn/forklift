@@ -64,3 +64,20 @@ def test_hil_keeps_no_origin_check():
         assert _run(s, None) is True and _run(s, "http://elsewhere") is True
     finally:
         s.stop()
+
+
+def test_the_check_is_by_path_whatever_the_upgrade_header_says(real_server):
+    """Codex U3e-1 implementation round 1 P2-3: a request on the control path is judged by its Origin, not by whether
+    its Upgrade header reads exactly "websocket"."""
+    import http.client
+
+    port = real_server.port
+    for upgrade in ("websocket", "WebSocket, foo", "foo, websocket", None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {"Connection": "Upgrade", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                   "Origin": "http://evil.example"}
+        if upgrade is not None:
+            headers["Upgrade"] = upgrade
+        conn.request("GET", CONTROL_PATH, headers=headers)
+        assert conn.getresponse().status == 403, upgrade
+        conn.close()

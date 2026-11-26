@@ -83,9 +83,10 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         self.allowed_origins: frozenset | None = None
 
     def process_request(self, connection: ServerConnection, request: Request) -> Response | None:
-        if self.allowed_origins is not None and request.headers.get("Upgrade", "").lower() == "websocket":
-            # a WebSocket from a page this console did not serve (a missing Origin too) is refused before its handshake
-            # completes: a browser's cross-site request never reaches the lease (Codex U3e-1 round 2 P1-2)
+        if self.allowed_origins is not None and request.path.split("?", 1)[0] in (CONTROL_PATH, MEDIA_PATH):
+            # any request on the control or media path from a page this console did not serve (a missing Origin too)
+            # is refused before a handshake -- judged by the path the handler serves, not by how the Upgrade header is
+            # spelled (Codex U3e-1 design round 2 P1-2, implementation round 1 P2-3)
             if request.headers.get("Origin") not in self.allowed_origins:
                 return connection.respond(403, "origin not allowed\n")
         if self.web_root is None:

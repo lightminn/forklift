@@ -246,13 +246,22 @@ def test_no_early_refusal_writes_its_record_to_a_device(capsys):
 
 
 
-def test_an_output_that_cannot_be_written_is_one_json_document_with_its_error(tmp_path, capsys):
-    """Codex unlock U1 review round 3 P2: a refused --out is reported in the single printed document."""
+def test_a_real_refusal_is_one_printed_document_and_writes_no_out(tmp_path, capsys):
+    """Codex unlock U1 review round 3 P2 and U3e-1 implementation round 1 P2-4: every REAL invocation's early refusal
+    is a single printed document; it never opens --out (an existing file keeps its bytes, a missing one is not made)."""
     missing = tmp_path / "no" / "such" / "dir" / "out.json"
     assert tool.main(["--run", "--client", "real", "--precheck", "--hil", "--device", "/dev/x", "--out",
                       str(missing)]) == 2
     rec = json.loads(capsys.readouterr().out)  # one document
-    assert rec["refused"] == ["real_with_hil"] and rec["out_error"].startswith("FileNotFoundError")
+    assert rec["refused"] == ["real_with_hil"] and "out_error" not in rec and not missing.parent.exists()
+    keep = tmp_path / "run.jsonl"
+    keep.write_bytes(b"another run\n")
+    for args in (["--run", "--client", "real", "--precheck", "--replay", "x.jsonl", "--out", str(keep)],
+                 ["--run", "--client", "real", "--precheck", "--device", "/dev/x", "--out", str(keep)]):
+        assert tool.main(args) == 2
+        rec = json.loads(capsys.readouterr().out)
+        assert rec["refused"] in (["real_with_replay"], ["out_exists"]), rec
+        assert keep.read_bytes() == b"another run\n"
 
 
 def test_a_dry_assembly_that_cannot_write_its_record_is_not_a_success(tmp_path, capsys):

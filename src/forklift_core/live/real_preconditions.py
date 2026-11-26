@@ -72,7 +72,7 @@ REQUIRED_PROVENANCE = {
                 "steering_control"),
     "budget": ("latency_budget", "overdue_end"),
     "watch": ("current", "wheel"),
-    "layer": ("permission",),
+    "layer": ("permission.stop_model.latency_s", "permission.stop_model.decel_mps2"),
 }
 GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError,
                  ET.ParseError)
@@ -401,7 +401,9 @@ def _c5_scan(f: Facts) -> list:
 
 def _provenance_reasons(f: Facts) -> list:
     """C12 (vehicle) / C13 (layer budget, watches): an unmeasured or missing provenance needs a lead exception."""
-    exc = {(e["file"], e["key"]) for e in (f.record or {}).get("config_exceptions") or () if e.get("decision_id")}
+    # a lead exception names its decision: a blank decision_id is none (Codex U3e-1 implementation round 1 P2-5)
+    exc = {(e["file"], e["key"]) for e in (f.record or {}).get("config_exceptions") or ()
+           if isinstance(e.get("decision_id"), str) and e["decision_id"].strip()}
     out = []
     for name in PROVENANCE_FILES:
         c = "C12" if name == "vehicle" else "C13"
