@@ -54,10 +54,21 @@ class Clock:
         return self.ns
 
 
+_OPEN: list = []
+
+
 def pair():
     a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     b.setblocking(False)
+    _OPEN.extend((a, b))
     return a, b
+
+
+@pytest.fixture(autouse=True)
+def _close_sockets():
+    yield
+    while _OPEN:
+        _OPEN.pop().close()  # every test's pair closed (ws1 runs with -W error: no ResourceWarning)
 
 
 def source(sock, clock, slam=None):
@@ -73,10 +84,14 @@ def test_the_recorded_stream_is_delivered_and_slam_takes_what_the_layer_takes(fr
         tx.send(data)
         clock.ns = recv
         assert src.scan_source_events(recv) == []
-        delivered += len(src.scans(recv))
+        out = src.scans(recv)
+        delivered += len(out)
+        for layer in out:
+            src.offer_for(layer)  # the run's branch after the layer accepted it
+            src.offer_for(layer)  # a second call offers nothing (each scan once)
     assert delivered > 0 and src.fatal is None
     offers = [e for e in slam.log if e[0] == "offer"]
-    assert len(offers) == delivered  # only what went to the layer, each once
+    assert len(offers) == delivered  # only what the layer took, each once
     # every offer's generation was told before it
     told = None
     for e in slam.log:
@@ -114,6 +129,82 @@ def test_a_gap_ended_on_the_read_that_ends_it_is_still_opened(frames):
     clock.ns = frames[0][0] + rs.SCAN_GAP_NS + 5 * MS  # no quiet call saw the gap
     assert src.scan_source_events(clock.ns) == [("lost", "lidar"), ("connected", "lidar")]
     assert src.counts["receive_gaps"] == 1
+
+
+def test_a_scan_the_layer_refused_never_reaches_slam(frames):
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    out, i = [], 0
+    while not out:  # the feed's first scans establish its reference before any is delivered
+        recv, data = frames[i]
+        tx.send(data)
+        clock.ns = recv
+        out = src.scans(recv)
+        i += 1
+    # the layer refused it: offer_for is never called; the next call forgets it
+    tx.send(frames[i][1])
+    clock.ns = frames[i][0]
+    src.scans(clock.ns)
+    src.offer_for(out[0])  # too late: no longer pending
+    assert [e for e in slam.log if e[0] == "offer"] == []
+
+
+def test_a_gap_inside_one_read_drops_the_scans_before_it(frames):
+    """Codex U2a round 1 P2-1: one call reads a scan, then a scan past a gap -- the layer sees lost, connected and the
+    later scan only; SLAM is never told the older generation after the gap's."""
+    class Seq(Clock):
+        queue: list = []
+
+        def __call__(self):
+            return self.queue.pop(0) if self.queue else self.ns
+
+    tx, rx = pair()
+    slam, clock = Slam(), Seq()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:  # warm the feed one frame per call
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        src.scans(clock.ns)
+        i += 1
+    k = next(j for j in range(i + 1, len(frames)) if frames[j][0] - frames[i][0] > rs.SCAN_GAP_NS)
+    tx.send(frames[i][1])
+    tx.send(frames[k][1])
+    clock.queue = [frames[i][0], frames[k][0]]
+    now = clock.ns = frames[k][0]
+    told = len(slam.log)
+    assert src.scan_source_events(now) == [("lost", "lidar"), ("connected", "lidar")]
+    out = src.scans(now)
+    assert src.counts["before_gap_dropped"] == 1 and src.counts["receive_gaps"] == 1 and len(out) <= 1
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    # the dropped scan's (older) generation is never told: only the gap's and the later scan's
+    assert gens and all(g[0] == src.feed.generation for g in gens)
+
+
+def test_the_last_scans_of_a_call_reach_the_layer_and_slam(frames):
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:  # warm the feed one frame per call
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    before = len([e for e in slam.log if e[0] == "offer"])
+    burst = frames[i:i + 6]
+    for _recv, data in burst:
+        tx.send(data)
+    clock.ns = burst[-1][0]
+    out = src.scans(clock.ns)
+    assert len(out) == rs.SCANS_PER_CALL and src.counts["cut"] == len(burst) - rs.SCANS_PER_CALL
+    for layer in out:
+        src.offer_for(layer)
+    offers = [e for e in slam.log if e[0] == "offer"][before:]
+    keys = [e[2] for e in offers]
+    assert len(offers) == rs.SCANS_PER_CALL and keys == sorted(keys)  # the newest four, in order
 
 
 def test_a_socket_error_ends_the_run():
@@ -154,6 +245,23 @@ def test_a_synthetic_frame_ends_the_run(frames, monkeypatch):
     assert src.fatal == "scan_synthetic" and src.counts["synthetic"] == 1
 
 
+def test_a_synthetic_frame_the_feed_refuses_still_ends_the_run(frames, monkeypatch):
+    """Codex U2a round 1 P3: the feed's own count of synthetic heads, whatever its verdict."""
+    tx, rx = pair()
+    clock = Clock()
+    src = source(rx, clock)
+
+    def judge(data, recv):
+        src.feed.synthetic_frames += 1
+        return None, "bad_meta"
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    tx.send(frames[0][1])
+    clock.ns = frames[0][0]
+    assert src.scan_source_events(clock.ns) == [("lost", "lidar")]
+    assert src.fatal == "scan_synthetic"
+
+
 def test_reads_per_call_are_capped_and_the_rest_is_a_backlog(frames):
     tx, rx = pair()
     clock = Clock(frames[11][0])
@@ -172,19 +280,29 @@ def test_the_imu_start_is_judged_against_the_watch_with_the_opened_profile():
         def __init__(self, hz):
             self.hz, self.cb = hz, None
 
-        def start(self, cb):
-            self.cb = cb
+        def start(self, cb, on_lost=None):
+            self.cb, self.on_lost = cb, on_lost
 
         def profile_info(self):
             return {"actual": {"accel_hz": self.hz}}
 
     cfg = mr.imu_config()
-    src, fits, prof = rs.start_real_imu(cfg, Device(200), gap_max_s=0.05)
+    dev = Device(200)
+    src, fits, prof = rs.start_real_imu(cfg, dev, gap_max_s=0.05)
     assert fits is True and prof["actual"]["accel_hz"] == 200
+    assert dev.on_lost == src.lost  # a removed device is the source's boundary at once
     _src, fits, _ = rs.start_real_imu(cfg, Device(5), gap_max_s=0.05)  # a fallback rate the watch cannot hold
     assert fits is False
     with pytest.raises(ValueError):
         rs.start_real_imu(mr.imu_config(measured=False, delay_bound_s=None), Device(200), gap_max_s=0.05)
+
+
+@pytest.mark.parametrize("profile", [{}, {"actual": {}}, {"actual": {"accel_hz": None}}, {"actual": {"accel_hz": 0}},
+                                     {"actual": {"accel_hz": True}}, {"requested": {"accel_hz": 200}}])
+def test_a_profile_that_does_not_say_its_opened_rate_never_fits(profile):
+    dev = SimpleNamespace(start=lambda cb, on_lost=None: None, profile_info=lambda: profile)
+    _src, fits, _ = rs.start_real_imu(mr.imu_config(), dev, gap_max_s=0.05)
+    assert fits is False
 
 
 def test_the_operating_layer_file_takes_the_lidar_mount_period_and_measured_flag(tmp_path):
@@ -198,7 +316,9 @@ def test_the_operating_layer_file_takes_the_lidar_mount_period_and_measured_flag
     lidar["timing"]["scan_period_s"] = 0.12
     p = tmp_path / "lidar.yaml"
     p.write_text(yaml.safe_dump(lidar))
-    out = rr.real_layer_cfg(layer, p)
+    from forklift_core.sensors.lidar_cfg import load_lidar_config
+
+    out = rr.real_layer_cfg(layer, load_lidar_config(p))
     assert out["bridge"]["scan_period_s"] == pytest.approx(0.12)
     (xy_yaw, _primary, info), = rr._layer_sensors(out).values()  # noqa: SLF001
     assert xy_yaw[0] == pytest.approx(0.3) and xy_yaw[1] == pytest.approx(0.05) and info == {"measured": True}
@@ -216,10 +336,14 @@ def test_real_sources_are_refused_on_a_hil_run():
     assert err.value.reasons == ["real_sources_on_hil"]
 
 
+_PREP_LIDAR: list = []
+
+
 def _prep(tmp_path, imu_watch=None):
     from forklift_core.live import real_run as rr
 
     return SimpleNamespace(paths=rr.RunPaths(s10a=REPO / "config/real/s10a.yaml", hil=False), replay=None,
+                           lidar=mr.lidar_config(),
                            map_id="m" * 64, start_ns=0, cfg=SimpleNamespace(start_rear=(0.0, 0.0, 0.0)),
                            rear_offset_m=0.34, epoch=5, watches=SimpleNamespace(imu=imu_watch))
 
@@ -237,9 +361,12 @@ def test_make_real_sources_on_a_listening_bridge(tmp_path):
     tx, rx = pair()
     try:
         host = SimpleNamespace(state=None)
-        src = rr.make_real_sources(_prep(tmp_path), host, SimpleNamespace(), scan_sock=rx, slam_socket=str(path))
+        prep = _prep(tmp_path)
+        _PREP_LIDAR[:] = [prep.lidar]
+        src = rr.make_real_sources(prep, host, SimpleNamespace(), scan_sock=rx, slam_socket=str(path))
         assert src.client is Client.REAL and src.slam.client is Client.REAL
-        assert isinstance(src.scans, rs.RealScanSource) and src.scans.slam is src.slam and src.slam_feed is None
+        assert isinstance(src.scans, rs.RealScanSource) and src.scans.slam is src.slam
+        assert src.slam_feed == src.scans.offer_for and src.scans.cfg is _PREP_LIDAR[0]
         assert src.imu is None and src.imu_qualified is False and src.depth is None
         assert src.slam.hil_gate is None
         for fn in src.closers:
@@ -259,7 +386,8 @@ def test_an_unmeasured_imu_is_not_started_and_not_qualified(tmp_path):
     srv.bind(str(path))
     srv.listen(1)
     started = []
-    device = SimpleNamespace(start=lambda cb: started.append(cb), stop=lambda: None, profile_info=lambda: {})
+    device = SimpleNamespace(start=lambda cb, on_lost=None: started.append(cb), stop=lambda: None,
+                             profile_info=lambda: {})
     watch = SimpleNamespace(cfg=SimpleNamespace(gap_max_s=0.05))
     tx, rx = pair()
     try:
@@ -273,16 +401,117 @@ def test_an_unmeasured_imu_is_not_started_and_not_qualified(tmp_path):
         tx.close()
 
 
-def test_a_refused_bridge_refuses_the_sources(tmp_path):
+def test_a_refused_bridge_refuses_the_sources_and_closes_the_scan_socket(tmp_path):
     from forklift_core.live import real_run as rr
     from forklift_core.live.real_assembly import AssemblyRefused
 
     tx, rx = pair()
-    try:
-        with pytest.raises(AssemblyRefused) as err:
-            rr.make_real_sources(_prep(tmp_path), SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
-                                 slam_socket=str(tmp_path / "none.sock"))
-        assert err.value.reasons[0].startswith("slam_bridge:")
-    finally:
-        tx.close()
-        rx.close()
+    with pytest.raises(AssemblyRefused) as err:
+        rr.make_real_sources(_prep(tmp_path), SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                             slam_socket=str(tmp_path / "none.sock"))
+    assert err.value.reasons[0].startswith("slam_bridge:")
+    with pytest.raises(OSError):
+        rx.recv(1)  # the call owns the scan socket: closed on its own refusal
+
+
+def _measured_imu(tmp_path, monkeypatch, *, level_measured):
+    """config/real/imu.yaml read as measured; the watch file with its level reference measured or not."""
+    import yaml
+
+    from forklift_core.live import real_run as rr
+    from forklift_core.sensors import imu_source
+
+    cfg = mr.imu_config()
+    monkeypatch.setattr(imu_source, "load_imu_source_config", lambda path: cfg)
+    watch = yaml.safe_load((REPO / "config/real/safety_watch.yaml").read_text())
+    watch["imu"]["provenance"]["measured"] = level_measured
+    wp = tmp_path / "watch.yaml"
+    wp.write_text(yaml.safe_dump(watch))
+    prep = _prep(tmp_path, SimpleNamespace(cfg=SimpleNamespace(gap_max_s=0.05)))
+    prep.paths = rr.RunPaths(s10a=REPO / "config/real/s10a.yaml", hil=False, watch=wp)
+    prep.hashes = {"watch": rr._sha(wp), "imu": rr._sha(prep.paths.imu_config)}  # noqa: SLF001 -- as prep hashed them
+    return prep
+
+
+def test_an_imu_judged_on_other_bytes_than_prep_hashed_is_not_started(tmp_path, monkeypatch):
+    from forklift_core.live import real_run as rr
+
+    for name in ("watch", "imu"):
+        prep = _measured_imu(tmp_path, monkeypatch, level_measured=True)
+        prep.hashes[name] = "0" * 64  # the file changed since prep read it
+        started = []
+        device = SimpleNamespace(start=lambda cb, on_lost=None: started.append(cb), stop=lambda: None,
+                                 profile_info=lambda: {"actual": {"accel_hz": 200}})
+        _tx, rx = pair()
+        src = rr.make_real_sources(prep, SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                                   slam_socket=_bridge(tmp_path / name), imu_device=device)
+        assert src.imu is None and src.imu_qualified is False and started == [], name
+        for fn in src.closers:
+            fn()
+
+
+def _bridge(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "slam.sock"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(path))
+    srv.listen(1)
+    _OPEN.append(srv)
+    return str(path)
+
+
+def test_an_imu_with_its_level_unmeasured_is_not_started(tmp_path, monkeypatch):
+    from forklift_core.live import real_run as rr
+
+    prep = _measured_imu(tmp_path, monkeypatch, level_measured=False)
+    started = []
+    device = SimpleNamespace(start=lambda cb, on_lost=None: started.append(cb), stop=lambda: None,
+                             profile_info=lambda: {"actual": {"accel_hz": 200}})
+    _tx, rx = pair()
+    src = rr.make_real_sources(prep, SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                               slam_socket=_bridge(tmp_path), imu_device=device)
+    assert src.imu is None and src.imu_qualified is False and started == []
+    for fn in src.closers:
+        fn()
+
+
+def test_a_qualified_imu_is_started_and_stopped_by_the_closers(tmp_path, monkeypatch):
+    from forklift_core.live import real_run as rr
+
+    prep = _measured_imu(tmp_path, monkeypatch, level_measured=True)
+    log = []
+    device = SimpleNamespace(start=lambda cb, on_lost=None: log.append("start"), stop=lambda: log.append("stop"),
+                             profile_info=lambda: {"actual": {"accel_hz": 200}})
+    _tx, rx = pair()
+    src = rr.make_real_sources(prep, SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                               slam_socket=_bridge(tmp_path), imu_device=device)
+    assert src.imu is not None and src.imu_qualified is True and log == ["start"]
+    for fn in reversed(src.closers):
+        fn()
+    assert log == ["start", "stop"]
+
+
+def test_an_unfit_imu_whose_stop_fails_keeps_its_stop_on_the_closers(tmp_path, monkeypatch):
+    from forklift_core.live import real_run as rr
+
+    prep = _measured_imu(tmp_path, monkeypatch, level_measured=True)
+    log, fail = [], [True]
+
+    def stop():
+        log.append("stop")
+        if fail[0]:
+            raise RuntimeError("busy")
+
+    device = SimpleNamespace(start=lambda cb, on_lost=None: log.append("start"), stop=stop,
+                             profile_info=lambda: {"actual": {"accel_hz": 5}})
+    _tx, rx = pair()
+    src = rr.make_real_sources(prep, SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                               slam_socket=_bridge(tmp_path), imu_device=device)
+    assert src.imu is None and src.imu_qualified is False and log == ["start", "stop"]
+    fail[0] = False
+    for fn in reversed(src.closers):
+        fn()
+    assert log == ["start", "stop", "stop"]  # tried again by the run's closers, once it can
+    for fn in reversed(src.closers):
+        fn()
+    assert log.count("stop") == 2  # and not again once done

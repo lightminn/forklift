@@ -296,6 +296,7 @@ class RunPrep:
     kernels: dict = field(default_factory=dict)
     jobs: object = None
     replay: object = None  # replay_assembly.ReplayPlan (7r), None for every other run
+    lidar: object = None  # the operating run's LidarConfig, loaded once with the layer file (U2a; None on HIL/replay)
 
 
 class _Handover:
@@ -355,8 +356,10 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     import yaml
 
     from forklift_core.plant.real_vehicle import chassis_model_path
+    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
     stop = stop or threading.Event()
+    real_lidar = None
     # the files' hashes before anything is loaded; compared again at the end (a file changed while it was loaded is
     # refused: the run and the operating preconditions judge the same bytes -- Codex unlock U1 review P1-2)
     hashes_at_start = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
@@ -413,7 +416,9 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         if replay is not None:
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
         elif not paths.hil:
-            layer_cfg = real_layer_cfg(layer_cfg, paths.lidar_config)  # the operating run: one LiDAR source (U2a)
+            # the operating run: one LiDAR calibration object for the layer and the scan source (U2a, Codex P2-5)
+            real_lidar = load_lidar_config(paths.lidar_config)
+            layer_cfg = real_layer_cfg(layer_cfg, real_lidar)
         budget = yaml.safe_load(Path(paths.budget).read_text())
         budget_s = float(budget["latency_budget"]["seconds"])
         overdue_end_s = float(budget["overdue_end"]["seconds"])
@@ -448,7 +453,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                    map_id=map_id, occupancy=occupancy, obstacles=obstacles, watches=watches, layer_cfg=layer_cfg,
                    budget_s=budget_s, overdue_end_s=overdue_end_s, channels=RealChannels(), epoch=epoch,
                    welcome=run_welcome(epoch), start_ns=int(clock()), hashes=hashes, check_plan=plan.status,
-                   kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)}, replay=replay)
+                   kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)}, replay=replay,
+                   lidar=real_lidar)
     if jobs_factory is None:
         from forklift_core.planning.plan_worker import PlanWorker
 
@@ -537,57 +543,109 @@ def make_run_sources(prep: RunPrep, host, transport, *, slam_socket: str | None 
 
 def make_real_sources(prep: RunPrep, host, transport, *, scan_sock, slam_socket: str, imu_device=None,
                       clock=time.monotonic_ns) -> RunSources:
-    """The operating REAL run's sources (docs/plans/2026-11-26-real-operating-assembly.md 2.2, unlock U2a): the real
-    scan source on the scan container's socket (``scan_sock``, bound by the caller), the real SLAM source in operating
-    mode on the bridge at ``slam_socket`` (its scans the scan source's own branch: the scan the layer takes is the scan
-    SLAM takes, with its acquisition interval), and -- with ``imu_device`` -- the D435i motion module on an operating
-    IMU source, qualified (C7) only when its config is measured and the profile opened fits the watch. An unqualified
-    IMU leaves ``imu`` None and ``imu_qualified`` False (the runtime readiness judges it, U3). No depth source (7e-2b
-    on hold). Every opened part is closed on a failure here and by the run's closers afterwards."""
-    from forklift_core.live.real_sources import RealScanSource, start_real_imu
-    from forklift_core.sensors.lidar_cfg import load_lidar_config
+    """The operating REAL run's sources (docs/plans/2026-11-26-real-operating-assembly.md 2.2, unlock U2a). This call
+    owns ``scan_sock`` (the scan container's socket, bound by the caller): it is closed on any failure here and by the
+    run's closers afterwards.
 
-    if prep.paths.hil or prep.replay is not None:
-        raise AssemblyRefused(["real_sources_on_hil"])
-    lidar = load_lidar_config(prep.paths.lidar_config)
-    box: dict = {}
-    closers: list = []
+    - the real scan source on ``scan_sock`` with the run's one ``LidarConfig`` (``prep.lidar``, the one the layer was
+      configured from);
+    - the real SLAM source in operating mode on the bridge at ``slam_socket``; its scans reach it only through
+      ``slam_feed`` -- the run's branch after the layer accepted the scan (the scan the layer takes is the scan SLAM
+      takes, with its acquisition interval);
+    - with ``imu_device``, the D435i motion module on an operating IMU source, qualified (C7, plan 2.7) only when its
+      config is measured, the watch's level reference is measured, and the profile opened says a rate that fits the
+      watch. An unqualified IMU leaves ``imu`` None and ``imu_qualified`` False (the runtime readiness judges it, U3);
+      a device started and found unfit is stopped again (a failed stop stays on the closers to be tried again).
+
+    No depth source (7e-2b on hold)."""
+    from forklift_core.live.real_sources import RealScanSource, start_real_imu
+
+    closers: list = [lambda: _close_quietly(scan_sock)]
     try:
+        if prep.paths.hil or prep.replay is not None:
+            raise AssemblyRefused(["real_sources_on_hil"])
+        if prep.lidar is None:
+            raise AssemblyRefused(["real_sources_without_lidar_config"])
+        box: dict = {}
         sources = _real_slam_operating(prep, host, transport, box, slam_socket)
         closers += sources.closers
-        scan = RealScanSource(scan_sock, lidar, prep.start_ns, slam=sources.slam, clock=clock)
-        closers.append(scan.close)
+        scan = RealScanSource(scan_sock, prep.lidar, prep.start_ns, slam=sources.slam, clock=clock)
         imu, qualified = None, False
         if imu_device is not None:
             qualified, imu = _real_imu(prep, imu_device, closers, start_real_imu)
     except BaseException:
-        for fn in reversed(closers):
-            try:
-                fn()
-            except Exception:  # noqa: BLE001 -- every part is closed whatever one does
-                pass
+        _run_closers(closers)
         raise
-    sources.scans, sources.imu, sources.imu_qualified, sources.slam_feed = scan, imu, qualified, None
+    sources.scans, sources.imu, sources.imu_qualified = scan, imu, qualified
+    sources.slam_feed = scan.offer_for
     sources.closers = closers
     sources.on_assembled.append(lambda loop: box.__setitem__("loop", loop))
     return sources
 
 
+def _close_quietly(sock) -> None:
+    try:
+        sock.close()
+    except (OSError, AttributeError):
+        pass
+
+
+def _run_closers(closers) -> None:
+    for fn in reversed(closers):
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 -- every part is closed whatever one does
+            pass
+
+
+def _watch_level_measured(path, want_sha) -> bool:
+    """The watch's level reference (``safety_watch.yaml`` ``imu`` provenance) measured: C7's third condition, judged on
+    the bytes prep hashed (``want_sha``; other bytes or none: not measured)."""
+    import yaml
+
+    from forklift_core.live.real_preconditions import _provenances  # noqa: PLC2701 -- the one walker
+
+    try:
+        raw = Path(path).read_bytes()
+        if want_sha is None or hashlib.sha256(raw).hexdigest() != want_sha:
+            return False
+        data = yaml.safe_load(raw.decode("utf-8"))
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    level = [prov for key, prov in _provenances(data if isinstance(data, dict) else {}) if key == "imu"]
+    return bool(level) and all(isinstance(prov, dict) and prov.get("measured") is True for prov in level)
+
+
 def _real_imu(prep, device, closers, start_real_imu) -> tuple:
-    """(qualified, source or None): an unmeasured IMU config (the source refuses an operating start) or a profile that
-    does not fit the watch is not qualified -- the device is then stopped again."""
+    """(qualified, source or None) -- module text of ``make_real_sources``."""
     from forklift_core.sensors.imu_source import load_imu_source_config
 
+    hashes = getattr(prep, "hashes", None) or {}
+    want = hashes.get("imu")
+    if want is None or _sha_or_none(prep.paths.imu_config) != want:
+        return False, None  # the IMU config judged only on the bytes prep hashed
     cfg = load_imu_source_config(prep.paths.imu_config)
+    if _sha_or_none(prep.paths.imu_config) != want:
+        return False, None
     watch = prep.watches.imu
     gap = None if watch is None else float(watch.cfg.gap_max_s)
-    if not cfg.measured or cfg.delay_bound_s is None or gap is None:
+    if (not cfg.measured or cfg.delay_bound_s is None or gap is None
+            or not _watch_level_measured(prep.paths.watch, hashes.get("watch"))):
         return False, None
-    closers.append(device.stop)
+    stopped = {"done": False}
+
+    def stop():
+        if not stopped["done"]:
+            device.stop()  # raises on a failed stop: the closer stays and a later close tries again
+            stopped["done"] = True
+
+    closers.append(stop)
     source, fits, _profile = start_real_imu(cfg, device, gap)
     if not fits:
-        closers.remove(device.stop)
-        device.stop()
+        try:
+            stop()
+        except Exception:  # noqa: BLE001 -- left on the closers for the next try
+            pass
         return False, None
     return True, source
 
@@ -877,14 +935,12 @@ def real_preconditions(prep, host, transport) -> list:
     return out
 
 
-def real_layer_cfg(layer_cfg: dict, lidar_path) -> dict:
-    """The operating run's layer file with the LiDAR mount, the scan period and whether the mount is measured from
-    ``lidar.yaml`` (docs/plans/2026-11-26-real-operating-assembly.md 2.3: the layer's projection, stop delay and
-    odometry allowance and the SLAM's scans use one calibration -- the replay's rule, ``replay_layer_cfg``)."""
+def real_layer_cfg(layer_cfg: dict, lidar) -> dict:
+    """The operating run's layer file with the LiDAR mount, the scan period and whether the mount is measured from the
+    run's one ``LidarConfig`` (docs/plans/2026-11-26-real-operating-assembly.md 2.3: the layer's projection, stop delay
+    and odometry allowance and the SLAM's scans use one calibration -- the replay's rule, ``replay_layer_cfg``)."""
     from forklift_core.live.replay_assembly import replay_layer_cfg
-    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
-    lidar = load_lidar_config(lidar_path)
     out = replay_layer_cfg(layer_cfg, lidar)
     out["sensors"][0]["measured"] = bool(lidar.mount_measured)
     return out
@@ -1090,8 +1146,11 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                 got = got[-SCANS_PER_CALL:]
             loop_ = box["loop"]
             for scan in got:
-                layer.add_scan(scan, loop_._t(now_ns), initial_correction=tuple(core.obstacle["applied"]),  # noqa: SLF001
-                               initial_version=int(core.obstacle["version"]))
+                refused = layer.add_scan(scan, loop_._t(now_ns), initial_correction=tuple(core.obstacle["applied"]),  # noqa: SLF001
+                                         initial_version=int(core.obstacle["version"]))
+                if refused is not None:
+                    counts[f"layer_refused_{refused}"] = counts.get(f"layer_refused_{refused}", 0) + 1
+                    continue  # the scan the layer takes is the scan SLAM takes: a refused one goes to neither
                 if sources.slam_feed is not None:
                     try:
                         sources.slam_feed(scan)  # the SLAM path's branch: the same scan (PR 7 design 6.1, 1)
