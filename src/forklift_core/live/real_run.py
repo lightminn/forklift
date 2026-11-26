@@ -609,7 +609,7 @@ def make_run_sources(prep: RunPrep, host, transport, *, slam_socket: str | None 
 
 
 def make_real_sources(prep: RunPrep, host, transport, *, scan_sock, slam_socket: str, imu_device=None,
-                      clock=time.monotonic_ns) -> RunSources:
+                      clock=time.monotonic_ns, connect_timeout_s: float = 5.0) -> RunSources:
     """The operating REAL run's sources (docs/plans/2026-11-26-real-operating-assembly.md 2.2, unlock U2a). This call
     owns ``scan_sock`` (the scan container's socket, bound by the caller): it is closed on any failure here and by the
     run's closers afterwards.
@@ -634,7 +634,7 @@ def make_real_sources(prep: RunPrep, host, transport, *, scan_sock, slam_socket:
         if prep.lidar is None:
             raise AssemblyRefused(["real_sources_without_lidar_config"])
         box: dict = {}
-        sources = _real_slam_operating(prep, host, transport, box, slam_socket)
+        sources = _real_slam_operating(prep, host, transport, box, slam_socket, connect_timeout_s)
         closers += sources.closers
         scan = RealScanSource(scan_sock, prep.lidar, prep.start_ns, slam=sources.slam, clock=clock)
         imu, qualified = None, False
@@ -738,7 +738,8 @@ def bridge_laser_xyz_yaw(lidar, rear_offset_m: float) -> tuple:
     return base_from_laser(lidar.mount, rear_offset_m)
 
 
-def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -> RunSources:
+def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str,
+                         connect_timeout_s: float = 5.0) -> RunSources:
     """The real SLAM source for the operating run: as the HIL's (``_real_slam_sources``) but the REAL client, no HIL
     check, and no layer branch (the scan source offers its own scans)."""
     import socket as socket_
@@ -748,7 +749,8 @@ def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -
 
     sock = socket_.socket(socket_.AF_UNIX, socket_.SOCK_STREAM)
     try:
-        sock.settimeout(5.0)
+        # the start's remaining time when the operating run gives it (U3e-1 plan 6.1 step 9), never more than 5 s
+        sock.settimeout(max(0.001, min(5.0, float(connect_timeout_s))))
         sock.connect(str(path))
     except OSError as err:
         sock.close()

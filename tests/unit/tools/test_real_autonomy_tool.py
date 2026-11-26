@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from forklift_core.localization import slam_map as sm
@@ -143,17 +144,17 @@ def test_the_real_client_refuses_a_missing_device_a_pty_and_hil_before_opening(c
     """The operating unlock U1 (plan 2.1): --run --client real needs a device that is not a pty, never with --hil."""
     import os
 
-    assert tool.main(["--run", "--client", "real"]) == 2
+    assert tool.main(["--run", "--client", "real", "--precheck"]) == 2
     assert json.loads(capsys.readouterr().out)["refused"] == ["real_needs_device"]
     m, s = os.openpty()
     try:
-        assert tool.main(["--run", "--client", "real", "--device", os.ttyname(s)]) == 2
+        assert tool.main(["--run", "--client", "real", "--precheck", "--device", os.ttyname(s)]) == 2
         rec = json.loads(capsys.readouterr().out)
         assert rec["refused"] == ["real_device_is_pty"] and rec["opened"] == []
     finally:
         os.close(m)
         os.close(s)
-    assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/ttyACM0"]) == 2
+    assert tool.main(["--run", "--client", "real", "--precheck", "--hil", "--device", "/dev/ttyACM0"]) == 2
     assert json.loads(capsys.readouterr().out)["refused"] == ["real_with_hil"]
 
 
@@ -185,7 +186,7 @@ def test_the_real_precheck_reads_the_first_state_judges_and_writes_nothing(monke
 
     monkeypatch.setattr(rlt.RealTtyTransport, "open", staticmethod(fake_open))
     monkeypatch.setattr(tool, "_is_pty", lambda d: False)
-    assert tool.main(["--run", "--client", "real", "--device", "/dev/forklift-mcu"]) == 2
+    assert tool.main(["--run", "--client", "real", "--precheck", "--device", "/dev/forklift-mcu"]) == 2
     rec = json.loads(capsys.readouterr().out)
     assert rec["refused"][0] == "precondition:unlock_incomplete"
     assert rec["board"]["state_seen"] is True and rec["board"]["usb_serial"] == "ABC"
@@ -208,9 +209,9 @@ def test_the_real_precheck_never_writes_its_record_to_a_device(tmp_path, capsys)
     m, s = os.openpty()
     try:
         name = os.ttyname(s)
-        assert tool.main(["--run", "--client", "real", "--device", name, "--out", name]) == 2
+        assert tool.main(["--run", "--client", "real", "--precheck", "--device", name, "--out", name]) == 2
         assert json.loads(capsys.readouterr().out)["refused"] == ["out_not_a_regular_file"]
-        assert tool.main(["--run", "--client", "real", "--device", "/dev/x", "--out", "/dev/null"]) == 2
+        assert tool.main(["--run", "--client", "real", "--precheck", "--device", "/dev/x", "--out", "/dev/null"]) == 2
         assert json.loads(capsys.readouterr().out)["refused"] == ["out_not_a_regular_file"]
     finally:
         os.close(m)
@@ -229,6 +230,7 @@ def test_no_early_refusal_writes_its_record_to_a_device(capsys):
     os.set_blocking(m, False)
     name = os.ttyname(s)
     try:
+        assert tool.main(["--run", "--client", "real", "--precheck", "--hil", "--device", "/dev/x", "--out", name]) == 2
         assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/x", "--out", name]) == 2
         assert tool.main(["--run", "--replay", "x.jsonl", "--out", name]) == 2
         try:
@@ -247,7 +249,8 @@ def test_no_early_refusal_writes_its_record_to_a_device(capsys):
 def test_an_output_that_cannot_be_written_is_one_json_document_with_its_error(tmp_path, capsys):
     """Codex unlock U1 review round 3 P2: a refused --out is reported in the single printed document."""
     missing = tmp_path / "no" / "such" / "dir" / "out.json"
-    assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/x", "--out", str(missing)]) == 2
+    assert tool.main(["--run", "--client", "real", "--precheck", "--hil", "--device", "/dev/x", "--out",
+                      str(missing)]) == 2
     rec = json.loads(capsys.readouterr().out)  # one document
     assert rec["refused"] == ["real_with_hil"] and rec["out_error"].startswith("FileNotFoundError")
 
@@ -258,3 +261,86 @@ def test_a_dry_assembly_that_cannot_write_its_record_is_not_a_success(tmp_path, 
     code = tool.main(["--dry-assemble", "--out", str(missing)])
     rec = json.loads(capsys.readouterr().out)
     assert code == 2 and rec.get("out_error", "").startswith("FileNotFoundError")
+
+
+
+# --- the operating REAL run's arguments (unlock U3e-1, plan 6.1 step 1) ----------------------------------------------
+def _real_args(tmp_path, *extra):
+    site = tmp_path / "site.yaml"
+    site.write_text("x: 1\n")
+    return ["--run", "--client", "real", "--device", "/dev/forklift-mcu-none", "--scan-socket",
+            str(tmp_path / "scan.sock"), "--slam-bridge", str(tmp_path / "slam.sock"), "--site-record", str(site),
+            "--bundle-root", str(tmp_path), "--duration-s", "30", "--out-dir", str(tmp_path / "run"), *extra]
+
+
+def test_the_operating_run_refuses_hil_and_replay_arguments_before_opening(tmp_path, capsys):
+    for extra, why in ((["--hil"], "real_with_hil"), (["--hil-model", "/bin/false"], "real_with_hil_model"),
+                       (["--hil-model-arg=--boot-id"], "real_with_hil_model_arg"),
+                       (["--hil-inject", "scan:1"], "real_with_hil_inject"),
+                       (["--hil-slam-bridge", "/x"], "real_with_hil_slam_bridge"),
+                       (["--replay", "x.jsonl"], "real_with_replay"), (["--allow-synthetic"], "real_with_allow_synthetic"),
+                       (["--map-bundle", "/x"], "real_with_map_bundle"), (["--imu-serial", "1"], None)):
+        if why is None:  # U3e-1 has no IMU device argument at all
+            with pytest.raises(SystemExit):
+                tool.main(_real_args(tmp_path, *extra))
+            capsys.readouterr()
+            continue
+        assert tool.main(_real_args(tmp_path, *extra)) == 2
+        rec = json.loads(capsys.readouterr().out)
+        assert why in rec["refused"] and rec["opened"] == [], (extra, rec)
+    assert not (tmp_path / "run").exists()  # nothing made before the refusal
+
+
+def test_the_operating_run_refuses_missing_arguments_a_pty_and_an_existing_folder(tmp_path, capsys):
+    import os
+
+    assert tool.main(["--run", "--client", "real"]) == 2
+    rec = json.loads(capsys.readouterr().out)
+    for why in ("real_needs_device", "real_needs_scan_socket", "real_needs_slam_bridge", "real_needs_site_record",
+                "real_needs_bundle_root", "real_needs_out_dir", "duration_s"):
+        assert why in rec["refused"]
+    m, s = os.openpty()
+    try:
+        args = _real_args(tmp_path)
+        args[args.index("--device") + 1] = os.ttyname(s)
+        assert tool.main(args) == 2
+        assert "real_device_is_pty" in json.loads(capsys.readouterr().out)["refused"]
+    finally:
+        os.close(m)
+        os.close(s)
+    (tmp_path / "run").mkdir()
+    assert tool.main(_real_args(tmp_path)) == 2
+    assert "out_dir_exists" in json.loads(capsys.readouterr().out)["refused"]
+
+
+def test_the_operating_runs_inputs_must_be_regular_files(tmp_path, capsys):
+    """Codex U3e-1 round 3 P2-3: a FIFO given as an input is refused before the device's lock could be held on it."""
+    import os
+
+    fifo = tmp_path / "pre.fifo"
+    os.mkfifo(fifo)
+    assert tool.main(_real_args(tmp_path, "--preconditions", str(fifo))) == 2
+    rec = json.loads(capsys.readouterr().out)
+    assert "input_not_regular:preconditions" in rec["refused"]
+    assert tool.main(_real_args(tmp_path, "--settings", str(tmp_path / "none.yaml"))) == 2
+    assert "input_missing:settings" in json.loads(capsys.readouterr().out)["refused"]
+
+
+def test_the_operating_run_never_writes_out_and_keeps_an_existing_files_bytes(tmp_path, capsys):
+    """Codex U3e-1 round 3 P2-2: a refusal of the operating run is printed only -- an existing file given as --out
+    (another run's record, say) keeps every byte."""
+    keep = tmp_path / "run.jsonl"
+    keep.write_bytes(b"earlier run\n")
+    assert tool.main(_real_args(tmp_path, "--out", str(keep), "--hil")) == 2
+    rec = json.loads(capsys.readouterr().out)
+    assert "real_run_takes_out_dir_not_out" in rec["refused"] and "out_error" not in rec
+    assert keep.read_bytes() == b"earlier run\n"
+
+
+def test_the_operating_console_stays_on_loopback_unless_lan_is_named(tmp_path, capsys):
+    assert tool.main(_real_args(tmp_path, "--host", "0.0.0.0")) == 2
+    assert "console_host_needs_console_lan" in json.loads(capsys.readouterr().out)["refused"]
+    assert tool.main(_real_args(tmp_path, "--host", "0.0.0.0", "--console-lan")) == 2
+    assert "console_lan_needs_origin_host" in json.loads(capsys.readouterr().out)["refused"]
+    args = tool.argparse.Namespace(console_lan=True, console_origin_host="192.168.4.1")
+    assert tool.real_origin_hosts(args) == ("127.0.0.1", "localhost", "192.168.4.1")
