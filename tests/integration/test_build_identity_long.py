@@ -47,3 +47,27 @@ def test_a_tagged_build_names_its_commit_whatever_the_tag(tmp_path, tag):
     got = _describe(repo, tmp_path / "t.h")
     assert got == f"{tag}-0-g{head}"
     assert image_commit(f"forklift-mcu normal OPEN {got} rec=0123abcd waiver=0123abcd") == head
+
+
+def test_an_identity_the_usb_string_would_cut_is_refused_on_every_image(tmp_path):
+    """Codex U3d P3: --long lengthens a tagged build's description; a locked image's identity over 126 characters
+    would be cut in the USB product string (the board check compares it whole), so the build is refused."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a").write_text("a\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "a")
+    _git(repo, "commit", "-q", "-m", "a")
+    # "forklift-mcu hil locked " (24) + tag + "-0-g" (4) + 12: a 86-character tag is 126, 87 is cut
+    for n, ok in ((86, True), (87, False)):
+        tag = "t" + "x" * (n - 1)
+        _git(repo, "tag", "-a", "-m", "t", tag)
+        res = subprocess.run(["cmake", f"-DSRC_DIR={repo}", f"-DIN={BOARD / 'build_info.h.in'}",
+                              f"-DOUT={tmp_path / 'h.h'}", "-DFW_BUILD=hil", "-DFW_LINK=usb", "-DFW_OUTPUTS_WORD=locked",
+                              "-DFW_OUTPUTS_LOCKED=1", "-DFW_ESTOP_WAIVED=0", "-DFW_SINGLE_AXIS=0",
+                              "-DFW_TOOLCHAIN_VERSION=x", "-P", str(BOARD / "gen_build_info.cmake")],
+                             capture_output=True, text=True)
+        assert (res.returncode == 0) is ok, (n, res.stderr)
+        if not ok:
+            assert "would cut it" in res.stderr.replace("\n", " ")
+        _git(repo, "tag", "-d", tag)

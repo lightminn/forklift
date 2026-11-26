@@ -581,6 +581,59 @@ def test_the_operating_build_generates_its_header_from_the_commits_vehicle_yaml(
     assert f'"{calib}"' in made and made == header.read_text()  # the same generator, the same yaml
 
 
+def test_a_header_left_in_the_build_directory_is_not_taken_by_the_operating_build(record_repo, tmp_path):
+    """Codex U3d P2-1: a build directory configured first with a handed-in header (another calibration) and then
+    reconfigured as the operating build regenerates its header from the commit's vehicle.yaml at the build."""
+    repo, header = record_repo
+    build = tmp_path / "b"
+    other = tmp_path / "other_vehicle_config.h"
+    text = header.read_text()
+    calib = re.search(r'FW_VEHICLE_CALIBRATION_ID "([0-9a-f]+)"', text).group(1)
+    other.write_text(text.replace(calib, "f" * len(calib)))
+    cfg = _configure_in(repo, other, build, *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    made = build / "boards" / "weact_h743" / "generated" / "vehicle_config.h"
+    assert "f" * len(calib) in made.read_text()  # the copy sits in the build directory
+    cfg = _configure_in(repo, header, build, "-UFW_VEHICLE_HEADER", "-UFW_BUILD", *WAIVED,
+                        "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert made.read_text() == text  # the commit's values, not the copy left behind
+    elf = (build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+    assert b"forklift-mcu normal OPEN" in elf
+
+
+def test_the_operating_build_refuses_an_uncommitted_vehicle_config(record_repo, tmp_path):
+    """Codex U3d P2-2: the operating build's vehicle.yaml (and the chassis model it names) must be the HEAD blob --
+    at configure time and at every build."""
+    repo, header = record_repo
+    yaml_path = repo / "config" / "real" / "vehicle.yaml"
+    original = yaml_path.read_text()
+    try:
+        yaml_path.write_text(original + "# edited\n")
+        cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+        assert cfg.returncode != 0
+        assert "differs from its committed version" in _flat(cfg.stderr), cfg.stderr
+        # a locked or commissioning build may read the working copy (a bench edit), as before
+        cfg = _configure_in(repo, header, tmp_path / "c", *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md",
+                            header_given=False)
+        assert cfg.returncode == 0, cfg.stderr
+    finally:
+        yaml_path.write_text(original)
+    build = tmp_path / "d"
+    cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    try:
+        yaml_path.write_text(original + "# edited after configure\n")
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "differs from its committed version" in _flat(res.stdout + res.stderr)
+    finally:
+        yaml_path.write_text(original)
+
+
 def test_the_commissioning_open_build_carries_no_waiver(open_build):
     data = (open_build / "boards" / "weact_h743" / "fw.elf").read_bytes()
     assert re.search(rb"forklift-mcu commission OPEN \S+ rec=[0-9a-f]{8} lim=lr1 link=usb", data)

@@ -16,23 +16,23 @@ function(fw_vehicle_header target out_dir)
     get_filename_component(repo ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../.. ABSOLUTE)
     set(yaml ${repo}/config/real/vehicle.yaml)
     set(header ${out_dir}/vehicle_config.h)
-    execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${repo}/src
-                ${FW_PYTHON} ${repo}/tools/real_vehicle_header.py --config ${yaml} --print-chassis
-        OUTPUT_VARIABLE chassis OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
-    if(NOT rc EQUAL 0 OR NOT EXISTS ${chassis})
-        message(FATAL_ERROR "could not read the chassis model named by ${yaml}")
+    # Generated at every build, replaced only when its content changes (gen_vehicle_header.cmake): a
+    # header left by an earlier configuration of this build directory is never taken (Codex U3d P2-1).
+    # FW_VEHICLE_COMMITTED (the operating build): its inputs must be the commit's (Codex U3d P2-2).
+    if(FW_VEHICLE_COMMITTED)
+        set(committed 1)
+    else()
+        set(committed 0)
+    endif()
+    set(gen ${CMAKE_COMMAND} -DREPO=${repo} -DPYTHON=${FW_PYTHON} -DYAML=${yaml} -DOUT=${header}
+        -DCOMMITTED=${committed} -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_vehicle_header.cmake)
+    execute_process(COMMAND ${gen} RESULT_VARIABLE rc ERROR_VARIABLE err)
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "${err}")
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${yaml})
-    add_custom_command(
-        OUTPUT ${header}
-        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${repo}/src
-                ${FW_PYTHON} ${repo}/tools/real_vehicle_header.py --config ${yaml} --out ${header}
-        DEPENDS ${yaml} ${chassis} ${repo}/tools/real_vehicle_header.py
-                ${repo}/src/forklift_core/plant/real_vehicle.py
-        COMMENT "Generating ${header} from ${yaml}"
-        VERBATIM)
-    add_custom_target(${target}_vehicle_header DEPENDS ${header})
+    add_custom_target(${target}_vehicle_header COMMAND ${gen} BYPRODUCTS ${header}
+                      COMMENT "Generating ${header} from ${yaml}" VERBATIM)
     add_dependencies(${target} ${target}_vehicle_header)
     target_include_directories(${target} PRIVATE ${out_dir})
 endfunction()
