@@ -120,6 +120,6 @@ STDS U8 교체 뒤 조향 축은 15 s 동안 받은 14,990 프레임이 모두 �
 
 ## 보드 상태
 
-⚠️ 보드에는 원시 워드 진단 이미지 `diag-kthraw-2` 가 남아 있다. 원래 진단 이미지(`diag-commission-unlimited-1`)의 백업은 Jetson `~/kthraw_flash/backup.bin` 에 있다.
+⚠️ 이 기록을 마쳤을 때 보드에는 원시 워드 진단 이미지 `diag-kthraw-2` 가 남아 있었다. 같은 날 그 뒤의 이미지(diag-fw-bench-1/2)와 지금 상태는 [fw-bench 기록](2026-11-27-bench-fw-bench-m-hold.md)에 있다. 원래 진단 이미지(`diag-commission-unlimited-1`)의 백업은 Jetson `~/kthraw_flash/backup.bin` 에 있다.
 
 **다음 벤치 때 fw-open 또는 fw-single 로 다시 굽는다**(총괄 2026-11-27).
