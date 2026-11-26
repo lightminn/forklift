@@ -2398,6 +2398,155 @@ static void bench_limits_are_the_sessions(void)
     CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES, 0);
 }
 
+/* ---- DIAGNOSTIC BRANCH ONLY (diag/fw-bench): BENCH_HOLD -- M held on the KTH travel counter ---- */
+static link_msg hold_msg(uint16_t seq, uint32_t target, float kp, float ki, uint16_t db, uint16_t dmax)
+{
+    link_msg m = {.type = LINK_BENCH_HOLD, .seq = seq};
+    m.u.hold = (link_bench_hold){.axis = DRIVE_CH_M,
+                                 .sign = 1,
+                                 .target_counts = target,
+                                 .kp = kp,
+                                 .ki = ki,
+                                 .deadband_counts = db,
+                                 .duty_max_e4 = dmax,
+                                 .valid_after_echo_ms = 150,
+                                 .arm_gen = d.arm_gen,
+                                 .boot_id = d.boot_id,
+                                 .echo_mcu_time_us = echo_now()};
+    return m;
+}
+
+static double hold_s; /* the simulated shaft, sensor rad */
+
+static void hold_tick(const link_msg *m)
+{
+    /* the shaft turns at 40 rad/s per unit of M duty (the build's duty sign applied) */
+    hold_s += (double)out.duty[DRIVE_CH_M] * 40.0 * (double)cfg.period_us * 1e-6;
+    set_steer(hold_s);
+    if (m != NULL) {
+        tick_msgs(m, 1);
+    } else {
+        tick();
+    }
+}
+
+static uint16_t hold_arm(void)
+{
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    hold_s = 2.0;
+    set_steer(hold_s);
+    ticks(5);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    return seq;
+}
+
+static void bench_hold_refusals(void)
+{
+    boot_with(mod_commission_open_lr); /* not the bench image */
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(hold_msg(2, 0, 1.0f, 0.0f, 10, 1500));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    uint16_t seq = hold_arm();
+    uint32_t c = d.bench_kth_counts;
+    link_msg bad = hold_msg(seq++, c, 1.0f, 0.0f, 10, 1500);
+    bad.u.hold.axis = DRIVE_CH_L;
+    send(bad);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(hold_msg(seq++, c, 0.0f, 0.0f, 10, 1500)); /* no gain */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(hold_msg(seq++, c, 1.0f, 0.0f, 10, 2501)); /* over the session's M cap 0.25 */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    /* no zero first in this arming: refused */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    send(bench_msg(1, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    send(arm_msg(2, d.boot_id, echo_now()));
+    send(hold_msg(3, d.bench_kth_counts, 1.0f, 0.0f, 10, 1500));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_ZERO_FIRST);
+    /* a stale count: refused */
+    seq = hold_arm();
+    in.abs_frame[0] = 0x0000;
+    ticks(5);
+    send(hold_msg(seq++, d.bench_kth_counts, 1.0f, 0.0f, 10, 1500));
+    CHECK(d.reject_reason != DRIVE_REJECT_NONE); /* the loss has faulted M already (NOT_ARMED) */
+    CHECK(!d.hold_on);
+}
+
+static void bench_hold_reaches_and_restores_the_target(void)
+{
+    uint16_t seq = hold_arm();
+    uint32_t start = d.bench_kth_counts;
+    uint32_t target = start + 2048u; /* half a turn away */
+    int t = 0;
+    for (; t < 3000; t++) {
+        link_msg m = hold_msg(seq, target, 2.0f, 0.5f, 8, 2000);
+        if (t % 50 == 0) {
+            seq++;
+            hold_tick(&m);
+            CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        } else {
+            hold_tick(NULL);
+        }
+        CHECK(fabs((double)out.duty[DRIVE_CH_M]) <= 0.2 + 1e-6); /* the hold's own cap */
+    }
+    int32_t err = (int32_t)(target - d.bench_kth_counts);
+    CHECK(err > -20 && err < 20);
+    CHECK(d.hold_on);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    /* twisted by hand a quarter turn the other way: pushed back */
+    for (int k = 0; k < 20; k++) {
+        hold_s -= TWO_PI / 4.0 / 20.0;
+        hold_tick(NULL);
+    }
+    for (t = 0; t < 2000; t++) {
+        link_msg m = hold_msg(seq, target, 2.0f, 0.5f, 8, 2000);
+        if (t % 50 == 0) {
+            seq++;
+            hold_tick(&m);
+        } else {
+            hold_tick(NULL);
+        }
+    }
+    err = (int32_t)(target - d.bench_kth_counts);
+    CHECK(err > -20 && err < 20);
+    /* DISARM ends the hold at once */
+    send(simple(LINK_DISARM, seq++));
+    CHECK(!d.hold_on);
+    tick();
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+}
+
+static void bench_hold_ends_on_expiry_and_on_a_commission(void)
+{
+    uint16_t seq = hold_arm();
+    uint32_t target = d.bench_kth_counts + 1000u;
+    link_msg m = hold_msg(seq++, target, 2.0f, 0.0f, 8, 2000);
+    hold_tick(&m);
+    CHECK(d.hold_on && out.duty[DRIVE_CH_M] > 0.0f);
+    for (int t = 0; t < 200; t++) { /* nothing sent: the 150 ms validity runs out */
+        hold_tick(NULL);
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    CHECK(!d.hold_on);
+    seq = hold_arm();
+    target = d.bench_kth_counts + 1000u;
+    m = hold_msg(seq++, target, 2.0f, 0.0f, 8, 2000);
+    hold_tick(&m);
+    CHECK(d.hold_on);
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now())); /* an open-loop zero takes over */
+    CHECK(!d.hold_on);
+    tick();
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2461,5 +2610,8 @@ int main(void)
     bench_counts_a_fast_turn_frame_by_frame();
     bench_a_step_the_counter_cannot_tell_stops_m();
     bench_m_needs_a_fresh_count();
+    bench_hold_refusals();
+    bench_hold_reaches_and_restores_the_target();
+    bench_hold_ends_on_expiry_and_on_a_commission();
     return FW_TEST_RESULT();
 }

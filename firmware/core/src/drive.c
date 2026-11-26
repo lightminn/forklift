@@ -137,6 +137,9 @@ static void enter_fault(drive *d, uint32_t bits)
     if (d->mode != DRIVE_MODE_ESTOP) {
         d->mode = DRIVE_MODE_FAULT;
     }
+#if defined(FW_CORE_BENCH)
+    d->hold_on = false; /* diag/fw-bench: a fault ends a hold for good */
+#endif
 }
 
 /* ---- driver initialisation and SPI (one transaction at a time) --------------------- */
@@ -305,6 +308,10 @@ static void reset_control(drive *d)
     }
     d->cm_axis = CM_AXIS_NONE;
     d->cm_duty = 0.0f;
+#if defined(FW_CORE_BENCH)
+    d->hold_on = false; /* diag/fw-bench: a hold ends with the control */
+    pi_reset(&d->hold_pi);
+#endif
     /* cm_on is not cleared here: only a cycle whose applied outputs are all zero clears it, so
        a DISARM and ARM in one cycle cannot restart the commissioning clock (Codex round 2). */
     pi_reset(&d->steer_pi);
@@ -398,6 +405,14 @@ static bool cm_axis_ok(const drive *d, const abs_axis *a, uint32_t range_bit)
 {
     return a->valid && (!a->out_of_range || bench_bypassed(d, range_bit));
 }
+
+#if defined(FW_CORE_BENCH)
+/* M runs on the bench image only with a travel count that exists, is fresh and was not lost since the ARM. */
+static bool bench_count_fresh(const drive *d)
+{
+    return !d->bench_kth_lost && d->bench_kth_have && d->time_us - d->bench_kth_last_us <= BENCH_KTH_GAP_US;
+}
+#endif
 
 static bool bench_overrides(const drive *d)
 {
@@ -726,6 +741,9 @@ static void enter_stopping(drive *d, uint32_t why)
     d->steer_target = d->steer_ref = d->steer.position;
     d->lift_target = d->lift_ref = d->lift.position;
     d->cm_duty = 0.0f; /* a commission build stops with every duty 0 at once (design 3) */
+#if defined(FW_CORE_BENCH)
+    d->hold_on = false; /* diag/fw-bench: a stop ends a hold for good */
+#endif
     d->stop_until_us = d->time_us + (uint64_t)d->cfg->stop_grace_ms * US_PER_MS;
 }
 
@@ -966,9 +984,7 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
         return DRIVE_REJECT_NONE; /* M and H need no KTH here */
     }
 #if defined(FW_CORE_BENCH)
-    if (c->axis == DRIVE_CH_M && BENCH(d->cfg) &&
-        (d->bench_kth_lost || !d->bench_kth_have ||
-         d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US)) {
+    if (c->axis == DRIVE_CH_M && BENCH(d->cfg) && !bench_count_fresh(d)) {
         /* M only with a travel count that exists, is fresh and was never lost since the ARM (Codex fw-bench
            rounds 4-5): not before a first countable frame, nor in the cycle an ARM cleared a stale loss */
         return DRIVE_REJECT_SENSOR_INVALID;
@@ -997,6 +1013,9 @@ static void handle_commission(drive *d, const link_msg *m)
     d->sa_last_axis = c->axis;
 #endif
     d->cm_duty = (float)c->duty_e4 / 10000.0f;
+#if defined(FW_CORE_BENCH)
+    d->hold_on = false; /* an open-loop COMMISSION ends a hold */
+#endif
     d->zero_seen = true;
     d->has_deadline = true;
     d->deadline_us = c->echo_mcu_time_us + (uint64_t)window_ms * US_PER_MS;
@@ -1056,6 +1075,61 @@ static void handle_clear(drive *d, const link_msg *m)
     d->last_rx_seq = m->seq;
     reset_control(d);
     start_driver_init(d, true);
+}
+
+/* diag/fw-bench: BENCH_HOLD -- M held at a travel-counter target (the bench image only). */
+static void handle_bench_hold(drive *d, const link_msg *m)
+{
+#if defined(FW_CORE_BENCH)
+    const link_bench_hold *h = &m->u.hold;
+    if (!BENCH(d->cfg)) {
+        d->reject_reason = DRIVE_REJECT_WRONG_BUILD;
+        return;
+    }
+    if (h->axis != DRIVE_CH_M || (h->sign != 1 && h->sign != -1) || !isfinite(h->kp) || !(h->kp > 0.0f) ||
+        !isfinite(h->ki) || h->ki < 0.0f || h->duty_max_e4 == 0 ||
+        h->duty_max_e4 > cm_duty_max_e4(d, DRIVE_CH_M) || h->valid_after_echo_ms == 0) {
+        d->reject_reason = DRIVE_REJECT_BAD_VALUE;
+        return;
+    }
+    uint32_t window_ms = window_for(d, h->valid_after_echo_ms);
+    uint8_t why = command_check(d, m->seq, h->boot_id, h->arm_gen, h->echo_mcu_time_us, window_ms, true);
+    if (why == DRIVE_REJECT_NONE && d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && d->cm_on_axis != DRIVE_CH_M) {
+        why = DRIVE_REJECT_STOPPING; /* one axis per output interval, as COMMISSION */
+    }
+    if (why == DRIVE_REJECT_NONE &&
+        (!bench_count_fresh(d) || !cm_axis_ok(d, &d->steer, DRIVE_BENCH_STEER_RANGE))) {
+        why = DRIVE_REJECT_SENSOR_INVALID;
+    }
+    d->reject_reason = why;
+    if (why != DRIVE_REJECT_NONE) {
+        return;
+    }
+    if (d->cm_axis < 2) {
+        d->wheel_duty[d->cm_axis] = 0.0f;
+    }
+    if (!d->hold_on || d->hold_target != h->target_counts) {
+        pi_reset(&d->hold_pi); /* a new target starts its integral afresh */
+    }
+    d->cm_axis = DRIVE_CH_M;
+    d->hold_on = true;
+    d->hold_target = h->target_counts;
+    d->hold_sign = h->sign;
+    d->hold_pi_cfg = (pi_config){.kp = h->kp,
+                                 .ki = h->ki,
+                                 .kff = 0.0f,
+                                 .out_max = (float)h->duty_max_e4 / 10000.0f,
+                                 .deadband = (float)h->deadband_counts * TWO_PI_F / 4096.0f};
+    d->zero_seen = true;
+    d->has_deadline = true;
+    d->deadline_us = h->echo_mcu_time_us + (uint64_t)window_ms * US_PER_MS;
+    d->have_drive_seq = true;
+    d->last_drive_seq = m->seq;
+    d->last_rx_seq = m->seq;
+#else
+    (void)m;
+    d->reject_reason = DRIVE_REJECT_WRONG_BUILD;
+#endif
 }
 
 /* diag/fw-bench: the bench session's overrides, in DISARMED only and outside an output interval. */
@@ -1126,6 +1200,9 @@ void drive_handle(drive *d, const link_msg *m)
     case LINK_BENCH_SET:
         handle_bench_set(d, m);
         break;
+    case LINK_BENCH_HOLD:
+        handle_bench_hold(d, m);
+        break;
     default:
         break;
     }
@@ -1195,6 +1272,18 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
             hold_commission(d); /* past the limit by whatever path: zero and hold */
         }
         float u = d->mode == DRIVE_MODE_ARMED && !over ? d->cm_duty : 0.0f;
+#if defined(FW_CORE_BENCH)
+        if (d->hold_on && ch == DRIVE_CH_M) {
+            /* the PI on the counter error (rad of the sensor), its sign the duty that raises the count; nothing
+               on a stale or lost count (the loss itself faults M) */
+            int32_t err = (int32_t)(d->hold_target - d->bench_kth_counts);
+            float e = (float)err * TWO_PI_F / 4096.0f;
+            u = 0.0f;
+            if (d->mode == DRIVE_MODE_ARMED && !over && bench_count_fresh(d)) {
+                u = (float)d->hold_sign * pi_step(&d->hold_pi_cfg, &d->hold_pi, e, 0.0f, dt);
+            }
+        }
+#endif
         if (ch < 2) {
             float lo, hi;
             slew_range(d->wheel_duty[ch], c->wheel_duty_slew_per_s * dt, 1.0f, &lo, &hi);

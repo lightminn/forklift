@@ -17,7 +17,8 @@
 #define LINK_DISARM 0x03u
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
-#define LINK_BENCH_SET 0x06u /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's session overrides */
+#define LINK_BENCH_SET 0x06u
+#define LINK_BENCH_HOLD 0x07u /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): hold M on the KTH travel counter */ /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's session overrides */
 #define LINK_STATE 0x81u
 
 #define LINK_DRIVE_FLAG_LIFT_HOLD 0x01u
@@ -60,6 +61,22 @@ typedef struct {
     uint32_t time_ms[4];
 } link_bench_set;
 
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): hold an axis (M only) at a target of the bench
+   image's KTH travel counter with a PI on the counter error; like a COMMISSION it is fresh only within
+   its validity after the echo and needs a zero first. ``sign`` is the duty sign that raises the count. */
+typedef struct {
+    uint8_t axis;
+    int8_t sign;
+    uint32_t target_counts; /* the travel counter value (mod 2^32) */
+    float kp, ki;           /* duty per rad of counter error, duty per rad*s */
+    uint16_t deadband_counts;
+    uint16_t duty_max_e4;
+    uint16_t valid_after_echo_ms;
+    uint16_t arm_gen;
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
+} link_bench_hold;
+
 typedef struct {
     uint64_t mcu_time_us;
     uint32_t boot_id;
@@ -87,6 +104,7 @@ typedef struct {
         link_clear clear;
         link_commission commission;
         link_bench_set bench;
+        link_bench_hold hold;
         link_state state;
     } u;
 } link_msg;

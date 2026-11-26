@@ -13,6 +13,7 @@
 #define CLEAR_LEN 4u
 #define COMMISSION_LEN 19u
 #define BENCH_SET_LEN 32u /* diag/fw-bench */
+#define BENCH_HOLD_LEN 34u /* diag/fw-bench */
 #define STATE_LEN 84u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
@@ -101,6 +102,8 @@ static size_t payload_len(uint8_t type)
 #if defined(FW_CORE_BENCH) /* the other images keep 0x06 an unknown type (Codex fw-bench round 1 P3-2) */
     case LINK_BENCH_SET:
         return BENCH_SET_LEN;
+    case LINK_BENCH_HOLD:
+        return BENCH_HOLD_LEN;
 #endif
     case LINK_STATE:
         return STATE_LEN;
@@ -152,6 +155,21 @@ static void put_payload(wr *w, const link_msg *m)
         for (int i = 0; i < 4; i++) {
             put_u32(w, b->time_ms[i]);
         }
+        break;
+    }
+    case LINK_BENCH_HOLD: {
+        const link_bench_hold *h = &m->u.hold;
+        put_u8(w, h->axis);
+        put_u8(w, (uint8_t)h->sign);
+        put_u32(w, h->target_counts);
+        put_f32(w, h->kp);
+        put_f32(w, h->ki);
+        put_u16(w, h->deadband_counts);
+        put_u16(w, h->duty_max_e4);
+        put_u16(w, h->valid_after_echo_ms);
+        put_u16(w, h->arm_gen);
+        put_u32(w, h->boot_id);
+        put_u64(w, h->echo_mcu_time_us);
         break;
     }
     case LINK_STATE: {
@@ -241,6 +259,21 @@ static void get_payload(rd *r, link_msg *m)
         for (int i = 0; i < 4; i++) {
             b->time_ms[i] = get_u32(r);
         }
+        break;
+    }
+    case LINK_BENCH_HOLD: {
+        link_bench_hold *h = &m->u.hold;
+        h->axis = get_u8(r);
+        h->sign = (int8_t)get_u8(r);
+        h->target_counts = get_u32(r);
+        h->kp = get_f32(r);
+        h->ki = get_f32(r);
+        h->deadband_counts = get_u16(r);
+        h->duty_max_e4 = get_u16(r);
+        h->valid_after_echo_ms = get_u16(r);
+        h->arm_gen = get_u16(r);
+        h->boot_id = get_u32(r);
+        h->echo_mcu_time_us = get_u64(r);
         break;
     }
     case LINK_STATE: {

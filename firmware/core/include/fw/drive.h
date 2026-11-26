@@ -233,6 +233,12 @@ typedef struct drive {
     bool bench_kth_lost;        /* since the last ARM: a step the counter could not tell */
     uint64_t bench_kth_lost_us; /* the cycle it was last found lost */
     uint64_t bench_kth_ok_us;   /* the cycle of the last step counted normally (an ARM clears a loss only after one) */
+    /* BENCH_HOLD: M held at a travel-counter target by a PI (ended by DISARM, a stop, a COMMISSION) */
+    bool hold_on;
+    uint32_t hold_target;
+    int8_t hold_sign;
+    pi_config hold_pi_cfg;
+    pi_state hold_pi;
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
