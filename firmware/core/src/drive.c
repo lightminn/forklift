@@ -19,7 +19,7 @@
 #define BENCH(c) false
 #endif
 #define BENCH_KTH_GAP_US 3000u  /* diag/fw-bench: valid steering frames further apart: the count is lost */
-#define BENCH_KTH_STEP_MAX 512   /* diag/fw-bench: 1/8 turn in one frame (125 turns/s): the count is lost */
+#define BENCH_KTH_STEP_MAX 512u  /* diag/fw-bench: 1/8 turn a ms (125 turns/s): a faster step loses the count */
 #define HALF_RANGE_MARGIN 16383.0f /* half of the 16-bit difference's half range */
 
 /* Bits cleared by a successful ARM rather than by CLEAR_FAULTS: the expiry and commissioning
@@ -479,7 +479,9 @@ static void read_sensors(drive *d, const drive_inputs *in)
     if (BENCH(c) && in->abs_fresh[0]) {
         /* diag/fw-bench: the steering KTH's travel, unwrapped frame by frame (half a turn a frame at most) */
         uint16_t a12;
-        if (kth7801_decode(in->abs_frame[0], c->steer.crc, &a12)) {
+        /* 0x0000 passes the CRC and is what a MISO stuck low reads: never counted, so a stuck run of it ages
+           into a gap (Codex fw-bench round 4 P2-1); a real angle 0 passed at speed is one frame skipped */
+        if (in->abs_frame[0] != 0x0000u && kth7801_decode(in->abs_frame[0], c->steer.crc, &a12)) {
             if (d->bench_kth_have) {
                 int32_t step = (int32_t)a12 - (int32_t)d->bench_kth_prev;
                 if (step > 2047) {
@@ -487,8 +489,10 @@ static void read_sensors(drive *d, const drive_inputs *in)
                 } else if (step < -2048) {
                     step += 4096;
                 }
-                if (d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US ||
-                    step > BENCH_KTH_STEP_MAX || step < -BENCH_KTH_STEP_MAX) {
+                /* the speed bound over the time since the last counted frame (a skipped frame doubles it) */
+                uint64_t dt = d->time_us - d->bench_kth_last_us;
+                int32_t lim = (int32_t)(BENCH_KTH_STEP_MAX * ((dt + 999u) / 1000u));
+                if (dt > BENCH_KTH_GAP_US || step > lim || step < -lim) {
                     /* a gap or a step no axis makes in one frame (a glitch passing the CRC): never
                        counted, and the count is lost until the next ARM (Codex fw-bench round 3 P2-2) */
                     d->bench_kth_lost = true;
@@ -500,6 +504,9 @@ static void read_sensors(drive *d, const drive_inputs *in)
             d->bench_kth_have = true;
             d->bench_kth_last_us = d->time_us;
         }
+    }
+    if (BENCH(c) && d->bench_kth_have && d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US) {
+        d->bench_kth_lost = true; /* no countable frame for too long: lost now, not at the next one */
     }
 #endif
     if (in->adc_fresh) {
@@ -951,6 +958,11 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
         }
         return DRIVE_REJECT_NONE; /* M and H need no KTH here */
     }
+#if defined(FW_CORE_BENCH)
+    if (c->axis == DRIVE_CH_M && BENCH(d->cfg) && d->bench_kth_lost) {
+        return DRIVE_REJECT_SENSOR_INVALID; /* a lost travel count: M not taken (Codex fw-bench round 4 P2-2) */
+    }
+#endif
     if ((c->axis == DRIVE_CH_M && !cm_axis_ok(d, &d->steer, DRIVE_BENCH_STEER_RANGE)) ||
         (c->axis == DRIVE_CH_H && !cm_axis_ok(d, &d->lift, DRIVE_BENCH_LIFT_RANGE))) {
         return DRIVE_REJECT_SENSOR_INVALID; /* the picked axis must be measurable */

@@ -189,3 +189,12 @@ def test_a_second_run_on_the_same_boot_gets_the_defaults_back(model):
     armed = [s for s in b.samples[n:] if s.state.mode.name == "ARMED"]
     assert armed and not any(s.state.fault_flags & FaultFlag.BENCH_OVERRIDES for s in armed)
     assert second["not_for_gate"] and "bench_image" in second["bypassed"]
+
+
+def test_another_bench_generation_is_refused_for_every_run(model):
+    """Codex fw-bench round 4 P2-3: an older bench image keeps a previous run's overrides; nothing is armed on it."""
+    b = model("--bench", "1")
+    b.host.usb_product = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench"
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert res["result"] == "refused" and "another generation" in res["why"]
+    assert "ARM" not in kinds_written(b) and "BENCH_SET" not in kinds_written(b)

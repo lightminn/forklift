@@ -190,6 +190,13 @@ def bench_image(product: str | None) -> bool:
             and tuple(product.split()[-len(BENCH_SUFFIX):]) == BENCH_SUFFIX)
 
 
+def any_bench_image(product: str | None) -> bool:
+    """Any bench generation (``lim=lr1 bench*``): told apart from this tool's own by ``bench_image``."""
+    toks = str(product).split() if product else []
+    return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX) and len(toks) >= 2
+            and toks[-2] == "lim=lr1" and toks[-1].startswith("bench"))
+
+
 def parse_bench_bypass(text: str | None) -> tuple[str, ...]:
     if not text:
         return ()

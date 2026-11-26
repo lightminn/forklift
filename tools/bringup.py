@@ -746,6 +746,11 @@ class CommissionSession(Session):
         # diag/fw-bench: on the bench image every run sends its BENCH_SET before the ARM (the defaults when none was
         # asked), so a previous run's overrides never carry over; bench values on another image are refused
         bench_img = bl.bench_image(self.preflight_product)
+        if not bench_img and bl.any_bench_image(self.preflight_product):
+            # Codex fw-bench round 4 P2-3: another bench generation keeps a previous run's overrides and its STATE
+            # carries something else: no run on it at all, plain or not
+            raise Refused(f"bench: {self.preflight_product!r} is a bench image of another generation than this tool's "
+                          f"('{' '.join(bl.BENCH_SUFFIX)}'): flash the current one")
         if self.bench is not None and not bench_img:
             raise Refused(f"bench: {self.preflight_product!r} is not the bench image (no product ending "
                           f"'{' '.join(bl.BENCH_SUFFIX)}')")
@@ -811,6 +816,7 @@ class CommissionSession(Session):
                     verdict["why"] = "the board rebooted"
                     return True
                 if st.last_rx_seq == seq:
+                    verdict["index"] = i
                     if st.reject_reason != RejectReason.NONE or st.mode != Mode.DISARMED:
                         verdict["why"] = f"reject {st.reject_reason.name}, mode {st.mode.name}"
                     elif bool(st.fault_flags & FaultFlag.BENCH_OVERRIDES) != want:
@@ -832,7 +838,7 @@ class CommissionSession(Session):
         self.bench_taken = {"seq": seq, "bypass": list(ask.names), "duty_max_e4": list(ask.duty_max_e4()),
                             "time_ms": list(ask.time_ms()), "overrides": want, "boot_id": boot0}
         self._bench_boot = boot0
-        self._bench_index = n0
+        self._bench_index = verdict.get("index", n0)  # the STATE that took it (Codex fw-bench round 4 P3-2)
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
@@ -1708,8 +1714,10 @@ def main(argv=None) -> int:
         marks = {**marks, **jmarks}
     if args.cmd == "kth":
         rows = rows_
-        products = {args.image} | {r.get("product") for r in rows if r.get("t") == "connected"}
-        if any(bl.bench_image(p) or judgement.diagnostic_image(p) and "bench" in str(p) for p in products):
+        products = {args.image} | {r.get("product") for r in rows
+                                   if r.get("t") == "connected" or (r.get("t") == "event"
+                                                                    and r.get("kind") == "connected")}
+        if any(bl.any_bench_image(p) for p in products):
             # diag/fw-bench: the bench image carries its KTH travel counter where the other variant's CRC count goes
             print(json.dumps({**marks, "result": "invalid", "why": "bench image: no other-variant CRC counts "
                               "(its STATE carries the steering travel counter there)", "image": args.image}))
@@ -2250,8 +2258,12 @@ def execute(args, bench: Bench) -> dict:
                 if AXES[args.axis] == 2 and session.bench_taken is not None:
                     result["kth"] = _kth_summary(bench.samples, start=session._bench_index or 0,
                                                  boot=session._bench_boot)  # diag/fw-bench: turns, time, speed
+                    # from this run's ARM on (a previous arming's loss is cleared by it), its boot only
+                    run_ = [s for s in bench.samples[session._bench_index or 0:]
+                            if s.state.boot_id == session._bench_boot]
+                    armed_ = next((k for k, s in enumerate(run_) if s.state.mode == Mode.ARMED), len(run_))
                     result["kth"]["lost"] = any(s.state.fault_flags & FaultFlag.BENCH_KTH_LOST
-                                                for s in bench.samples[session._bench_index or 0:])
+                                                for s in run_[armed_:])
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
                     # (partial-parts plan v4)

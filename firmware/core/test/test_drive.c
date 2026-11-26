@@ -2157,12 +2157,12 @@ static void bench_counts_a_fast_turn_frame_by_frame(void)
        counter goes backwards for a turn the other way and ignores a frame the CRC refuses */
     boot_with(mod_bench);
     in.abs_fresh[1] = false;
-    set_steer(0.0);
+    set_steer(0.3); /* not angle 0: a 0x0000 frame is never counted */
     ticks(3);
     link_state st;
     drive_fill_state(&d, &st);
     uint32_t c0 = (uint32_t)st.kth_alt_crc_errors[0] | ((uint32_t)st.kth_alt_crc_errors[1] << 16);
-    double s = 0.0;
+    double s = 0.3;
     for (int t = 0; t < 100; t++) {
         s += 0.07 * TWO_PI;
         set_steer(s);
@@ -2179,6 +2179,19 @@ static void bench_counts_a_fast_turn_frame_by_frame(void)
     uint32_t c1 = (uint32_t)st.kth_alt_crc_errors[0] | ((uint32_t)st.kth_alt_crc_errors[1] << 16);
     int32_t travel = (int32_t)(c1 - c0);
     CHECK(travel > 6.3 * 4096 - 50 && travel < 6.3 * 4096 + 50); /* 7 turns out, 0.7 back */
+    /* passing angle 0 at speed: its 0x0000 frame is skipped, the next step spans both frames, nothing lost */
+    set_steer(-0.2); /* placed there (a jump: lost, reset for this check) */
+    tick();
+    tick();
+    d.bench_kth_lost = false;
+    uint32_t c2 = d.bench_kth_counts;
+    in.abs_frame[0] = 0x0000;
+    tick();
+    set_steer(0.2);
+    tick();
+    CHECK(!d.bench_kth_lost);
+    int32_t across = (int32_t)(d.bench_kth_counts - c2);
+    CHECK(across > 255 && across < 267); /* 0.4 rad = 260.8 counts */
     /* another image keeps its other-variant counters there */
     boot_with(mod_commission_open_lr);
     in.abs_frame[0] = 0x1234; /* a frame the configured variant refuses; counted for the other variant if it passes */
@@ -2202,10 +2215,13 @@ static void bench_a_step_the_counter_cannot_tell_stops_m(void)
     send(commission_msg(seq++, DRIVE_CH_M, 1200, 150, echo_now()));
     CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_KTH_LOST, 0);
     uint32_t before = d.bench_kth_counts;
-    in.abs_frame[0] = 0x0000; /* angle 0, CRC 0: valid, ~2.0 rad away from the last frame */
+    in.abs_frame[0] = 0x0000; /* angle 0, CRC 0: what a MISO stuck low reads, never counted */
     tick();
+    CHECK(!d.bench_kth_lost); /* one such frame is a skipped frame */
+    CHECK_EQ_U(d.bench_kth_counts, before);
+    ticks(4); /* stuck: no countable frame for over 3 ms */
     CHECK(d.bench_kth_lost);
-    CHECK_EQ_U(d.bench_kth_counts, before); /* never counted */
+    CHECK_EQ_U(d.bench_kth_counts, before);
     CHECK(d.latched & DRIVE_FAULT_BENCH_KTH_LOST);
     CHECK(d.mode != DRIVE_MODE_ARMED);
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
@@ -2224,13 +2240,31 @@ static void bench_a_step_the_counter_cannot_tell_stops_m(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
     CHECK(!d.bench_kth_lost);
     CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_KTH_LOST, 0);
-    /* a gap: no fresh steering frame for 5 ms, then a valid one */
+    /* a gap: no fresh steering frame for 5 ms */
     in.abs_fresh[0] = false;
     ticks(5);
-    in.abs_fresh[0] = true;
-    set_steer(2.01);
-    tick();
     CHECK(d.bench_kth_lost);
+    in.abs_fresh[0] = true;
+    /* lost: a new M command is not taken until the next ARM (Codex fw-bench round 4 P2-2) */
+    set_steer(2.01);
+    ticks((int)cfg.stop_grace_ms + 50);
+    if (d.mode == DRIVE_MODE_FAULT) {
+        link_msg clr = {.type = LINK_CLEAR_FAULTS, .seq = seq++};
+        clr.u.clear.boot_id = d.boot_id;
+        send(clr);
+        for (int i = 0; i < 200 && d.mode != DRIVE_MODE_DISARMED; i++) {
+            tick();
+        }
+    }
+    if (d.mode != DRIVE_MODE_DISARMED) {
+        send(simple(LINK_DISARM, seq++));
+        ticks(5);
+    }
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK(!d.bench_kth_lost);
+    d.bench_kth_lost = true; /* lost again inside the arming */
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
 }
 
 static void bench_limits_are_the_sessions(void)
