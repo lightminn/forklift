@@ -208,8 +208,10 @@
 - 구현(U3b-2): 운영판이고 깊이 원천이 없을 때만 적용한다(HIL·재생·깊이 원천이 있는 실행은 그대로).
   - `operator_start` 요청은 콘솔이 보이는 `pallet_id`·`targets_revision` 을 싣는다. 서버가 최신 revision 으로 대신 채우지 않는다. 지금 등록과 다르면 `targets_changed`, 운전자 등록이 없으면 `pallet_not_registered`, 빠지면 `operator_start_needs_registration`.
   - 확인은 우회 영역 전체(`RealHooks.bypass_region`: 등록 자세 둘레로 팔레트 + 띠, 미션의 우회 검사와 같은 기하 하나)를 싣고, 응답과 기록(`operator_start`)에 남긴다.
-  - 제출 판정: `d5_pocket` 우회가 없으면 `d5_pocket:no_depth_source`, 이 제출의 (팔레트, revision)·lease·재위치 세대와 같은 확인이 없으면 `operator_start:unconfirmed`. 승인된 제출이 확인을 소비하며 미션 id 와 함께 기록한다(`operator_start_used`).
-  - 미션이 만드는 우회 검사의 영역은 그 미션이 쓴 확인의 영역이어야 한다(중심·크기 같고 축 5° 안). 없으면 `d5_confirmation_missing`, 다르면 `d5_region_mismatch` 로 채택 중 끝난다.
+  - 제출 판정: `d5_pocket` 우회가 없으면 `d5_pocket:no_depth_source`, 이 제출의 (팔레트, revision)·lease·재위치 세대와 같은 확인이 없으면 `operator_start:unconfirmed`. 한 묶음의 제출은 하나씩 따로 판정하고 하나라도 거부면 묶음 전체를 거부한다. 승인된 제출이 확인을 소비하며 미션 id 와 함께 기록한다(`operator_start_used`).
+  - 팔레트를 다시 등록하면(같은 자세·같은 revision 이라도) 확인은 무효다. 확인을 쓴 뒤 첫 ARM 전에 차가 움직이면(물리 정지가 깨지면) 미션이 `operator_start_moved` 로 끝난다.
+  - 미션이 만드는 우회 검사의 영역은 그 미션이 쓴 확인의 영역이어야 한다(중심·크기 같고 축 5° 안). 없으면 `d5_confirmation_missing`, 다르면 `d5_region_mismatch` 로 채택 중 끝난다. 맞으면 면제되는 영역은 확인한 사각형 그대로다(축 허용각만큼 돌린 사각형이 아니다).
+  - `real_status.operator_start` 는 지금 등록 revision·재위치 세대와 같은 확인일 때만 참이고, `operator_start_binding` 이 묶인 내용을 보인다.
   - 화면 문구 여섯은 U3c(콘솔)에서 넣는다. 그 전까지 지금 콘솔의 빈 `operator_start` 는 운영판에서 `operator_start_needs_registration` 으로 거부된다.
 - 우회 중 지령 상한은 0.06 m/s 그대로다. 실측 과속 감시는 따로 돈다.
 - 시운전 계획 5 절의 '포켓 육안 확인' 한 줄은 이 확인으로 실제 화면과 기록에 들어간다.

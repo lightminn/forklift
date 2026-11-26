@@ -274,6 +274,10 @@ class RealHooks:
                 raise RealRequireFailed("d5_confirmation_missing")
             if not bypass_region_matches(check.region_control(), confirmed):
                 raise RealRequireFailed("d5_region_mismatch")
+            # the region exempted is the confirmed rectangle itself, not one turned within the axis tolerance
+            # (Codex U3b-2 round 1 P3-1: a turned rectangle frees cells outside what the eyes cleared)
+            cx, cy, clen, cwid, cyaw = (float(v) for v in confirmed)
+            check = BypassPocketCheck((cx, cy), clen, cwid, cyaw)
         return check
 
     def operator_check(self, request):

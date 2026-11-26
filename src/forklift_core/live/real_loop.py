@@ -571,7 +571,12 @@ class RealLoop:
                 return "mission_active", {}
             if msg["pallet_id"] not in core.targets.pallets:
                 return "unknown_pallet", {}
-            return None, {"targets_revision": register_pallet(core, msg["pallet_id"], msg["pose"])}
+            rev_ = register_pallet(core, msg["pallet_id"], msg["pose"])
+            if self._d5_confirm_required() and self.operator_start is not None:
+                # U3b-2 (Codex round 1 P2-3): a pallet registered again -- even at the same pose and revision, as
+                # when a pallet is swapped -- needs the eyes again
+                self.operator_start.void("registered")
+            return None, {"targets_revision": rev_}
         if kind == "operator_start":
             if core.relocalize_generation() is not None:
                 return "relocalize_required", {}  # 5c-2 (6, 2): no start check while the place is not known
@@ -671,7 +676,9 @@ class RealLoop:
             "operator_request": core.operator_open(),
             "field_recovery": None if recovery is None else recovery.get("id"),
             "relocalize_generation": core.relocalize_generation(),
-            "operator_start": None if start is None else start.ok(None if a.lease is None else a.lease.lease_id),
+            "operator_start": None if start is None else self._start_shown(a),
+            # U3b-2: what the D5 confirmation bound (pallet, revision, relocalization generation, region), or None
+            "operator_start_binding": None if start is None or start.binding is None else dict(start.binding),
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
@@ -1679,6 +1686,12 @@ class RealLoop:
         still = self._still(now_ns)
         if not still and self.operator_start is not None:
             self.operator_start.void("moved")  # 5c-1: a check given before the truck moved does not count
+        if (self.stand_since_ns is None and self.operator_start is not None and self._d5_confirm_required()
+                and self._before_arm() and self.confirmed_region() is not None):
+            # U3b-2 (Codex round 1 P1): the truck moved between the submit that used the D5 confirmation and the
+            # first ARM -- what the eyes cleared no longer holds; the mission ends (a new check, a new submit)
+            self.operator_start.used = None
+            core.commands.terminate("cancelled", t, "operator_start_moved")
         if core.slam is not None:
             core.slam["stop_now"] = still
             core.slam["still_since"] = None if self.still_since_ns is None else self._t(self.still_since_ns)
@@ -1904,6 +1917,16 @@ class RealLoop:
         return {"pallet_id": pid, "targets_revision": rev, "reloc_gen": self.reloc_gen,
                 "region": [float(v) for v in region]}
 
+    def _start_shown(self, a) -> bool:
+        """The start check as the console shows it: given under this lease and, on a D5 confirmation, still for the
+        current registration revision and relocalization generation (Codex U3b-2 round 1 P2-3)."""
+        lease = None if a.lease is None else a.lease.lease_id
+        b = self.operator_start.binding
+        if not self._d5_confirm_required():
+            return self.operator_start.ok(lease)
+        return b is not None and self.operator_start.ok_for(
+            lease, (b.get("pallet_id"), int(self.core.targets.revision), self.reloc_gen))
+
     def confirmed_region(self):
         """The region the D5 confirmation used by the running mission named (the bypass check's comparison)."""
         used = None if self.operator_start is None else self.operator_start.used
@@ -1934,8 +1957,16 @@ class RealLoop:
             return "case_a:start_unknown"
         if self._off_start(rear):
             return "case_a:not_at_start"
-        sub = next((c for c in queued if getattr(c, "kind", None) == "submit"), None)
-        pallet = None if sub is None else self.core.targets.pallets.get(sub.pallet_id)
+        # every submit of the batch is judged on its own and the first refusal refuses the batch (Codex U3b-2 round 1
+        # P2-2: a later submit must never ride an earlier one's judgement; refusing a whole batch only over-refuses)
+        for sub in (c for c in queued if getattr(c, "kind", None) == "submit"):
+            why = self._operating_submit_refusal_of(sub)
+            if why is not None:
+                return why
+        return None
+
+    def _operating_submit_refusal_of(self, sub) -> str | None:
+        pallet = self.core.targets.pallets.get(getattr(sub, "pallet_id", None))
         pose = None if pallet is None or pallet.pose is None else (
             float(pallet.pose.x_m), float(pallet.pose.y_m), float(pallet.pose.yaw_rad))
         why = rca.placement_refusal(pose, self.check_pallet_pose)
@@ -1946,11 +1977,16 @@ class RealLoop:
         if "d5_pocket" not in self._tick_bypass:
             return "d5_pocket:no_depth_source"
         lease = self.link.a.lease
-        key = (sub.pallet_id, int(sub.targets_revision), self.reloc_gen)
         if self.operator_start is None or not self.operator_start.ok_for(
-                None if lease is None else lease.lease_id, key):
+                None if lease is None else lease.lease_id, self._d5_key(sub)):
             return "operator_start:unconfirmed"
         return None
+
+    def _d5_key(self, sub) -> tuple:
+        """(pallet id, registration revision, relocalization generation) of a submit; a revision that is not an int
+        (missing, a bool) keys as None and never matches a confirmation (Codex U3b-2 round 1 P2-1)."""
+        rev = getattr(sub, "targets_revision", None)
+        return (getattr(sub, "pallet_id", None), rev if type(rev) is int else None, self.reloc_gen)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         if self.session.collect_failed is not None:
@@ -2051,8 +2087,9 @@ class RealLoop:
             if self.operator_start is not None and not self._bypassed("operator_start"):
                 lease = self.link.a.lease
                 m_ = cmds.mission
-                key = (m_.pallet_id, int(m_.targets_revision), self.reloc_gen) \
-                    if self._d5_confirm_required() and m_ is not None else None
+                key = None
+                if self._d5_confirm_required():
+                    key = ("", None, None) if m_ is None else self._d5_key(m_)  # never None: always keyed here
                 if not self.operator_start.take(None if lease is None else lease.lease_id, key, cmds.mission_id):
                     cmds.terminate("cancelled", t, "operator_start_unconfirmed")  # its check was used or voided
                     return

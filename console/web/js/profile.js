@@ -267,6 +267,11 @@ export const REJECT = {
   operator_start_needs_registration: "시작 확인에 화면의 팔레트와 등록 번호가 없습니다 · 팔레트를 고르고 다시 확인하세요",
   targets_changed: "팔레트 등록이 바뀌었습니다 · 화면을 다시 보고 확인하세요",
   pallet_not_registered: "운전자가 등록한 팔레트 위치가 없습니다",
+  "d5_pocket:no_depth_source": "깊이 카메라가 없어 D5 포켓 우회를 켜야 제출할 수 있습니다",
+  "operator_start:unconfirmed": "이 팔레트·등록 번호의 시작 확인이 없습니다 · 화면을 보고 다시 확인하세요",
+  // U3b-1: the operating run's case A and run time
+  run_time_short: "남은 실행 시간이 모자랍니다",
+  "case_a:": "승인된 배치·경로(사례 A)가 아닙니다",
   not_disarmed: "DISARM 이 아직 확인되지 않았습니다",
   not_still: "차가 멈춰 있지 않습니다",
   stale_operator_request: "그 확인 요청은 이미 바뀌었습니다 · 화면을 다시 보세요",

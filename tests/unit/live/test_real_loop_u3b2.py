@@ -150,7 +150,7 @@ def test_a_confirmation_of_an_older_registration_does_not_carry():
     _, rev2 = register(r, (PALLET[0] + 0.02, PALLET[1], PALLET[2]))  # registered again, still on the placement
     assert rev2 != rev
     reply = submit(r, rev2)
-    assert reply["t"] == "reject" and reply["reason"] == "operator_start:unconfirmed", reply
+    assert reply["t"] == "reject" and reply["reason"].endswith("operator_start:unconfirmed"), reply
 
 
 def test_a_confirmation_of_another_relocalization_generation_does_not_carry():
@@ -160,7 +160,7 @@ def test_a_confirmation_of_another_relocalization_generation_does_not_carry():
     ask(r, "operator_start", pallet_id=pid, targets_revision=rev)
     r.loop.reloc_gen = 5  # the place was found again after the check
     reply = submit(r, rev)
-    assert reply["t"] == "reject" and reply["reason"] == "operator_start:unconfirmed", reply
+    assert reply["t"] == "reject" and reply["reason"].endswith("operator_start:unconfirmed"), reply
 
 
 def test_the_confirmed_submit_runs_with_the_confirmed_region_and_records_its_use():
@@ -192,3 +192,74 @@ def test_a_region_other_than_the_confirmed_one_ends_the_mission():
     run_until(r, lambda rec: r.core.commands.status in ("cancelled", "failed", "recovery_required", "done"), 8000)
     assert "d5_region_mismatch" in str(r.core.commands.end_reason)
     assert not r.core.state.get("d5_bypass_check")
+
+
+# --- Codex round 1 -------------------------------------------------------------------------------------------------
+def test_a_turned_axis_within_the_tolerance_exempts_the_confirmed_rectangle_itself():
+    pickup = SimpleNamespace(x_m=PALLET[0], y_m=PALLET[1], yaw_rad=PALLET[2])
+    check = _hooks(lambda: list(REGION)).build_bypass_pocket_check(PALLET[2] + math.radians(4.9), pickup)
+    assert list(check.region_control()) == pytest.approx(REGION)  # P3-1: not the turned one
+
+
+def _confirmed(r):
+    bypass_d5(r)
+    pid, rev = register(r)
+    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev)
+    assert ok["t"] == "ack", ok
+    return pid, rev
+
+
+def test_a_submit_without_a_revision_is_refused_not_latched():
+    r = rig()
+    _confirmed(r)
+    reply, _ = ask(r, "mission_submit", pallet_id="P-S10", destination_id="D-S10")
+    assert reply["t"] == "reject", reply  # P2-1: no int(None) inside the tick
+    r.tick(5)
+    assert r.permit.state != "LATCHED" and r.loop.permit.reason is None
+
+
+def test_every_submit_of_a_batch_is_judged_on_its_own():
+    r = rig()
+    pid, rev = _confirmed(r)
+    ok = SimpleNamespace(kind="submit", pallet_id=pid, targets_revision=rev)
+    other = SimpleNamespace(kind="submit", pallet_id=pid, targets_revision=rev + 1)
+    now = r.now
+    assert r.loop._operating_submit_refusal([ok], now) is None  # noqa: SLF001
+    for batch in ([ok, other], [other, ok]):  # P2-2: neither order lets the unconfirmed one ride the other
+        assert r.loop._operating_submit_refusal(batch, now) == "operator_start:unconfirmed"  # noqa: SLF001
+    assert r.loop._d5_key(SimpleNamespace(pallet_id=pid, targets_revision=True))[1] is None  # noqa: SLF001
+
+
+def test_registering_again_at_the_same_pose_needs_the_eyes_again():
+    r = rig()
+    pid, rev = _confirmed(r)
+    status = r.loop.real_status(r.now)
+    assert status["operator_start"] is True and status["operator_start_binding"]["targets_revision"] == rev
+    _, rev2 = register(r)  # a swapped pallet put on the same tape (P2-3)
+    status = r.loop.real_status(r.now)
+    assert status["operator_start"] is False and status["operator_start_binding"] is None
+    reply = submit(r, rev2)
+    assert reply["t"] == "reject" and reply["reason"].endswith("operator_start:unconfirmed"), reply
+
+
+def test_the_status_shows_the_check_only_for_the_current_relocalization_generation():
+    r = rig()
+    _confirmed(r)
+    assert r.loop.real_status(r.now)["operator_start"] is True
+    r.loop.reloc_gen = 9
+    assert r.loop.real_status(r.now)["operator_start"] is False
+
+
+def test_moving_between_the_used_confirmation_and_the_first_arm_ends_the_mission():
+    r = rig()
+    pid, rev = _confirmed(r)
+    assert submit(r, rev)["t"] == "ack"  # accepted, the confirmation used, preparing: the ARM is the next tick's
+    assert any(e["t"] == "operator_start_used" for e in r.events) and r.loop._before_arm()  # noqa: SLF001
+    r.mcu.lift = r.mcu.lift_target = 0.04  # the lift raised by hand before any ARM (P1)
+    permits = []
+    run_until(r, lambda rec: permits.append(r.permit.state) or r.core.commands.end_reason is not None, 400)
+    assert r.core.commands.end_reason == "operator_start_moved", r.core.commands.end_reason
+    r.tick(20)
+    permits += [r.permit.state]
+    assert set(permits) == {"OFF"}, permits  # no ARM
+    assert not r.core.state.get("d5_bypass_check") and r.loop.confirmed_region() is None
