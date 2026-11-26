@@ -685,3 +685,250 @@ def test_the_slam_header_carries_what_the_replay_reads():
     src = inspect.getsource(ro._slam_start)
     keys = set(re.findall(r'"([a-z_]+)":', src[src.index('"t": "slam_header"'):]))
     assert READS["slam_header"] - {"t"} <= keys
+
+
+# --- 7e-1: the D435i depth stream (PR 7 docs/plans/2026-11-26-7e-depth-pocket-check.md 1, 4) -------------------------
+DEPTH_INTR = {"serial": "fake-123", "firmware": "5.16.0", "stream": "depth", "width": 640, "height": 480,
+              "fx": 388.81, "fy": 388.81, "ppx": 320.5, "ppy": 240.25, "model": "brown_conrady", "coeffs": [0.0] * 5}
+
+
+def depth_pattern(k):
+    """A frame whose pixels say which frame it is (and hold the boundary values)."""
+    import numpy as np
+
+    z = np.full((480, 640), 1000 + k, dtype=np.uint16)
+    z[0, 0], z[0, 1], z[-1, -1] = 0, 65535, k % 65536
+    return z
+
+
+class FakeDepthDevice(FakeImuDevice):
+    """``tools/depth_device.RealSenseDepthSource``'s shape: one device, the motion module (``motion``) and the depth
+    stream (15 Hz, a device time that follows the host clock) from their own threads. ``settings_mismatch``: the
+    start raises as a read-back difference does; ``lose_after``: the device reported removed after that many depth
+    frames; ``burst``: that many frames handed over at once (an overflow of the 8-frame queue)."""
+
+    def __init__(self, *, motion=False, settings_mismatch=False, lose_after=None, burst=0, fail_depth=False):
+        super().__init__(silent=not motion)
+        self.motion = motion
+        self.settings_mismatch, self.lose_after, self.burst, self.fail_depth = settings_mismatch, lose_after, burst, \
+            fail_depth
+        self.depth_sent = 0
+        self._dthread = None
+
+    def start(self, on_sample=None, on_depth=None, on_lost=None):
+        import threading
+
+        if self.motion:
+            super().start(on_sample)
+        else:
+            self.started = True
+        if self.fail_depth:
+            raise RuntimeError("depth sensor busy")
+        if self.settings_mismatch:
+            from depth_device import DepthSettingsMismatch
+
+            raise DepthSettingsMismatch("depth options read back differently: {'emitter_enabled': ...}")
+        self._dhalt = threading.Event()
+
+        def send(k):
+            now = time.monotonic_ns()
+            on_depth(k, now / 1e6, "hardware_clock", {"frame_timestamp": now // 1000}, 0.001, dict(DEPTH_INTR),
+                     depth_pattern(k))
+
+        def run():
+            for k in range(self.burst):
+                send(k)
+                self.depth_sent += 1
+            while not self._dhalt.is_set():
+                send(self.depth_sent)
+                self.depth_sent += 1
+                if self.lose_after is not None and self.depth_sent == self.lose_after:
+                    on_lost("device_removed")
+                time.sleep(1 / 15)
+
+        self._dthread = threading.Thread(target=run, daemon=True)
+        self._dthread.start()
+
+    def depth_profile_info(self):
+        from forklift_core.sensors.depth_cfg import calib_id
+
+        return {"actual": {"width": 640, "height": 480, "fps": 15}, "intrinsics": dict(DEPTH_INTR),
+                "calib_id": calib_id(DEPTH_INTR), "depth_scale": 0.001, "options": {}, "settings_sha256": "0" * 64,
+                "callback_errors": 0}
+
+    def stop(self):
+        if self._dthread is not None:
+            self._dhalt.set()
+            self._dthread.join()
+        if self.motion:
+            super().stop()
+        self.stopped = True
+
+
+def _depth_cli(model, tmp_path, monkeypatch, device, *, extra=(), seconds="1.0"):
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+    monkeypatch.setattr(ro, "open_raw", lambda p, baud=None, **kw: os.dup(model))
+    out = tmp_path / "obs.jsonl"
+    code = ro.main(["--device", "/dev/model", "--out", str(out), "--seconds", seconds, "--depth", *extra],
+                   device_factory=lambda imu_cfg, depth_cfg: device)
+    return code, out
+
+
+def test_depth_frames_are_recorded_with_their_verdicts_and_pixels_kept_byte_for_byte(model, tmp_path, monkeypatch,
+                                                                                    capsys):
+    from forklift_core.sensors.depth_cfg import calib_id, frame_sha256
+    from forklift_core.sensors.depth_record import read_side_file
+
+    dev = FakeDepthDevice()
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 0 and res["result"] == "ok" and res["complete"] and res["stopped_confirmed"], res
+    assert (tmp_path / "obs.jsonl.ok").exists() and dev.stopped
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    head = rows[0]["depth"]
+    assert head["measured"] is False and head["operating"] is False and head["folder"] == "obs.jsonl.depth"
+    [prof] = [r for r in rows if r["t"] == "depth_profile"]
+    assert prof["calib_id"] == calib_id(DEPTH_INTR)
+    depth = [r for r in rows if r["t"] == "depth"]
+    files = {r["name"]: r for r in rows if r["t"] == "depth_file"}
+    assert len(depth) > 8 and sum(f["frames"] for f in files.values()) == len(depth) == rows[-1]["depth"]["frames"]
+    assert all(r["verdict"] == "ok" and r["calib_id"] == prof["calib_id"] and r["shape"] == [480, 640] for r in depth)
+    bound = int(round(head["interval_bound_s"] * 1e9))
+    assert all((r["lo"], r["hi"]) == (r["host_ns"] - bound, r["host_ns"]) for r in depth)
+    # the round trip: every recorded frame read back from its side file equals what the device handed over
+    loaded = {n: read_side_file(tmp_path / "obs.jsonl.depth" / n, f["sha256"])[0] for n, f in files.items()}
+    for r in depth:
+        z = loaded[r["npz"]][r["key"]]
+        assert z.dtype.name == "uint16" and frame_sha256(z) == r["sha256"]
+        assert z.tobytes() == depth_pattern(r["frame_number"]).astype("<u2").tobytes()
+    assert rows[-1]["depth"]["stopped"] is None and rows[-1]["depth"]["record_failed"] is None
+    budget = rows[-1]["depth"]["budget"]
+    assert budget["provisional"] and budget["max_state_gap_s"] > 0 and budget["ok"] in (True, False)
+    # the replay's verification pass on the observe tool's own rows and side files (plan 4.2)
+    from forklift_core.live.replay_record import DEPTH_KINDS, _DepthVerifier
+
+    _replay_reads(rows)
+    ver = _DepthVerifier(head)
+    for r in rows:
+        if r["t"] in DEPTH_KINDS:
+            ver.row(r)
+    pins, counts = ver.finish(out, rows[-1]["depth"])
+    assert counts["depth_frames_verified"] == len(depth) and set(pins) == set(files)
+
+
+def test_one_device_records_the_imu_and_the_depth_together(model, tmp_path, monkeypatch, capsys):
+    dev = FakeDepthDevice(motion=True)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev, extra=("--imu",))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 0 and res["complete"], res
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert [r for r in rows if r["t"] == "imu" and r["verdict"] == "ok"] and [r for r in rows if r["t"] == "depth"]
+    assert [r for r in rows if r["t"] == "imu_profile"] and [r for r in rows if r["t"] == "depth_profile"]
+
+
+def test_a_side_folder_already_there_or_too_little_space_is_refused_before_anything_is_written(model, tmp_path,
+                                                                                            monkeypatch, capsys):
+    (tmp_path / "obs.jsonl.depth").mkdir()
+    code, out = _depth_cli(model, tmp_path, monkeypatch, FakeDepthDevice())
+    assert code == 2 and "exists" in json.loads(capsys.readouterr().out)["why"] and not out.exists()
+    (tmp_path / "obs.jsonl.depth").rmdir()
+    monkeypatch.setattr(ro.shutil, "disk_usage", lambda p: type("u", (), {"free": 10**6})())
+    code, out = _depth_cli(model, tmp_path, monkeypatch, FakeDepthDevice())
+    assert code == 2 and "GB needed" in json.loads(capsys.readouterr().out)["why"] and not out.exists()
+
+
+def test_settings_read_back_differently_refuse_the_start_and_still_end_with_a_confirmed_disarm(model, tmp_path,
+                                                                                              monkeypatch, capsys):
+    dev = FakeDepthDevice(settings_mismatch=True)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "depth_settings_failed" and res["stopped_confirmed"], res
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert [r for r in rows if r["t"] == "depth_error"][0]["stage"] == "settings" and dev.stopped
+
+
+def test_a_device_loss_reaches_both_sources(model, tmp_path, monkeypatch, capsys):
+    dev = FakeDepthDevice(motion=True, lose_after=5)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev, extra=("--imu",))
+    res = json.loads(capsys.readouterr().out)
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert any(r["t"] == "depth_gen" and r["why"] == "lost:device_removed" for r in rows)
+    assert any(r["t"] == "imu_gen" and str(r["why"]).startswith("lost:device_removed") for r in rows)
+    assert res["depth_stopped"] == "lost:device_removed" and res["imu_stopped"]
+
+
+def test_raw_depth_frames_lost_before_they_were_recorded_leave_the_record_incomplete(model, tmp_path, monkeypatch,
+                                                                                   capsys):
+    dev = FakeDepthDevice(burst=40)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "depth_overflow" and not res["complete"], res
+    assert not (tmp_path / "obs.jsonl.ok").exists()
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert rows[-1]["complete"] is False and rows[-1]["depth"]["overflow"] > 0
+
+
+def test_frames_the_callback_could_not_copy_leave_the_record_incomplete(model, tmp_path, monkeypatch, capsys):
+    """Codex 7e-1 round 1 P2-1: the device's callback error count, read after it stopped, is raw frames lost."""
+    dev = FakeDepthDevice()
+    dev.depth_cb_errors = 2
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and not res["complete"] and not (tmp_path / "obs.jsonl.ok").exists(), res
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert rows[-1]["depth"]["callback_errors"] == 2 and rows[-1]["complete"] is False
+
+
+def test_a_last_side_file_that_fails_at_the_end_leaves_no_ok_marker(model, tmp_path, monkeypatch, capsys):
+    """Codex 7e-1 round 1 P3-2: the recorder's failure at close reaches the CLI's completeness."""
+    from forklift_core.sensors import depth_record
+
+    real_close = depth_record.DepthRecorder.close
+
+    def failing_close(self):
+        self.failed = "depth_0000.npz: OSError: disk full"
+        return real_close(self)
+
+    monkeypatch.setattr(depth_record.DepthRecorder, "close", failing_close)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, FakeDepthDevice())
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "depth_record_failed" and not res["complete"], res
+    assert not (tmp_path / "obs.jsonl.ok").exists()
+
+
+def test_the_imu_goes_on_while_depth_frames_are_slow_to_write(model, tmp_path, monkeypatch, capsys):
+    """Codex 7e-1 round 1 P3-2: the depth side files slowed down; the IMU callback is never held up by them (its
+    samples keep coming at 200 Hz from their own thread)."""
+    from forklift_core.sensors import depth_record
+
+    real_add = depth_record.DepthRecorder.add
+
+    def slow_add(self, z):
+        time.sleep(0.02)
+        return real_add(self, z)
+
+    monkeypatch.setattr(depth_record.DepthRecorder, "add", slow_add)
+    dev = FakeDepthDevice(motion=True)
+    code, out = _depth_cli(model, tmp_path, monkeypatch, dev, extra=("--imu",))
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    ok = [r for r in rows if r["t"] == "imu" and r["verdict"] == "ok"]
+    assert len(ok) > 100 and rows[-1]["imu"]["counts"]["overflow"] == 0, (len(ok), rows[-1]["imu"]["counts"])
+    assert [r for r in rows if r["t"] == "depth"]
+
+
+def test_the_depth_budget_is_undecided_without_two_bounded_states_and_fails_on_a_trailing_wait():
+    """Codex 7e-1 rounds 2-4 P2: one bounded STATE gives no interval (undecided); bounded STATEs that stopped 0.9 s
+    before the sensors did have already waited past the limit (a fail, not a pass)."""
+    from types import SimpleNamespace
+
+    from forklift_core.sensors.depth_cfg import load_depth_config
+
+    cfg = load_depth_config()
+    base = dict(depth_max_gap_ns=70_000_000, _depth_last_rx=10_000_000_000, depth_end_ns=10_050_000_000,
+                max_state_delay_s=0.004, max_state_gap_s=0.0, _last_state_rx=10_040_000_000, _depth_off=[])
+    one = ro.Observer.depth_budget(SimpleNamespace(**base, state_bounded=1), cfg)
+    assert one["ok"] is None
+    two = ro.Observer.depth_budget(SimpleNamespace(**{**base, "max_state_gap_s": 0.02}, state_bounded=2), cfg)
+    assert two["ok"] is True
+    late = ro.Observer.depth_budget(SimpleNamespace(**{**base, "_last_state_rx": 9_150_000_000}, state_bounded=5), cfg)
+    assert late["ok"] is False and late["max_state_gap_s"] == pytest.approx(0.9)

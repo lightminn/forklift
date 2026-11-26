@@ -19,6 +19,9 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 LIDAR_YAML = HERE / "lidar_test.yaml"  # TEST ONLY configs (outside config/real/: a run on them is not for judgement)
+# a small depth frame for the synthetic records (the side files stay small); the real stream is 640x480
+DEPTH_INTR = {"serial": "test-0001", "firmware": "5.16.0", "stream": "depth", "width": 64, "height": 48, "fx": 38.9,
+              "fy": 38.9, "ppx": 32.0, "ppy": 24.0, "model": "brown_conrady", "coeffs": [0.0] * 5}
 IMU_YAML = HERE / "imu_test.yaml"
 MS = 1_000_000
 OFF = 1_700_000_000_000 * MS  # system - monotonic on the recording host
@@ -68,11 +71,13 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
                  imu_rewind_at_s: float | None = None, imu_lost_at_s: float | None = None,
                  imu_cfg=None, synthetic: bool = True, result: str = "ok", start_after_s: float = 0.0,
                  restart_at_s: float | None = None, scans_until_s: float | None = None,
-                 imu_lost_merged_at_s: float | None = None, slam: dict | None = None) -> dict:
+                 imu_lost_merged_at_s: float | None = None, slam: dict | None = None, depth: bool = False,
+                 depth_hz: float = 15.0) -> dict:
     """``events``: ``(at_s, kind)`` scan_event rows (``receive_gap``, ``receive_resumed``, ``socket_error``);
     ``late_scans``: scan indexes whose arrival is 300 ms after their last beam; ``restart_at_s``: the adapter's
     node starts a new scan (a new start id: a new producer generation) there; ``slam``: keys over the default
-    ``slam_header``."""
+    ``slam_header``; ``depth``: the D435i depth stream too (7e-1: rows judged by ``DepthSource``, pixels in the
+    side folder by ``DepthRecorder``, small 64x48 frames whose pixels say their index)."""
     from forklift_core.sensors import scan_feed as sf
     from forklift_core.sensors.imu_source import ImuSource
 
@@ -88,6 +93,15 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
                  "imu": None if not imu else {
                      **({"config": dataclasses.asdict(cfg), "config_sha256": "0" * 64} if imu_config_in_header else {}),
                      "path": "tests", "measured": cfg.measured, "delay_bound_s": cfg.delay_bound_s}})
+    if depth:
+        from forklift_core.sensors.depth_cfg import DEPTH_YAML, calib_id, load_depth_config
+        from forklift_core.sensors.depth_record import side_folder
+
+        dcfg = load_depth_config(DEPTH_YAML)
+        rows[0]["depth"] = {"config": dataclasses.asdict(dcfg), "config_sha256": "0" * 64, "path": "tests",
+                            "measured": dcfg.measured, "delay_bound_s": dcfg.delay_bound_s,
+                            "interval_bound_s": dcfg.interval_bound_s, "operating": False,
+                            "folder": side_folder(path).name}
     rows.append({"t": "slam_header", "socket": "/tmp/x", "bundle": "tests/bundle", "map_id": "m" * 64,
                  "start_pose": [1.0, 2.0, 0.5], "rear_offset_m": 0.25, "base_laser": [0.35, 0.0, 0.3, 0.0],
                  "start_ns": t0_ns, "mode": "diagnostic", **(slam or {})})
@@ -195,10 +209,50 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
         src.generation()
         for r in src.drain_rows():
             timed.append((last_gen_ns, order, r))
+    depth_end = None
+    if depth:
+        from forklift_core.sensors.depth_record import DepthRecorder
+        from forklift_core.sensors.depth_source import DepthSource
+
+        timed.append((t0_ns, 3, {"t": "depth_profile", "host_ns": t0_ns, "actual": {"width": 64, "height": 48,
+                                                                                    "fps": int(depth_hz)},
+                                 "intrinsics": dict(DEPTH_INTR), "calib_id": calib_id(DEPTH_INTR),
+                                 "depth_scale": 0.001, "options": {}, "settings_sha256": "0" * 64}))
+        dsrc = DepthSource(dcfg)
+        drec = DepthRecorder(side_folder(path), dcfg.chunk_frames)
+        seq = 0
+        k = 0
+        ns = t0_ns + 5 * MS
+        while ns < end_ns - int(0.3e9):
+            z = np.full((48, 64), (1000 + k) % 65536, dtype=np.uint16)
+            z[0, 0], z[0, 1] = 0, 65535
+            dsrc.push(ns, k, ns / 1e6, "hardware_clock", {}, 0.001, dict(DEPTH_INTR), z)
+            for kind, r in dsrc.take(ns):
+                if kind == "frame":
+                    zz = r.pop("z16")
+                    name, key, sha = drec.add(zz)
+                    r = {"t": "depth", **r, "npz": name, "key": key, "sha256": sha, "shape": [48, 64],
+                         "dtype": "uint16"}
+                timed.append((ns, 3 + seq * 1e-9, r))
+                seq += 1
+            for fr in drec.take_rows():
+                timed.append((ns, 3 + seq * 1e-9, fr))
+                seq += 1
+            k += 1
+            ns += int(1e9 / depth_hz)
+        last_take = end_ns - int(0.25e9)
+        for kind, r in dsrc.finish(last_take):
+            timed.append((last_take, 3 + seq * 1e-9, r))
+            seq += 1
+        for fr in drec.close():
+            timed.append((last_take, 3 + seq * 1e-9, fr))
+            seq += 1
+        depth_end = {"counts": dict(dsrc.counts), "last_take_ns": dsrc.last_take_ns, "frames": drec.frames,
+                     "files": list(drec.files), "record_failed": drec.failed, "overflow": 0}
     timed.sort(key=lambda x: (x[0], x[1]))
     rows += [r for _ns, _o, r in timed]
     rows.append({"t": "end", "result": result, "stopped_confirmed": True, "complete": True, "record_errors": 0,
-                 "imu": None if not imu else {"last_generation_ns": last_gen_ns}})
+                 "imu": None if not imu else {"last_generation_ns": last_gen_ns}, "depth": depth_end})
     with open(path, "w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")

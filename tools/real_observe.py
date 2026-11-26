@@ -13,17 +13,20 @@ recorded, with nothing that can move the truck.
   feed's verdict, its generations and whether it could go to the obstacle layer; without the SDK first-sample time
   (7a-2) none can, and every scan stays diagnostic), and -- with ``--imu`` (7b) -- every D435i accel sample (raw, with
   ``sensors/imu_source.ImuSource``'s verdict, generation and interval under the provisional delay bound until the
-  bound is measured) and every IMU generation change, and -- with ``--slam`` (7c-1c) -- the real SLAM source on a
+  bound is measured) and every IMU generation change, and -- with ``--depth`` (7e-1) -- every D435i depth frame (its
+  device time, interval, generation and verdict from ``sensors/depth_source.DepthSource``, its calibration id; the
+  raw Z16 pixels in the side folder ``<out>.depth/``, ``sensors/depth_record``; diagnostic until the bound and the
+  mount are measured), and -- with ``--slam`` (7c-1c) -- the real SLAM source on a
   real-mode bridge (``forklift_core.live.observe_slam``: the scans sent, the SLAM path's drops, the replies with their
   match quality, the bridge's states; diagnostic until the first-beam bound is measured, 7a-3). The last row is
   ``end``: complete only if every row was written.
 
 usage: real_observe.py --device /dev/forklift-mcu --out run.jsonl --seconds 60 [--scan-socket /run/forklift-scan/scan.sock]
-       [--imu] [--slam /run/forklift-slam/bridge.sock --slam-bundle <survey bundle folder>]
+       [--imu] [--depth] [--slam /run/forklift-slam/bridge.sock --slam-bundle <survey bundle folder>]
 (the scan socket is the one ``tools/ros2_dev.sh scan-a2m12`` sends to; the teleop bridge binds the same path, and the
 executor lock keeps the two from running together)
 exit: 0 complete and stopped (and, with --scan-socket, at least one scan accepted; with --imu, at least one accel
-sample), 1 otherwise, 2 refused (nothing written to the device)."""
+sample; with --depth, at least one depth frame), 1 otherwise, 2 refused (nothing written to the device)."""
 
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ import dataclasses
 import json
 import os
 import random
+import shutil
 import sys
 import tempfile
 import time
@@ -62,6 +66,9 @@ from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.record_rows import state_row  # noqa: E402
 from forklift_core.safety.real_watch import load_imu_config  # noqa: E402
+from forklift_core.sensors.depth_cfg import DEPTH_YAML, load_depth_config  # noqa: E402
+from forklift_core.sensors.depth_record import DepthRecorder, side_folder  # noqa: E402
+from forklift_core.sensors.depth_source import DepthSource  # noqa: E402
 from forklift_core.sensors.imu_source import IMU_YAML, ImuSource, fits_watch, load_imu_source_config  # noqa: E402
 from forklift_core.sensors.lidar_cfg import LIDAR_YAML, load_lidar_config, to_layer_scan  # noqa: E402
 from forklift_core.sensors.scan_feed import RECV_BYTES, ScanFeed, bind_socket  # noqa: E402
@@ -75,6 +82,7 @@ SESSION_STAGE_S = 0.5  # each stage of the session pair is answered within this,
 SCAN_GAP_NS = 350_000_000  # a scan receive gap past the layer's sensor timeout (obstacle_layer_real 0.35 s)
 SAFETY_YAML = REPO / "config" / "real" / "safety_watch.yaml"  # the IMU watch's gap limit, for the profile's fit
 IMU_READ_PER_CYCLE = 64  # the loop's IMU_BATCH: 200 Hz accel, 50 Hz cycles -- four a cycle
+DEPTH_READ_PER_CYCLE = 4  # depth frames taken per cycle: 15 Hz frames, 50 Hz cycles -- ample
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 
 
@@ -135,7 +143,7 @@ class Observer:
     DISARM each second, every STATE, write, refusal and event recorded, scans if a socket is given."""
 
     def __init__(self, link, record: Record, *, openings=None, scan_sock=None, lidar=None, imu=None, slam=None,
-                 clock=time.monotonic_ns, rng=None) -> None:
+                 depth=None, depth_rec=None, clock=time.monotonic_ns, rng=None) -> None:
         self.link, self.rec, self.clock = link, record, clock
         self.openings = openings
         self.start_ns = clock()
@@ -148,6 +156,17 @@ class Observer:
         self.feed = ScanFeed() if scan_sock is not None else None
         self.imu = imu  # an ImuSource with record=True (7b), fed by the device's callback
         self.slam = slam  # an ObserveSlam (7c-1c): fed every STATE and every accepted scan, polled each cycle
+        # 7e-1: a DepthSource fed by the device's depth callback and the side files its pixels go to
+        self.depth, self.depth_rec = depth, depth_rec
+        self.depth_bad_frames = 0
+        self.max_state_delay_s = 0.0
+        self.state_bounded = 0  # STATEs with a delay bound (the budget is undetermined without any)
+        self.max_state_gap_s = 0.0  # the largest STATE receipt interval: the STATE wait's second term
+        self._last_state_rx: int | None = None
+        self._depth_last_rx: int | None = None
+        self.depth_end_ns: int | None = None  # when the sensors stopped: the end of the last receipt gap
+        self.depth_max_gap_ns = 0
+        self._depth_off: list = []  # [min, max] of receipt - device time over the ok frames (the delay spread)
         self.counts = {"states": 0, "written": 0, "refused": 0, "scans": 0, "scans_layer_ok": 0, "read_capped": 0,
                        "scan_gaps": 0, "scan_socket_errors": 0, "sessions": 0, "imu_read_capped": 0}
         self._writes: dict[tuple[int, int], int] = {}  # (conn, seq) -> first-byte ns (DISARMs)
@@ -177,6 +196,14 @@ class Observer:
         sample = Sample(int(received_ns), state)
         self.delay.add(sample)
         d = self.delay.delay_s(sample)
+        if d is not None and d == d:
+            # the depth budget's STATE term (7e-1): only STATEs with a delay bound can carry a depth interval, so the
+            # interval between them is the wait (Codex 7e-1 round 3 P2-2)
+            self.max_state_delay_s = max(self.max_state_delay_s, float(d))
+            self.state_bounded += 1
+            if self._last_state_rx is not None:
+                self.max_state_gap_s = max(self.max_state_gap_s, (int(received_ns) - self._last_state_rx) / 1e9)
+            self._last_state_rx = int(received_ns)
         self.rec.put({**state_row(sample), "conn": conn, "delay_bound_s": d})
         if self.slam is not None:
             self.slam.on_state(state, int(received_ns), d, conn)
@@ -266,6 +293,8 @@ class Observer:
                 self._open_gap(self.clock())
         if self.imu is not None:
             self._imu(self.clock())
+        if self.depth is not None:
+            self._depth_events(self.depth.take(self.clock(), DEPTH_READ_PER_CYCLE))
         if self.slam is not None:
             self.slam.cycle(self.clock())
 
@@ -278,6 +307,71 @@ class Observer:
         else:
             self.imu.generation()  # as the loop: only after a read that did not stop at its cap
         for row in self.imu.drain_rows():
+            self.rec.put(row)
+
+    def _depth_events(self, events) -> None:
+        """Judged depth frames and generation rows into the record, in their order; each frame's pixels to the side
+        files (plan 4.1), then the side files closed since."""
+        for kind, r in events:
+            if kind == "gen":
+                self.rec.put(r)
+                continue
+            z = r.pop("z16")
+            try:
+                name, key, sha = self.depth_rec.add(z)
+            except ValueError as exc:  # not a 2-D uint16 frame: its pixels are not kept, the record is incomplete
+                self.depth_bad_frames += 1
+                self.rec.put({"t": "depth_error", "stage": "frame", "error": str(exc), "host_ns": r["host_ns"]})
+                continue
+            self.rec.put({"t": "depth", **r, "npz": name, "key": key, "sha256": sha, "shape": [int(v) for v in z.shape],
+                          "dtype": "uint16"})
+            h = int(r["host_ns"])
+            if self._depth_last_rx is not None:
+                self.depth_max_gap_ns = max(self.depth_max_gap_ns, h - self._depth_last_rx)
+            self._depth_last_rx = h
+            if r["verdict"] == "ok" and r.get("timestamp") is not None:
+                off = h - int(round(float(r["timestamp"]) * 1e6))
+                self._depth_off = [off, off] if not self._depth_off else [min(self._depth_off[0], off),
+                                                                          max(self._depth_off[1], off)]
+        for row in self.depth_rec.take_rows():
+            self.rec.put(row)
+
+    def depth_budget(self, cfg) -> dict:
+        """Plan 2's budget with this run's figures (B1's raw data, not a bound): the interval bound (provisional until
+        entered), one period, the largest receipt gap beyond a period (to the sensors' stop), the STATE wait (the largest
+        STATE delay bound seen + the largest interval between bounded STATEs, to the sensors' stop), a tick and the
+        write margin, against the check's frame age limit. ``ok``: False once over the limit, None without two depth
+        frames and two bounded STATEs, else True."""
+        frame_max_age_s, tick_s, write_margin_s = 0.2, 0.02, 0.035
+        period = 1.0 / cfg.fps
+        # the receipt gaps to the end of the record too: a stream that stopped is a gap (Codex 7e-1 round 2 P2-2)
+        max_gap = self.depth_max_gap_ns
+        if self._depth_last_rx is not None and self.depth_end_ns is not None:
+            max_gap = max(max_gap, self.depth_end_ns - self._depth_last_rx)  # to the sensors' stop, not the save
+        jitter = max(0.0, max_gap / 1e9 - period)
+        # the bounded-STATE gap to the sensors' stop too: a run whose bounded STATEs stopped has waited that long
+        # already (Codex 7e-1 round 4 P2)
+        state_gap = self.max_state_gap_s
+        if self._last_state_rx is not None and self.depth_end_ns is not None:
+            state_gap = max(state_gap, (self.depth_end_ns - self._last_state_rx) / 1e9)
+        state_wait = self.max_state_delay_s + state_gap  # the bound + the bounded STATE receipt interval seen
+        total = cfg.interval_bound_s + period + jitter + state_wait + tick_s + write_margin_s
+        # two bounded STATEs at least (one gives no interval), unless the wait already seen exceeds the limit
+        decided = (self._depth_last_rx is not None and self.depth_max_gap_ns > 0 and self.state_bounded >= 2)
+        return {"interval_bound_s": cfg.interval_bound_s, "provisional": cfg.delay_bound_s is None,
+                "period_s": period, "max_receipt_gap_s": max_gap / 1e9, "jitter_s": jitter,
+                "state_wait_s": state_wait, "max_state_gap_s": state_gap,
+                "tick_s": tick_s, "write_margin_s": write_margin_s,
+                "frame_max_age_s": frame_max_age_s, "sum_s": total,
+                "ok": False if total > frame_max_age_s else (True if decided else None),
+                "delay_spread_s": None if not self._depth_off else (self._depth_off[1] - self._depth_off[0]) / 1e9}
+
+    def drain_depth(self) -> None:
+        """After the device stopped: every frame still queued, the trailing quiet gap, the last side file closed."""
+        if self.depth is None:
+            return
+        self._depth_events(self.depth.finish(self.clock()))
+        for row in self.depth_rec.close():
             self.rec.put(row)
 
     def drain_imu(self) -> None:
@@ -416,6 +510,55 @@ def _start_imu(dev, imu, cfg, gap_max_s, rec) -> str | None:
     return None
 
 
+def _start_depth(dev, imu, depth, imu_cfg, depth_cfg, gap_max_s, rec) -> str | None:
+    """Start the one device for the depth stream (and the motion module with --imu) and record their profiles; the
+    failing stage (``start``/``settings``/``profile``) is recorded and returned. A device loss reaches both
+    sources (plan 1)."""
+    from depth_device import DepthSettingsMismatch
+
+    def lost(why):
+        if imu is not None:
+            imu.lost(why)
+        depth.lost(why)
+
+    stage = "start"
+    try:
+        dev.start(on_sample=None if imu is None else imu.on_sample, on_depth=depth.on_frame, on_lost=lost)
+        stage = "profile"
+        dprof = dev.depth_profile_info()
+        iprof = dev.profile_info() if imu is not None else None
+    except DepthSettingsMismatch as exc:
+        rec.put({"t": "depth_error", "stage": "settings", "error": str(exc), "host_ns": time.monotonic_ns()})
+        lost("start_failed")  # nothing the device gave after this is of a started stream (Codex 7e-1 P2-5)
+        return "settings"
+    except (RuntimeError, OSError) as exc:
+        rec.put({"t": "depth_error", "stage": stage, "error": f"{type(exc).__name__}: {exc}",
+                 "host_ns": time.monotonic_ns()})
+        lost("start_failed")
+        return stage
+    rec.put({"t": "depth_profile", "host_ns": time.monotonic_ns(), **dprof})
+    if iprof is not None:
+        hz = (iprof.get("actual") or {}).get("accel_hz")
+        bound = imu.bound_ns / 1e9
+        rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **iprof,
+                 "fits_watch": {"gap_max_s": gap_max_s, "accel_hz": hz, "interval_bound_s": bound,
+                                "ok": fits_watch(imu_cfg, gap_max_s, bound_s=bound, accel_hz=hz)}})
+    actual = dprof.get("actual") or {}
+    if (actual.get("width"), actual.get("height"), actual.get("fps")) != (depth_cfg.width, depth_cfg.height,
+                                                                         depth_cfg.fps):
+        rec.put({"t": "depth_error", "stage": "profile", "error": f"opened {actual}", "host_ns": time.monotonic_ns()})
+        return "profile"
+    return None
+
+
+def _realsense_depth(imu_cfg, depth_cfg):
+    from depth_device import RealSenseDepthSource  # the motion module and the depth sensor of one device (7e-1)
+
+    return RealSenseDepthSource(depth=depth_cfg, motion=imu_cfg is not None,
+                                gyro_hz=200 if imu_cfg is None else imu_cfg.gyro_hz,
+                                accel_hz=200 if imu_cfg is None else imu_cfg.accel_hz, global_time=False)
+
+
 def _realsense(cfg):
     from imu_record import RealSenseSource  # the motion module opened directly (2026-11-14 design 2)
 
@@ -514,7 +657,7 @@ def _slam_start(args, parts, rec, lidar):
                        v_scan_mps=parts["v_scan_mps"], kappa_max=parts["kappa"])
 
 
-def main(argv=None, *, imu_factory=_realsense) -> int:
+def main(argv=None, *, imu_factory=_realsense, device_factory=_realsense_depth) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--device", required=True)
     ap.add_argument("--out", required=True, type=Path)
@@ -525,6 +668,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
     ap.add_argument("--bench", help="rehearsal only: the bench's bench.json on a pty device (the model MCU)")
     ap.add_argument("--imu", action="store_true", help="record the D435i accelerometer (PR 7 design 5, 7b)")
     ap.add_argument("--imu-config", type=Path, default=IMU_YAML)
+    ap.add_argument("--depth", action="store_true", help="record the D435i depth stream (PR 7 7e-1)")
+    ap.add_argument("--depth-config", type=Path, default=DEPTH_YAML)
     ap.add_argument("--slam", help="the real-mode SLAM bridge's socket: record the real SLAM source (7c-1c)")
     ap.add_argument("--slam-bundle", type=Path, help="with --slam: the survey bundle the bridge runs on")
     ap.add_argument("--s10a", type=Path, default=REPO / "config" / "real" / "s10a.yaml",
@@ -540,6 +685,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         lidar = load_lidar_config(args.lidar_config)
         imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
         imu_gap_max_s = load_imu_config(SAFETY_YAML).gap_max_s if args.imu else None
+        depth_cfg = load_depth_config(args.depth_config) if args.depth else None
         slam_parts = _slam_parts(args, lidar) if args.slam else None
     except (SyntheticRefused, OSError, ValueError, KeyError, TypeError, AttributeError, _yaml_error(),
             _xml_error()) as exc:
@@ -548,8 +694,25 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
     if args.out.exists():
         print(json.dumps({"result": "refused", "why": f"{args.out} exists: every observe run gets its own record"}))
         return 2
+    if depth_cfg is not None:
+        if side_folder(args.out).exists():
+            print(json.dumps({"result": "refused", "why": f"{side_folder(args.out)} exists: a record's pixels are its own"}))
+            return 2
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        need = depth_cfg.bytes_per_s() * args.seconds * depth_cfg.space_margin
+        free = shutil.disk_usage(args.out.parent).free
+        if free < need:
+            print(json.dumps({"result": "refused", "why": f"depth: {free / 1e9:.1f} GB free, {need / 1e9:.1f} GB needed"}))
+            return 2
     imu_dev = None
-    if imu_cfg is not None:
+    depth_dev = None
+    if depth_cfg is not None:
+        try:
+            depth_dev = device_factory(imu_cfg, depth_cfg)  # one device for both (plan 1); finds it only
+        except (RuntimeError, ImportError, OSError) as exc:
+            print(json.dumps({"result": "refused", "why": f"depth: {exc}"}))
+            return 2
+    elif imu_cfg is not None:
         try:
             imu_dev = imu_factory(imu_cfg)  # finds the device only (no option written before the executor lock); no
             # device, no SDK: refused before anything is opened or written
@@ -576,8 +739,16 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                      "config": dataclasses.asdict(imu_cfg), "config_sha256": _sha256(args.imu_config),
                      "path": str(args.imu_config), "measured": imu_cfg.measured, "delay_bound_s": imu_cfg.delay_bound_s,
                      "interval_bound_s": imu_cfg.delay_bound_s if imu_cfg.delay_bound_s is not None
-                     else imu_cfg.provisional_delay_bound_s, "operating": False}})
+                     else imu_cfg.provisional_delay_bound_s, "operating": False},
+                 "depth": None if depth_cfg is None else {
+                     # the whole config and its file's hash: a replay re-judges the frames with these values (plan 4.2)
+                     "config": dataclasses.asdict(depth_cfg), "config_sha256": _sha256(args.depth_config),
+                     "path": str(args.depth_config), "measured": depth_cfg.measured,
+                     "delay_bound_s": depth_cfg.delay_bound_s, "interval_bound_s": depth_cfg.interval_bound_s,
+                     "operating": False, "folder": side_folder(args.out).name}})
         imu = None if imu_cfg is None else ImuSource(imu_cfg, operating=False, record=True)
+        depth = None if depth_cfg is None else DepthSource(depth_cfg, operating=False)
+        depth_rec = None if depth_cfg is None else DepthRecorder(side_folder(args.out), depth_cfg.chunk_frames)
         slam = None
         if slam_parts is not None:
             try:
@@ -587,7 +758,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), "result": "refused",
                                   "why": f"slam_bridge: {exc}"}))
                 return 2
-        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar, imu=imu, slam=slam)
+        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar, imu=imu, slam=slam,
+                       depth=depth, depth_rec=depth_rec)
         try:
             link.open_first(obs.host, time.monotonic_ns())
         except DeviceBusy as busy:
@@ -605,20 +777,25 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             end = time.monotonic() + args.seconds
             while time.monotonic() < end:
                 t0 = time.monotonic()
-                if imu_dev is not None and not imu_started and link.link is not None:
+                if (imu_dev is not None or depth_dev is not None) and not imu_started and link.link is not None:
                     # the D435i starts (its options written) only once the locked board link is actually open --
                     # open_first may only have scheduled a retry (Codex 7b round 2 P2)
                     imu_started = True  # set first: a start interrupted inside the SDK is stopped too
-                    imu_error = _start_imu(imu_dev, imu, imu_cfg, imu_gap_max_s, rec)
+                    if depth_dev is not None:
+                        depth_error = _start_depth(depth_dev, imu, depth, imu_cfg, depth_cfg, imu_gap_max_s, rec)
+                        imu_error = None if depth_error is None else f"depth_{depth_error}"
+                    else:
+                        imu_error = _start_imu(imu_dev, imu, imu_cfg, imu_gap_max_s, rec)
+                        imu_error = None if imu_error is None else f"imu_{imu_error}"
                     if imu_error is not None:
                         break
                     end = time.monotonic() + args.seconds  # --seconds of sensor observation, from its start
                 obs.cycle()
                 time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
             if imu_error is not None:
-                result = f"imu_{imu_error}_failed"
-            elif imu_dev is not None and not imu_started:
-                result = "imu_not_started"  # the board link never opened
+                result = f"{imu_error}_failed"
+            elif (imu_dev is not None or depth_dev is not None) and not imu_started:
+                result = "depth_not_started" if depth_dev is not None else "imu_not_started"  # the link never opened
             else:
                 result = "ok"
         except KeyboardInterrupt:
@@ -634,16 +811,20 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             except Exception as exc:  # noqa: BLE001 -- the end row is still written
                 rec.put({"t": "finish_error", "error": f"{type(exc).__name__}: {exc}"})
             imu_stopped = True
+            sensor_dev = depth_dev if depth_dev is not None else imu_dev
+            obs.depth_end_ns = time.monotonic_ns()  # the sensors' stop: the receipt gaps end here (round 3 P2-2)
             if imu_started:
                 try:
-                    imu_dev.stop()  # its callbacks have ended when it returns; the last samples are read below
+                    sensor_dev.stop()  # its callbacks have ended when it returns; the last samples are read below
                 except Exception as exc:  # noqa: BLE001 -- callbacks may still run: the record cannot be complete
                     imu_stopped = False
-                    rec.put({"t": "imu_error", "stage": "stop", "error": f"{type(exc).__name__}: {exc}",
-                             "host_ns": time.monotonic_ns()})
+                    rec.put({"t": "imu_error" if depth_dev is None else "depth_error", "stage": "stop",
+                             "error": f"{type(exc).__name__}: {exc}", "host_ns": time.monotonic_ns()})
                     if result == "ok":
-                        result = "imu_stop_failed"
+                        result = "imu_stop_failed" if depth_dev is None else "depth_stop_failed"
                 obs.drain_imu()
+            if depth is not None:
+                obs.drain_depth()
             # every row before the end row is on disk before the end row says so; the end row's own write and sync
             # count too, and only then the sidecar <out>.ok (the record's sha256) is made -- a replay takes the
             # record only with a matching .ok, so a file that claims more than was kept is never read as complete
@@ -653,10 +834,20 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             if imu_overflow and result == "ok":
                 # raw samples lost before they were recorded (round 2 P2): before no_imu and no_scans (round 4 P2)
                 result = "imu_overflow"
+            # 7e-1 (plan 1, 4.1): raw depth frames lost before they were recorded, a frame not kept, a side file not
+            # written whole -- the record is incomplete
+            # frames the SDK callback could not copy (read after the device stopped: its callbacks have ended)
+            depth_cb_errors = 0 if depth_dev is None else int(getattr(depth_dev, "depth_cb_errors", 0) or 0)
+            depth_lost_raw = depth is not None and (depth.overflow > 0 or obs.depth_bad_frames > 0
+                                                    or depth_rec.failed is not None or depth_cb_errors > 0)
+            if depth_lost_raw and result == "ok":
+                result = "depth_overflow" if depth.overflow > 0 else "depth_record_failed"
             if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
             if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
                 result = "no_imu"
+            if depth is not None and depth.counts["ok"] == 0 and result == "ok":
+                result = "no_depth"
             if slam is not None:
                 slam.flush()
                 if slam.fatal is not None and result == "ok":
@@ -666,7 +857,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
                      "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow
-                     and result != "refused",
+                     and not depth_lost_raw and result != "refused",
                      "record_errors": errors_before,
                      "counts": obs.counts,
                      "feed": None if obs.feed is None else {"accepted": obs.feed.accepted,
@@ -679,9 +870,18 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                                                       "stopped": imu.stopped,  # round 5 P3: a restart is needed
                                                       "last_generation_ns": imu.last_generation_ns},
                      "slam": None if slam is None else slam.summary(),
+                     "depth": None if depth is None else {"counts": dict(depth.counts), "generation": depth.gen,
+                                                          "generation_why": depth.generation_why,
+                                                          "stopped": depth.stopped, "overflow": depth.overflow,
+                                                          "last_take_ns": depth.last_take_ns,
+                                                          "frames": depth_rec.frames, "files": list(depth_rec.files),
+                                                          "record_failed": depth_rec.failed,
+                                                          "bad_frames": obs.depth_bad_frames,
+                                                          "callback_errors": depth_cb_errors,
+                                                          "budget": obs.depth_budget(depth_cfg)},
                      "end_mono_ns": time.monotonic_ns()})
             complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped \
-                and not imu_overflow and result != "refused"
+                and not imu_overflow and not depth_lost_raw and result != "refused"
             if link.link is not None:
                 link.link.close()
                 link.link = None
@@ -698,6 +898,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
            "complete": complete, "record": str(args.out), "counts": obs.counts}
     if imu is not None:
         out["imu_stopped"] = imu.stopped  # the source stopped (a new device clock, an overflow, a broken bound)
+    if depth is not None:
+        out["depth_stopped"] = depth.stopped
     print(json.dumps(out))
     if result == "refused":
         return 2  # never connected: nothing written to the device
