@@ -2877,6 +2877,8 @@ class RealLoop:
                 if fb_ is not None and fb_.kind == "drive":
                     # U3b-1: the insert moves from its first moving frame written whole until a zero one is
                     self._insert_moving = self.core.ms.phase == "insert" and float(fb_.speed_mps) != 0.0
+                elif fb_ is not None and fb_.kind in HOLDING_KINDS:
+                    self._insert_moving = False  # a position hold written: the next moving frame is a resume
                 booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
                 if booked is not None and booked.kind == "drive":
                     self.waiting = None  # a normal DRIVE out: the wait is over
