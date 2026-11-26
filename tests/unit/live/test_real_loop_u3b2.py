@@ -4,6 +4,7 @@ console shows, this lease and the relocalization generation, carrying the whole 
 registration; it cannot be bypassed, the submit needs the D5 bypass and that very confirmation, a submit uses it up
 with its mission id (recorded), and the bypass check the core builds must apply the confirmed region."""
 
+import dataclasses
 import math
 from types import SimpleNamespace
 
@@ -321,3 +322,25 @@ def test_an_arm_written_ends_the_eyes_span():
     assert submit(r, rev)["t"] == "ack"
     run_until(r, lambda rec: r.loop._d5_armed_for == r.core.commands.mission_id, 50)  # noqa: SLF001
     assert not r.loop._d5_disturbed()  # noqa: SLF001
+
+
+# --- Codex round 3 -------------------------------------------------------------------------------------------------
+def test_a_sample_past_the_tolerance_is_not_hidden_by_a_later_one():
+    r = rig()
+    pid, rev = _confirmed(r)
+    r.transport.eagain = {"ARM"}
+    assert submit(r, rev)["t"] == "ack"
+    r.tick()
+    tol = r.port.lift_still_m
+    orig, script = r.mcu.state, [tol * 1.15, tol * 0.95]  # one read: a STATE past the tolerance, then one inside
+
+    def state():
+        return dataclasses.replace(orig(), lift_m=script.pop(0) if script else tol * 0.95)
+
+    r.mcu.state = state
+    r.tick()
+    assert not script  # both STATEs of the read were taken in one tick
+    r.transport.eagain = set()
+    run_until(r, lambda rec: r.core.commands.end_reason is not None, 400)
+    assert r.core.commands.end_reason == "operator_start_moved", r.core.commands.end_reason
+    assert r.loop._d5_armed_for != "m1"  # noqa: SLF001

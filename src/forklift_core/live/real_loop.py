@@ -449,6 +449,7 @@ class RealLoop:
         # has been written; between the two the truck must not move (Codex round 2 P1)
         self._d5_base = None
         self._d5_armed_for = None
+        self._d5_moved_for = None  # the mission a STATE showed moved within that span (latched)
         self._register_serial = 0  # every pallet registration on this run (Codex round 2 P2-1: same pose, same rev)
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
@@ -1244,6 +1245,9 @@ class RealLoop:
         step = odometry_step(self.odometry, state)
         before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
+        # U3b-2 (Codex round 3 P2): every STATE is judged against the eyes' baseline, latched until the first ARM --
+        # a later sample of the same read never hides an earlier one past the tolerance (a broken odometry too)
+        self._d5_watch(float(state.lift_m), bool(step.continuity_broken))
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
@@ -1930,20 +1934,39 @@ class RealLoop:
         return {"pallet_id": pid, "targets_revision": rev, "register_serial": int(msg["register_serial"]),
                 "reloc_gen": self.reloc_gen, "region": [float(v) for v in region]}
 
-    def _d5_disturbed(self) -> bool:
-        """The truck moved (odometry or lift) since this mission used its D5 confirmation, and no ARM of it has been
-        written yet."""
+    def _d5_moved(self, lift, broken: bool = False) -> bool:
+        """This odometry pose and this lift against the baseline the D5 confirmation was used at."""
+        b = self._d5_base
+        x0, y0, h0 = b[1]
+        x, y, h = (float(v) for v in self.odom_pose)
+        if broken or math.hypot(x - x0, y - y0) > D5_STILL_M or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD:
+            return True
+        return (lift is None or b[2] is None or not math.isfinite(lift)
+                or abs(lift - b[2]) > float(getattr(self.port, "lift_still_m", 0.0)))
+
+    def _d5_span(self):
+        """The mission inside the eyes' span (its confirmation used, no ARM of it written), or None."""
         b = self._d5_base
         mid = self.core.commands.mission_id
         if b is None or b[0] != mid or self._d5_armed_for == mid:
+            return None
+        return mid
+
+    def _d5_watch(self, lift, broken: bool) -> None:
+        mid = self._d5_span()
+        if mid is not None and self._d5_moved(lift, broken):
+            self._d5_moved_for = mid
+
+    def _d5_disturbed(self) -> bool:
+        """The truck moved (odometry or lift, on any STATE since) after this mission used its D5 confirmation, and no
+        ARM of it has been written yet."""
+        mid = self._d5_span()
+        if mid is None:
             return False
-        x0, y0, h0 = b[1]
-        x, y, h = (float(v) for v in self.odom_pose)
-        if math.hypot(x - x0, y - y0) > D5_STILL_M or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD:
+        if self._d5_moved_for == mid:
             return True
         lift = float(self.samples[-1].state.lift_m) if self.samples else None
-        return (lift is None or b[2] is None or not math.isfinite(lift)
-                or abs(lift - b[2]) > float(getattr(self.port, "lift_still_m", 0.0)))
+        return self._d5_moved(lift)
 
     def _start_shown(self, a) -> bool:
         """The start check as the console shows it: given under this lease and, on a D5 confirmation, still for the
