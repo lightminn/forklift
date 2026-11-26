@@ -294,7 +294,7 @@ class Operating:
                                        "--accept-log", str(self.accept_log), *map(str, model_args)],
                                       pass_fds=(master,), start_new_session=True)
         os.close(master)
-        self._slave = slave  # kept open until the child has opened the path (a pty with no slave open hangs up)
+        self._slave = slave
         self.bridge = FakeBridge(tmp_path / "slam.sock", map_id=site.map_id, laser=site.laser)
         self.bridge.start()
         self.scan = ScanProducer(tmp_path / "scan.sock")
@@ -308,6 +308,11 @@ class Operating:
                                       str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                      env={**os.environ, "PYTHONPATH": str(REPO / "src")}, start_new_session=True,
                                      pass_fds=(slave,))
+        # the child holds the slave now; the test's own copy closed at once -- one open file description shared by
+        # both, so the lock the child takes on it is released only when every copy is closed (the run's own release
+        # must be what frees the device)
+        os.close(slave)
+        self._slave = None
         self.port = None
         self.lines = []
 
@@ -367,8 +372,9 @@ class Operating:
         self.scan.stop()
         self.bridge.closing()
         self.bridge.stop()
-        with contextlib.suppress(OSError):
-            os.close(self._slave)
+        if self._slave is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._slave)
 
 
 def _motion_bytes(writes, since_ns=None):
