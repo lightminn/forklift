@@ -118,3 +118,63 @@ def test_the_panels_bypass_list_is_the_vehicles():
     text = (ROOT / "console/web/js/realpanel.js").read_text()
     js = re.search(r"export const BYPASSABLE = \[(.*?)\];", text, re.S).group(1)
     assert set(re.findall(r'"([a-z0-9_]+)"', js)) == set(BYPASSABLE)  # d5_pocket has a digit
+
+
+U3C_DRIVER = """
+import * as P from "file://%s";
+const base = {t: "real_status", session_epoch: 3, permit: {state: "OFF"}, mission: {status: "idle"}, bypassed: [],
+  targets_revision: 5};
+const pre = {passed: ["C1", "C2"], load: {lift_target_m: 0.2, test_pallet: "P-S10", pallet_mass_kg: 4.5},
+  runtime: [{id: "C7", item: "imu", state: "bypassed", why: "imu:unqualified"},
+            {id: "C8", item: "d5_pocket", state: "blocked", why: "d5_pocket:no_depth_source"},
+            {id: "C8", item: "pallet_confirm", state: "pass", why: null},
+            {id: "C5", item: "scan", state: "note", why: "frame:stale"},
+            {id: "C5", item: "scan", state: "note", why: null},
+            {id: "C9", item: "odd", state: "weird", why: null}]};
+const out = {};
+out.rows = P.preconditionRows({...base, preconditions: pre}, (r) => `<${r}>`);
+out.noRows = [P.preconditionRows(base), P.preconditionRows(null), P.preconditionRows({...base, preconditions: null})];
+const d5 = {...base, register_serial: 2, preconditions: pre};
+out.texts = P.palletConfirmTexts(d5);
+out.noTexts = [P.palletConfirmTexts(base), P.palletConfirmTexts(null)];
+out.textsNoLoad = P.palletConfirmTexts({...d5, preconditions: {...pre, load: null}});
+const reg = {session_epoch: 3, revision: 5, pallet: "P-S10", pose: [1, 2, 0], serial: 2};
+out.fields = [P.startFields(reg, d5), P.startFields(reg, base), P.startFields(null, base),
+              P.startFields({...reg, serial: 1}, d5), P.startFields({...reg, revision: 4}, d5),
+              P.startFields({...reg, session_epoch: 2}, d5), P.startFields(null, d5),
+              P.startFields({...reg, serial: null}, d5), P.startFields(reg, null)];
+out.state = [P.startStateText({...d5, operator_start: true, operator_start_binding:
+               {pallet_id: "P-S10", register_serial: 2, region: [1, 2, 1.8, 0.8, Math.PI / 2]}}),
+             P.startStateText({...base, operator_start: true}), P.startStateText({...base, operator_start: false})];
+out.sig = P.statusSig(d5) === P.statusSig({...d5, register_serial: 3});
+console.log(JSON.stringify(out));
+"""
+
+
+def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
+    """U3c (operating plan 2.6, 2.9): the rows' colours and words, the six lines, the start request's fields."""
+    script = tmp_path / "u3c.mjs"
+    script.write_text(U3C_DRIVER % (ROOT / "console/web/js/realpanel.js").as_posix())
+    out = json.loads(subprocess.run([NODE, str(script)], capture_output=True, text=True, check=True).stdout)
+    assert [(r["cls"], r["text"]) for r in out["rows"]] == [
+        ("pass", "조립 통과: C1 · C2"),
+        ("bypassed", "우회 중: C7 IMU (기울기 감시 꺼짐)"),
+        ("blocked", "C8 D5 포켓 막힘 · <d5_pocket:no_depth_source>"),
+        ("pass", "C8 팔레트 확인 통과"),
+        ("note", "C5 스캔 · 최근 거부: <frame:stale>"),
+        ("note", "C5 스캔 · 거부 없음"),
+        ("blocked", "C9 odd 막힘"),  # a state this console does not know reads as blocked
+    ]
+    assert out["noRows"] == [[], [], []]
+    assert out["texts"] == ["포크가 포켓 밖에 있음", "포켓 둘이 비어 있음", "팔레트 윗면과 등록 사각형 안에 다른 물체 없음",
+                            "승강 목표 0.20 m + 팔레트 높이까지 위 공간 비어 있음", "빈 포크·승강 내림",
+                            "C11 에서 승인한 시험 팔레트 P-S10, 질량 4.5 kg 이하"]
+    assert out["noTexts"] == [None, None]
+    assert out["textsNoLoad"][3] == "승강 목표 — m + 팔레트 높이까지 위 공간 비어 있음"
+    assert out["textsNoLoad"][5] == "C11 에서 승인한 시험 팔레트 —, 질량 — kg 이하"
+    assert out["fields"][0] == {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2}
+    assert out["fields"][1] == {} and out["fields"][2] == {}  # no per-pallet confirmation: as before
+    assert out["fields"][3:] == [None] * 6  # another serial, revision or session, none registered, no status
+    assert out["state"][0] == "확인됨 · P-S10 · 등록 #2 · 영역 중심 (1.00, 2.00) m · 1.80×0.80 m · 90.0°"
+    assert out["state"][1:] == ["확인됨", ""]
+    assert out["sig"] is False  # a press drawn for one registration is not taken for the next

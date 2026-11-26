@@ -273,6 +273,10 @@ class RealLoop:
         self.mission_time_budget_s = rca.MISSION_TIME_BUDGET_S
         self.insert_time_min_s = rca.INSERT_TIME_MIN_S
         self.check_pallet_pose = None
+        # U3c (plan 2.9): the assembly's passed preconditions and the load the pallet confirmation's sixth line shows
+        # ({lift_target_m, test_pallet, pallet_mass_kg} from the record the assembly judged) -- the run sets them
+        self.preconditions_passed: tuple = ()
+        self.operator_load: dict | None = None
         self._insert_moving = False
         self._zero_judged = False
         self.scan_refusal = None  # () -> the scan source's newest refusal reason (the run sets it; plan 2.5 console)
@@ -713,7 +717,37 @@ class RealLoop:
             "operating": self.operating,
             "imu_unqualified": self.imu_unqualified,
             "scan": {"last_refusal": self._scan_refusal_now(), "boundaries": self.scan_boundaries},
+            # U3c (plan 2.9): the operating run's precondition rows (None elsewhere)
+            "preconditions": self._preconditions_view(a) if self.operating else None,
         }
+
+    def _preconditions_view(self, a) -> dict:
+        """The console's precondition rows (plan 2.9): the assembly's passed items, then the run-time ones -- C7 IMU,
+        C8 D5 (the bypass, and without depth the per-pallet confirmation, which no bypass replaces) and the scan
+        source's newest refusal. A row's state is ``pass``, ``blocked`` or ``bypassed`` (the scan row: ``note``), with
+        the refusal as ``why``."""
+        def row(cid, item, state, why=None):
+            return {"id": cid, "item": item, "state": state, "why": why}
+
+        bypass = self.bypass
+        if "imu" in bypass:
+            imu = row("C7", "imu", "bypassed", "imu:unqualified" if self.imu_unqualified else None)
+        else:
+            imu = row("C7", "imu", "blocked", "imu:unqualified") if self.imu_unqualified else row("C7", "imu", "pass")
+        rows = [imu]
+        if self.depth_source is not None:
+            rows.append(row("C8", "d5_pocket", "pass"))
+        else:
+            rows.append(row("C8", "d5_pocket", "bypassed") if "d5_pocket" in bypass
+                        else row("C8", "d5_pocket", "blocked", "d5_pocket:no_depth_source"))
+            shown = self.operator_start is not None and self._start_shown(a)
+            rows.append(row("C8", "pallet_confirm", "pass") if shown
+                        else row("C8", "pallet_confirm", "blocked", "operator_start:unconfirmed"))
+        # the scan source keeps its newest refusal after later frames are taken: told, not a block (``note``)
+        refusal = self._scan_refusal_now()
+        rows.append(row("C5", "scan", "note", None if refusal is None else str(refusal)))
+        return {"passed": list(self.preconditions_passed),
+                "load": None if self.operator_load is None else dict(self.operator_load), "runtime": rows}
 
     def _scan_refusal_now(self):
         try:

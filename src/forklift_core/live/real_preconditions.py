@@ -55,6 +55,9 @@ ITEMS = {
     "stop_model": ("C13", ("stop_files",)),
     "jetson_load": ("C14", ("stop_files",)),
 }
+# the preconditions the assembly judges (plan 3): every one but the run-time C7 (IMU) and C8 (D5), which readiness and
+# the submit judge -- an assembled operating run passed these (the console's summary, plan 2.9)
+ASSEMBLY_CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6", "C9", "C10", "C11", "C12", "C13", "C14")
 # the files whose values the stop model, the timing and the watches read (plan 2.4 binds)
 STOP_FILES = ("layer", "budget", "odometry_age", "vehicle", "watch")
 PROVENANCE_FILES = ("vehicle", "budget", "watch")  # their measured: false entries need a measurement or an exception
@@ -475,6 +478,18 @@ def _lift_checks(f: Facts, lift: dict) -> list:
         if abs(at_target - float(target)) > 0.005:
             out.append("precondition:C11:lift:origin_target")
     return out
+
+
+def operator_load(f: Facts) -> dict | None:
+    """What the pallet confirmation's fourth and sixth lines show (plan 2.6): ``lift_target_m`` from the settings and
+    the C11 record's test pallet and mass -- the bytes the assembly judged; None when the record has no such item."""
+    lift = ((f.record or {}).get("items") or {}).get("lift")
+    binds = lift.get("binds") if isinstance(lift, dict) else None
+    if not isinstance(binds, dict):
+        return None
+    target = f.settings.get("lift_target_m")
+    return {"lift_target_m": float(target) if _finite(target) else None, "test_pallet": binds.get("test_pallet"),
+            "pallet_mass_kg": float(binds["pallet_mass_kg"]) if _finite(binds.get("pallet_mass_kg")) else None}
 
 
 def imu_qualified(f: Facts, opened_profile_fits: bool | None = None) -> bool:

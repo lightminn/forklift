@@ -2,8 +2,9 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, manualOnlyNotice, panelShown, poseOf, relocalizeClosedWhy, relocalizeResult,
-  relocalizeView, statusIsMine, statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
+import { answerKey, answerStillOpen, bypassButtons, manualOnlyNotice, palletConfirmTexts, panelShown, poseOf,
+  preconditionRows, relocalizeClosedWhy, relocalizeResult, relocalizeView, startFields, startStateText, statusIsMine,
+  statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
 
 const $ = (id) => document.getElementById(id);
 const TOGGLE_WAIT_MS = 2000; // a toggle not seen in real_status by then: told it did not apply
@@ -11,6 +12,7 @@ const TOGGLE_WAIT_MS = 2000; // a toggle not seen in real_status by then: told i
 export function bindRealPanel(m, rejectText, clientId) {
   const panel = { registered: null, opKey: null, pressKey: null, toggle: null, targetsAsked: null, note: "" };
   m.realPanel = panel;
+  panel.rejectText = rejectText; // the render's precondition rows (U3c)
   const say = (text) => {
     panel.note = text;
     const el = $("rp-msg");
@@ -115,7 +117,9 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (!pallet || !pose) return say("팔레트와 자세(x, y, yaw)를 넣으세요");
     send("pallet_register", { pallet_id: pallet, pose }, "등록했습니다").then((r) => {
       if (r && r.t === "ack" && Number.isInteger(r.targets_revision)) {
-        panel.registered = { session_epoch: d.epoch, revision: r.targets_revision, pallet, pose }; // what was sent
+        // what was sent, and (U3c) the register serial the vehicle gave it on a run with the per-pallet confirmation
+        panel.registered = { session_epoch: d.epoch, revision: r.targets_revision, pallet, pose,
+          serial: Number.isInteger(r.register_serial) ? r.register_serial : null };
         const now = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
         if ($("rp-pallet").value !== pallet || !now || now.some((v, i) => Math.abs(v - pose[i]) > 1e-9)) {
           say("등록했습니다 · 그 사이 입력을 바꿨으니 지금 입력으로 다시 등록하세요"); // (r8 P3)
@@ -126,7 +130,22 @@ export function bindRealPanel(m, rejectText, clientId) {
   }, "rp-register");
   $("rp-start").onclick = guard(() => {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다");
-    send("operator_start", {}, "시작 확인을 보냈습니다");
+    const st = m.session.realStatus;
+    const fields = startFields(panel.registered, st);
+    if (fields === null) return say("팔레트를 (다시) 등록한 뒤 확인하세요");
+    if (palletConfirmTexts(st) !== null) {
+      // U3c (plan 2.6): the six lines ticked, for the registration drawn, and the inputs still name it
+      const boxes = [...document.querySelectorAll("#rp-checks input[type=checkbox]")];
+      if (!boxes.length || boxes.some((b) => !b.checked)) return say("여섯 항목을 모두 눈으로 확인하고 표시하세요");
+      const reg = panel.registered;
+      const pose = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
+      if ($("rp-pallet").value !== reg.pallet || !pose || pose.some((v, i) => Math.abs(v - reg.pose[i]) > 1e-9)) {
+        return say("등록한 뒤 팔레트나 자세를 바꿨습니다 · 다시 등록하세요");
+      }
+    }
+    send("operator_start", fields, "시작 확인을 보냈습니다").then(() => {
+      for (const b of document.querySelectorAll("#rp-checks input[type=checkbox]")) b.checked = false;
+    });
   }, "rp-start");
   $("rp-submit").onclick = guard(() => {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다"); // from the toggle's send on (r2 P2-3)
@@ -284,7 +303,38 @@ export function renderRealPanel(m, clientId) {
   for (const id of ["rp-register", "rp-start", "rp-submit"]) $(id).disabled = why !== null;
   $("rp-why").textContent = why ?? "";
   $("rp-rearm").hidden = !(mine && (st.permit?.state === "LATCHED" || st.mode === "STOPPED"));
-  $("rp-start-state").textContent = st?.operator_start ? "확인됨" : "";
+  $("rp-start-state").textContent = startStateText(st);
+  // U3c (plan 2.9): the precondition rows -- pass grey, blocked red, bypassed orange
+  const rows = preconditionRows(st, panel.rejectText ?? ((r) => r));
+  const pre = $("rp-pre");
+  const rowSig = rows.map((r) => `${r.key}:${r.cls}:${r.text}`).join("|");
+  if (pre.dataset.sig !== rowSig) {
+    pre.replaceChildren(...rows.map((r) => {
+      const div = document.createElement("div");
+      div.className = `rp-pre ${r.cls}`;
+      div.textContent = r.text;
+      return div;
+    }));
+    pre.dataset.sig = rowSig;
+  }
+  pre.hidden = rows.length === 0;
+  // U3c (plan 2.6): the six lines of the pallet confirmation, unticked again for every new registration
+  const texts = palletConfirmTexts(st);
+  const checks = $("rp-checks");
+  checks.hidden = texts === null;
+  $("rp-start").textContent = texts === null ? "시작 확인" : "팔레트 확인";
+  const checkSig = texts === null ? "" : `${st.session_epoch}:${st.register_serial}:${texts.join("|")}`;
+  if (checks.dataset.sig !== checkSig) {
+    checks.replaceChildren(...(texts ?? []).map((text, i) => {
+      const label = document.createElement("label");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.id = `rp-check-${i + 1}`;
+      label.append(box, ` ${i + 1}. ${text}`);
+      return label;
+    }));
+    checks.dataset.sig = checkSig;
+  }
   const key = answerKey(st);
   panel.opKey = key;
   $("rp-op").textContent = key ? `확인 요청 #${key.serial} · ${key.kind}` : "열린 확인 요청 없음";
