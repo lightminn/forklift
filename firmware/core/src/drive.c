@@ -473,6 +473,25 @@ static void read_sensors(drive *d, const drive_inputs *in)
     }
     abs_axis_update(&d->steer, &c->steer, in->abs_frame[0], in->abs_fresh[0]);
     abs_axis_update(&d->lift, &c->lift, in->abs_frame[1], in->abs_fresh[1]);
+#if defined(FW_CORE_BENCH)
+    if (BENCH(c) && in->abs_fresh[0]) {
+        /* diag/fw-bench: the steering KTH's travel, unwrapped frame by frame (half a turn a frame at most) */
+        uint16_t a12;
+        if (kth7801_decode(in->abs_frame[0], c->steer.crc, &a12)) {
+            if (d->bench_kth_have) {
+                int32_t step = (int32_t)a12 - (int32_t)d->bench_kth_prev;
+                if (step > 2047) {
+                    step -= 4096;
+                } else if (step < -2048) {
+                    step += 4096;
+                }
+                d->bench_kth_counts += (uint32_t)step; /* modular: the host reads differences */
+            }
+            d->bench_kth_prev = a12;
+            d->bench_kth_have = true;
+        }
+    }
+#endif
     if (in->adc_fresh) {
         d->adc_bad_streak = 0;
         d->adc_valid = true;
@@ -1238,6 +1257,13 @@ void drive_fill_state(const drive *d, link_state *s)
         s->kth_crc_errors[i] = (uint16_t)ax[i]->crc_errors;
         s->kth_alt_crc_errors[i] = (uint16_t)ax[i]->alt_crc_errors;
     }
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        /* diag/fw-bench: the bench image carries the steering KTH's travel counter here instead (low, high) */
+        s->kth_alt_crc_errors[0] = (uint16_t)(d->bench_kth_counts & 0xFFFFu);
+        s->kth_alt_crc_errors[1] = (uint16_t)(d->bench_kth_counts >> 16);
+    }
+#endif
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         s->current_ma[ch] = sat16(d->current_a[ch] * 1000.0f);
         s->duty_e4[ch] = sat16(d->out.duty[ch] * 10000.0f);

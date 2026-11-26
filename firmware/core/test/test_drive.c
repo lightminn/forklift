@@ -2053,6 +2053,9 @@ static void bench_steer_range_bypass(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
     send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    link_state st0;
+    drive_fill_state(&d, &st0);
+    uint32_t c0 = (uint32_t)st0.kth_alt_crc_errors[0] | ((uint32_t)st0.kth_alt_crc_errors[1] << 16);
     double s = 2.0;
     for (int t = 0; t < 3000; t++) { /* 3 s at 0.12: the sensor turns ~24 times, every joint range */
         if (t % 50 == 0) {
@@ -2069,6 +2072,12 @@ static void bench_steer_range_bypass(void)
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.12, 1e-6);
     CHECK_EQ_U(d.latched & DRIVE_FAULT_STEER_OUT_OF_RANGE, 0);
     CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES);
+    /* the board's own travel counter (1 kHz): 3000 x 0.05 rad = 150 rad = 23.87 turns = 97785 counts */
+    link_state st1;
+    drive_fill_state(&d, &st1);
+    uint32_t c1 = (uint32_t)st1.kth_alt_crc_errors[0] | ((uint32_t)st1.kth_alt_crc_errors[1] << 16);
+    int32_t travel = (int32_t)(c1 - c0);
+    CHECK(travel > 97700 && travel < 97870);
     link_msg over = commission_msg(seq++, DRIVE_CH_M, 2501, 150, echo_now()); /* the session's 0.25 */
     tick_msgs(&over, 1);
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
@@ -2140,6 +2149,42 @@ static void bench_overrides_never_weaken_the_stopping_side(void)
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
     /* the overrides survive a CLEAR_FAULTS re-init on the same boot, and are shown (the tool re-sends every run) */
     CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES);
+}
+
+static void bench_counts_a_fast_turn_frame_by_frame(void)
+{
+    /* 0.7 turn per 10 ms (0.07 turn a frame): a 100 Hz look would fold it, the 1 kHz counter never does; the
+       counter goes backwards for a turn the other way and ignores a frame the CRC refuses */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(0.0);
+    ticks(3);
+    link_state st;
+    drive_fill_state(&d, &st);
+    uint32_t c0 = (uint32_t)st.kth_alt_crc_errors[0] | ((uint32_t)st.kth_alt_crc_errors[1] << 16);
+    double s = 0.0;
+    for (int t = 0; t < 100; t++) {
+        s += 0.07 * TWO_PI;
+        set_steer(s);
+        tick();
+    }
+    in.abs_frame[0] = 0xFFFF; /* one refused frame */
+    tick();
+    for (int t = 0; t < 10; t++) {
+        s -= 0.07 * TWO_PI;
+        set_steer(s);
+        tick();
+    }
+    drive_fill_state(&d, &st);
+    uint32_t c1 = (uint32_t)st.kth_alt_crc_errors[0] | ((uint32_t)st.kth_alt_crc_errors[1] << 16);
+    int32_t travel = (int32_t)(c1 - c0);
+    CHECK(travel > 6.3 * 4096 - 50 && travel < 6.3 * 4096 + 50); /* 7 turns out, 0.7 back */
+    /* another image keeps its other-variant counters there */
+    boot_with(mod_commission_open_lr);
+    in.abs_frame[0] = 0x1234; /* a frame the configured variant refuses; counted for the other variant if it passes */
+    ticks(3);
+    drive_fill_state(&d, &st);
+    CHECK_EQ_U(st.kth_alt_crc_errors[0], (uint16_t)d.steer.alt_crc_errors);
 }
 
 static void bench_limits_are_the_sessions(void)
@@ -2241,5 +2286,6 @@ int main(void)
     bench_limits_are_the_sessions();
     bench_set_refused_while_stopping_or_inside_an_interval();
     bench_overrides_never_weaken_the_stopping_side();
+    bench_counts_a_fast_turn_frame_by_frame();
     return FW_TEST_RESULT();
 }

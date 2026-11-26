@@ -440,6 +440,9 @@ class Session:
         self.steer_hold = b.state.steering_rad  # the other axes stay where they are (design 3)
         b.phase = "arm"
         self.test_end_ns = time.monotonic_ns() + int(budget_s * 1e9)
+        if getattr(self, "_bench_boot", None) is not None and b.state.boot_id != self._bench_boot:
+            # Codex fw-bench round 2 P2-3: the ARM goes to the boot that took this run's BENCH_SET, never a new one
+            raise Refused("bench: the board rebooted after taking the BENCH_SET: run it again")
         self.arm_requested = True
         blocked = b.host.request_arm(time.monotonic_ns())
         if blocked is not None:
@@ -448,6 +451,8 @@ class Session:
             raise Refused("not ready after ARM")
         # the ARM was taken (zero seen): told apart from the pre-ARM check row (Codex PR-1 re-review 3 P2)
         st = b.host.state  # the STATE the host judged ready on, not a later-decoded older one (Codex re-review 4 P3)
+        if getattr(self, "_bench_boot", None) is not None and st.boot_id != self._bench_boot:
+            raise Refused("bench: armed on another boot than the one that took the BENCH_SET")  # the cleanup DISARMs
         b.emit({"t": "armed", "host_ns": time.monotonic_ns(), "boot_id": st.boot_id, "arm_gen": st.arm_gen})
 
     def preflight(self, state: McuState) -> None:
@@ -697,9 +702,10 @@ class CommissionSession(Session):
         self.bench: bl.BenchAsk | None = None
         self.bench_taken: dict | None = None
         self.stop_kth_turns: float | None = None
-        self._kth = bl.KthTracker()
-        self._on_us: int | None = None  # the MCU time the axis's applied duty went non-zero, and the value then
-        self._on_value: float | None = None
+        self._kth_base: int | None = None  # the board's travel counter at the run's first look (bench image)
+        self._prog_us: int | None = None  # the last progress mark while driven: MCU time and position
+        self._prog_value: float | None = None
+        self._bench_boot: int | None = None  # the boot that took this run's BENCH_SET
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -741,6 +747,8 @@ class CommissionSession(Session):
         if self.bench is not None and not bench_img:
             raise Refused(f"bench: {self.preflight_product!r} is not the bench image (no product ending "
                           f"'{' '.join(bl.BENCH_SUFFIX)}')")
+        if self.stop_kth_turns is not None and not bench_img:
+            raise Refused("stop-kth-turns: the bench image only (its board counts the KTH's travel at 1 kHz)")
         if bench_img:
             self._bench_set()
             state = self.b.state
@@ -820,7 +828,8 @@ class CommissionSession(Session):
         if not verdict.get("ok"):
             raise Refused(f"bench: the board did not take BENCH_SET seq {seq} ({verdict.get('why')})")
         self.bench_taken = {"seq": seq, "bypass": list(ask.names), "duty_max_e4": list(ask.duty_max_e4()),
-                            "time_ms": list(ask.time_ms()), "overrides": want}
+                            "time_ms": list(ask.time_ms()), "overrides": want, "boot_id": boot0}
+        self._bench_boot = boot0
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
@@ -909,23 +918,27 @@ class CommissionSession(Session):
             return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
         v = state.steering_rad if self.axis == 2 else state.lift_m
         range_off = self._range_off()
-        if self.axis == 2 and (self.stop_kth_turns is not None or range_off):
-            why = self._kth.feed(v, state.mcu_time_us)
-            if why is not None:
-                return why  # the count can no longer be trusted: stop, never guess
-            if self.stop_kth_turns is not None and abs(self._kth.turns) >= self.stop_kth_turns:
+        pos = None
+        if self.axis == 2 and self.bench_taken is not None:
+            # the bench image's own travel counter (1 kHz, Codex fw-bench round 2 P2-2), not the 100 Hz angle
+            c = bl.kth_counts(state)
+            if self._kth_base is None:
+                self._kth_base = c
+            pos = float(bl.counts_delta(self._kth_base, c))
+            if self.stop_kth_turns is not None and abs(pos) >= self.stop_kth_turns * bl.KTH_COUNTS_PER_TURN:
                 return "kth_turns"
-        if range_off and v == v:
-            # Codex fw-bench round 1 P2-3: the range was what caught a KTH stuck low; now the sensor must move
+        elif self.axis == 3 and v == v:
+            pos = v
+        if range_off and pos is not None:
+            # Codex fw-bench rounds 1-2: the range was what caught a KTH stuck low; now the sensor must keep moving --
+            # the mark moves with every step of progress, so a sensor that stops after moving is caught too
+            step = bl.BENCH_NO_MOTION_COUNTS if self.axis == 2 else bl.BENCH_NO_MOTION_LIFT_M
             if state.duty_e4[self.axis] == 0:
-                self._on_us = self._on_value = None
-            elif self._on_us is None:
-                self._on_us, self._on_value = state.mcu_time_us, (self._kth.total if self.axis == 2 else v)
-            elif state.mcu_time_us - self._on_us > bl.BENCH_NO_MOTION_S * 1e6:
-                moved = abs(self._kth.total - self._on_value) >= bl.BENCH_NO_MOTION_RAD if self.axis == 2 else (
-                    abs(v - self._on_value) >= bl.BENCH_NO_MOTION_LIFT_M)
-                if not moved:
-                    return "kth_no_motion"
+                self._prog_us = self._prog_value = None
+            elif self._prog_us is None or abs(pos - self._prog_value) >= step:
+                self._prog_us, self._prog_value = state.mcu_time_us, pos
+            elif state.mcu_time_us - self._prog_us > bl.BENCH_NO_MOTION_S * 1e6:
+                return "kth_no_motion"
         if self.window is None:
             return None  # diag/fw-bench: the range is off for this run; the hold ends by time or the turn count
         lo, hi = self.window
@@ -1832,13 +1845,13 @@ def _kth_summary(samples: list, ch: int = 2) -> dict:
     idx = [i for i, s in enumerate(samples) if s.state.duty_e4[ch] != 0]
     if not idx:
         return {"driven_turns": 0.0, "driven_s": 0.0, "mean_turns_per_s": None, "to_end_turns": 0.0,
-                "ambiguous": None}
-    span = samples[idx[0]:idx[-1] + 1]
-    turns, amb = bl.kth_turns([(s.state.steering_rad, s.state.mcu_time_us) for s in span])
-    secs = (span[-1].state.mcu_time_us - span[0].state.mcu_time_us) / 1e6
-    to_end, amb2 = bl.kth_turns([(s.state.steering_rad, s.state.mcu_time_us) for s in samples[idx[0]:]])
+                "source": "bench_kth_counts"}
+    first, last = samples[idx[0]].state, samples[idx[-1]].state
+    turns = bl.counts_delta(bl.kth_counts(first), bl.kth_counts(last)) / bl.KTH_COUNTS_PER_TURN
+    secs = (last.mcu_time_us - first.mcu_time_us) / 1e6
+    to_end = bl.counts_delta(bl.kth_counts(first), bl.kth_counts(samples[-1].state)) / bl.KTH_COUNTS_PER_TURN
     return {"driven_turns": turns, "driven_s": secs, "mean_turns_per_s": turns / secs if secs > 0 else None,
-            "to_end_turns": to_end, "ambiguous": amb or amb2}
+            "to_end_turns": to_end, "source": "bench_kth_counts"}
 
 
 def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[str, ...]]:
@@ -2217,7 +2230,7 @@ def execute(args, bench: Bench) -> dict:
                 result.update(conditions, board_product=session.preflight_product)
                 if session.bench_taken is not None:
                     result["bench_set"] = session.bench_taken  # what the board took, by its seq
-                if AXES[args.axis] == 2 and not getattr(args, "sensorless", False):
+                if AXES[args.axis] == 2 and session.bench_taken is not None:
                     result["kth"] = _kth_summary(bench.samples)  # diag/fw-bench: turns, time, mean speed
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign

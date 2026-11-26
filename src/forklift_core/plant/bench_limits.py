@@ -172,18 +172,13 @@ BENCH_DEFAULT_DUTY_E4 = (10000, 10000, 1500, 1500)
 BENCH_DEFAULT_TIME_MS = (0x7FFFFFFF // 1000, 0x7FFFFFFF // 1000, 2000, 2000)
 BENCH_TIME_MAX_MS = 0x7FFFFFFF // 1000
 BENCH_KTH_TURNS_MAX = 100.0
-BENCH_KTH_STEP_MAX_RAD = 0.75 * 3.141592653589793  # one STATE's change beyond this cannot be unwrapped safely
-# Codex fw-bench round 1 P2-2: a STATE skipped, or a turn faster than half a turn per STATE, folds the unwrap the other
-# way round without tripping the step bound. The count is trusted only while STATEs come within this MCU-time gap, each
-# step within the step bound, the step changes by less than the jerk bound from the last, and the turning keeps its way
-# (a step against it larger than the reverse bound): anything else stops the run as ambiguous, never guessed.
-BENCH_KTH_GAP_MAX_US = 15000  # the STATE period is 10 ms
-BENCH_KTH_JERK_MAX_RAD = 3.141592653589793 * 2 / 3  # 120 deg
-BENCH_KTH_REVERSE_MIN_RAD = 3.141592653589793 / 18  # 10 deg
+# Codex fw-bench round 2 P2-2: the 100 Hz STATE cannot tell a fast turn's way round; the bench image counts the steering
+# KTH's travel itself at every valid frame (1 kHz) and carries it in STATE's kth_alt_crc_errors pair.
+KTH_COUNTS_PER_TURN = 4096
 # Codex fw-bench round 1 P2-3: with its range off a KTH stuck low (0x0000 passes the CRC) is a valid fixed angle; a
 # driven axis whose sensor has not moved this much within this long is stopped
 BENCH_NO_MOTION_S = 0.5
-BENCH_NO_MOTION_RAD = 3.141592653589793 / 36  # 5 deg (steering)
+BENCH_NO_MOTION_COUNTS = 57  # 5 deg of the steering KTH (4096 a turn)
 BENCH_NO_MOTION_LIFT_M = 0.002
 
 
@@ -250,52 +245,13 @@ def bench_refusal(ask: BenchAsk) -> str | None:
     return None
 
 
-class KthTracker:
-    """The unwrapped travel of a wrapped angle (rad, in (-pi, pi]) fed STATE by STATE with its MCU time; ``feed``
-    returns why the count can no longer be trusted (latched in ``ambiguous``), or None."""
-
-    def __init__(self) -> None:
-        self.total = 0.0
-        self.ambiguous: str | None = None
-        self._prev: float | None = None
-        self._prev_us: int | None = None
-        self._prev_d: float | None = None
-
-    @property
-    def turns(self) -> float:
-        import math
-
-        return self.total / math.tau
-
-    def feed(self, rad, mcu_us: int) -> str | None:
-        import math
-
-        if rad is None or not math.isfinite(rad):
-            return None
-        if self._prev is None:
-            self._prev, self._prev_us = rad, int(mcu_us)
-            return None
-        why = None
-        if int(mcu_us) - int(self._prev_us) > BENCH_KTH_GAP_MAX_US:
-            why = "kth_gap"
-        d = math.remainder(rad - self._prev, math.tau)
-        if why is None and abs(d) > BENCH_KTH_STEP_MAX_RAD:
-            why = "kth_step"
-        if why is None and self._prev_d is not None and abs(d - self._prev_d) > BENCH_KTH_JERK_MAX_RAD:
-            why = "kth_jerk"
-        way = math.copysign(1.0, self.total) if abs(self.total) > 0.05 * math.tau else 0.0
-        if why is None and way and math.copysign(1.0, d) != way and abs(d) > BENCH_KTH_REVERSE_MIN_RAD:
-            why = "kth_reverse"
-        self.total += d
-        self._prev, self._prev_us, self._prev_d = rad, int(mcu_us), d
-        if why is not None and self.ambiguous is None:
-            self.ambiguous = why
-        return why
+def kth_counts(state) -> int:
+    """The bench image's steering KTH travel counter (mod 2^32) from STATE's kth_alt_crc_errors pair (low, high)."""
+    lo, hi = state.kth_alt_crc_errors
+    return (int(hi) << 16) | int(lo)
 
 
-def kth_turns(values) -> tuple[float, str | None]:
-    """(turns, why ambiguous or None) over ``(rad, mcu_us)`` pairs (see ``KthTracker``)."""
-    t = KthTracker()
-    for rad, us in values:
-        t.feed(rad, us)
-    return t.turns, t.ambiguous
+def counts_delta(a: int, b: int) -> int:
+    """b - a of two travel counters, as a signed 32-bit difference."""
+    d = (int(b) - int(a)) & 0xFFFFFFFF
+    return d - (1 << 32) if d & 0x80000000 else d

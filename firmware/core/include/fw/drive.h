@@ -219,6 +219,12 @@ typedef struct drive {
     uint32_t bench_bypass;
     uint16_t bench_duty_max_e4[DRIVE_CH_COUNT];
     uint32_t bench_time_ms[DRIVE_CH_COUNT];
+    /* The steering KTH's travel since boot in sensor counts (4096 a turn), unwrapped at every valid
+       frame (1 kHz) and carried mod 2^32 in STATE's kth_alt_crc_errors pair on the bench image only
+       (Codex fw-bench round 2 P2-2: the 100 Hz STATE alone cannot tell a fast turn's way round). */
+    uint32_t bench_kth_counts;
+    uint16_t bench_kth_prev;
+    bool bench_kth_have;
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

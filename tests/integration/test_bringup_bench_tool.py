@@ -41,7 +41,7 @@ def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
     armed = [s for s in b.samples if s.state.mode.name == "ARMED"]
     assert armed and all(s.state.fault_flags & FaultFlag.BENCH_OVERRIDES for s in armed)
     assert res["not_for_gate"] and "bench:steer_range" in res["bypassed"]
-    assert set(res["kth"]) >= {"driven_turns", "driven_s", "mean_turns_per_s", "to_end_turns", "ambiguous"}
+    assert set(res["kth"]) >= {"driven_turns", "driven_s", "mean_turns_per_s", "to_end_turns", "source"}
     assert res["bench"] == {"bypass": ["steer_range"], "duty_max": 0.25, "time_max_s": 5.0}
     (bs,) = [r for r in rows(b) if r["t"] == "bench_set"]
     assert bs["seq"] == taken["seq"]
@@ -95,46 +95,61 @@ def _stopper(turns, window=None, names=()):
     s = object.__new__(bringup.CommissionSession)
     s.axis, s.ignore, s.sensorless, s.stop_kth_turns, s.window = 2, FaultFlag(0), False, turns, window
     s.bench = bringup.bl.BenchAsk(2, tuple(names), None, None) if names else None
-    s._kth, s._on_us, s._on_value = bringup.bl.KthTracker(), None, None
+    s.bench_taken = {"seq": 1} if names or turns is not None else None
+    s._kth_base, s._prog_us, s._prog_value = None, None, None
     return s
 
 
-def _st(rad, us, duty=1200):
+def _st(counts, us, duty=1200, rad=0.0):
     from types import SimpleNamespace
 
+    counts &= 0xFFFFFFFF
     return SimpleNamespace(steering_rad=rad, lift_m=0.0, fault_flags=FaultFlag(0), mcu_time_us=us,
-                           duty_e4=(0, 0, duty, 0))
+                           duty_e4=(0, 0, duty, 0), kth_alt_crc_errors=(counts & 0xFFFF, counts >> 16))
 
 
-def test_the_kth_turn_stop_counts_across_the_wrap_and_refuses_what_it_cannot_tell():
-    import math
-
-    s = _stopper(1.0, names=("steer_range",))
+def test_the_turn_stop_reads_the_boards_counter_either_way_and_across_its_wrap():
     stop = bringup.CommissionSession.early_stop
-    why, i = None, 0
-    while why is None and i < 1000:
-        why = stop(s, _st(math.remainder(-0.4 * i, math.tau), i * 10_000), FaultFlag(0))  # 0.4 rad per STATE
-        i += 1
-    assert why == "kth_turns" and i == 17  # 16 steps x 0.4 = 6.4 rad >= one turn (6.28)
-    s = _stopper(3.0, names=("steer_range",))
-    assert stop(s, _st(0.0, 0), FaultFlag(0)) is None
-    assert stop(s, _st(2.5, 10_000), FaultFlag(0)) == "kth_step"  # 143 deg in one STATE: never guessed
+    for way in (1, -1):
+        s = _stopper(3.0, names=("steer_range",))
+        base = 0xFFFFF000  # the counter wraps inside the run
+        why, i = None, 0
+        while why is None and i < 1000:
+            why = stop(s, _st(base + way * 1000 * i, i * 10_000), FaultFlag(0))  # ~0.24 turn per STATE
+            i += 1
+        assert why == "kth_turns" and i == 14  # 13 x 1000 = 13000 >= 3 x 4096 = 12288
     s = _stopper(None, window=(-0.2, 0.2))
-    assert stop(s, _st(0.3, 0), FaultFlag(0)) == "window"  # no turn stop, range on: the window as before
+    assert stop(s, _st(0, 0, rad=0.3), FaultFlag(0)) == "window"  # no turn stop, range on: the window as before
 
 
-def test_a_driven_steering_whose_kth_stays_put_is_stopped_when_its_range_is_off():
-    """Codex fw-bench round 1 P2-3: a KTH stuck low reads a valid fixed angle once the range is off."""
-    s = _stopper(3.0, names=("steer_range",))
+def test_a_driven_steering_whose_kth_stops_is_stopped_when_its_range_is_off():
+    """Codex fw-bench rounds 1-2 P2: a KTH stuck from the start, or stuck after moving, with the duty on."""
     stop = bringup.CommissionSession.early_stop
+    s = _stopper(3.0, names=("steer_range",))
     why = None
-    for i in range(80):  # 0.8 s at the same angle with the duty on
-        why = stop(s, _st(3.1415, i * 10_000), FaultFlag(0)) or why
+    for i in range(80):  # stuck from the start
+        why = stop(s, _st(0, i * 10_000), FaultFlag(0))
         if why:
             break
     assert why == "kth_no_motion" and 50 <= i <= 52
+    s = _stopper(3.0, names=("steer_range",))
+    why, c = None, 0
+    for i in range(200):  # moves 0.1 s (10 x 205 counts = 18 deg each), then stays
+        c += 205 if i < 10 else 0
+        why = stop(s, _st(c, i * 10_000), FaultFlag(0))
+        if why:
+            break
+    assert why == "kth_no_motion" and 59 <= i <= 62
     s = _stopper(3.0, names=("steer_range",))  # the duty off: no judgement
-    assert all(stop(s, _st(3.1415, i * 10_000, duty=0), FaultFlag(0)) is None for i in range(80))
+    assert all(stop(s, _st(0, i * 10_000, duty=0), FaultFlag(0)) is None for i in range(80))
+
+
+def test_the_turn_stop_needs_the_bench_image(model):
+    b = model()
+    b.host.usb_product = LR1
+    res = bringup.execute(args(axis="M", duty=0.12, seconds=0.2, window=(-0.5, 0.5), stop_kth_turns=1.0,
+                               observed="none"), b)
+    assert res["result"] == "refused" and "bench image only" in res["why"]
 
 
 def test_a_second_run_on_the_same_boot_gets_the_defaults_back(model):
