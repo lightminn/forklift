@@ -250,3 +250,11 @@ def test_an_output_that_cannot_be_written_is_one_json_document_with_its_error(tm
     assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/x", "--out", str(missing)]) == 2
     rec = json.loads(capsys.readouterr().out)  # one document
     assert rec["refused"] == ["real_with_hil"] and rec["out_error"].startswith("FileNotFoundError")
+
+
+def test_a_dry_assembly_that_cannot_write_its_record_is_not_a_success(tmp_path, capsys):
+    """Codex unlock U1 review round 4 P2: --out failing makes the exit non-zero even when the plan succeeds."""
+    missing = tmp_path / "no" / "dir" / "out.json"
+    code = tool.main(["--dry-assemble", "--out", str(missing)])
+    rec = json.loads(capsys.readouterr().out)
+    assert code == 2 and rec.get("out_error", "").startswith("FileNotFoundError")

@@ -100,8 +100,8 @@ def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_b
     plan = rr.check_plan(cfg, planner, geometry, occupancy)
     record.update(asm.assembly_record(core, cfg, {"planner": cap, "tracker": cap, "preview": cap}),
                   assembled=True, check_plan=plan.status, ready="not_ready:link:no_state (dry assembly)")
-    _write(record, out)
-    return 0 if plan.success else 2
+    written = _write(record, out)
+    return 0 if plan.success and written else 2
 
 
 def run_refused(device: str | None, out: Path | None) -> int:

@@ -445,3 +445,14 @@ def test_a_corrupt_urdf_is_a_structured_reason(site, monkeypatch):
     monkeypatch.setattr(real_run, "mission_geometry", boom)
     out = rp.operating_preconditions(site.facts())
     assert "precondition:C5:scan_coverage:inserted_offset_m" in out  # no corridor end: the coverage cannot pass
+
+
+def test_an_unreadable_chassis_file_is_a_missing_fact_never_compared_away(site, monkeypatch):
+    real = rp._sha_or_none
+
+    def fake(path):
+        return None if str(path).endswith("forklift.urdf") else real(path)
+
+    monkeypatch.setattr(rp, "_sha_or_none", fake)
+    out = rp.operating_preconditions(site.facts())
+    assert "precondition:facts_missing:chassis_urdf" in out

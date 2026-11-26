@@ -362,9 +362,10 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     hashes_at_start = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     try:
         _params = chassis_model_path(paths.vehicle)
-        hashes_at_start.update(chassis_params=_sha_or_none(_params), chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
-    except (OSError, ValueError):
-        pass
+        hashes_at_start.update(chassis_params=_sha_or_none(_params),
+                               chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
     try:
         cfg = ra.load_s10a(paths.s10a)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
@@ -758,10 +759,20 @@ def real_preconditions(prep, host, transport) -> list:
     # the corridor end the run will drive is the one prep built from the chassis it loaded, not a second reading
     # (Codex unlock U1 review round 3 P1)
     facts.inserted_offset_m = float(prep.geometry.inserted_offset_m)
+    # C12 compares the record with the calibration the run loaded, not a second reading (Codex U1 round 4 P1)
+    if facts.vehicle_calibration_id != prep.vehicle.calibration_id:
+        changed_calib = True
+    else:
+        changed_calib = False
+    facts.vehicle_calibration_id = prep.vehicle.calibration_id
     out = rp.operating_preconditions(facts)
+    if changed_calib:
+        out.append("precondition:files_changed:vehicle_calibration")
     # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
     out += [f"precondition:files_changed:{name}" for name, sha in facts.file_hashes.items()
             if name in prep.hashes and prep.hashes[name] != sha]
+    out += [f"precondition:files_changed:{name}" for name in ("chassis_params", "chassis_urdf")
+            if prep.hashes.get(name) is None or facts.file_hashes.get(name) != prep.hashes.get(name)]
     if facts.stop_files.get("odometry_age") != prep.hashes.get("odometry_age"):
         out.append("precondition:files_changed:odometry_age")
     return out

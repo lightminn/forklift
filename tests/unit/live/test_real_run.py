@@ -646,3 +646,11 @@ def test_a_file_changed_while_preparing_is_refused(monkeypatch):
     with pytest.raises(AssemblyRefused) as err:
         rr.prepare_run(rr.RunPaths(s10a=HIL_YAML), jobs_factory=InlineJobs)
     assert any(r.startswith("files_changed_while_preparing:") for r in err.value.reasons)
+
+
+def test_an_unparsable_vehicle_file_is_still_a_structured_refusal(tmp_path):
+    """Codex unlock U1 review round 4 P2: the chassis hash read at the start never escapes a YAML error."""
+    bad = tmp_path / "vehicle.yaml"
+    bad.write_text("chassis_model: [unclosed\n")
+    with pytest.raises(AssemblyRefused):
+        rr.prepare_run(rr.RunPaths(s10a=HIL_YAML, vehicle=bad), jobs_factory=InlineJobs)

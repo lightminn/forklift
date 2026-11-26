@@ -69,6 +69,8 @@ REQUIRED_PROVENANCE = {
 }
 GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError,
                  ET.ParseError)
+REQUIRED_HASHES = ("s10a", "settings", "vehicle", "watch", "layer", "budget", "lidar", "imu", "chassis_params",
+                   "chassis_urdf")
 HASHED = ("s10a", "settings", "vehicle", "watch", "layer", "budget", "lidar", "imu")
 START_TOL_M = 0.001  # the taped start written in the record is the S10-A one (a copy, not a tolerance)
 
@@ -103,6 +105,13 @@ def _read(path) -> tuple:
 
 def _sha(path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _sha_or_none(path) -> str | None:
+    try:
+        return _sha(path)
+    except OSError:
+        return None
 
 
 def _provenances(node, path=()) -> list:
@@ -189,7 +198,8 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
 
         params = chassis_model_path(vehicle_path)
         urdf = params.parent / "forklift.urdf"
-        hashes["chassis_params"], hashes["chassis_urdf"] = _sha(params), _sha(urdf)
+        hashes["chassis_params"] = _sha_or_none(params)
+        hashes["chassis_urdf"] = _sha_or_none(urdf)
         if s10a.pallet_depth_m is not None and s10a.pallet_width_m is not None:
             inserted = float(mission_geometry(urdf, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
             if _sha(urdf) != hashes["chassis_urdf"]:
@@ -480,6 +490,8 @@ def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
     out = [UNLOCK_INCOMPLETE]
     out += [f"precondition:files_changed:{name}" for name in f.changed]
+    # every file the judgement binds must have been read (a missing hash is never compared away)
+    out += [f"precondition:facts_missing:{name}" for name in REQUIRED_HASHES if not f.file_hashes.get(name)]
     out += _c1_board(f)
     out += _c5_scan(f)
     if f.record is None:
