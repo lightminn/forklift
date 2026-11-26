@@ -84,6 +84,10 @@ def main(argv=None) -> int:
         import yaml
 
         data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+        if os.path.isabs(str(data["chassis_model"])):
+            # the operating build generates from a staged copy: an absolute path would leave it (Codex U3d r5 P2-1)
+            print(f"real_vehicle_header: chassis_model {data['chassis_model']} is absolute", file=sys.stderr)
+            return 4
         raw = os.path.join(os.path.dirname(os.path.abspath(args.config)), data["chassis_model"])
         # every component as written, before ".." folds any of them away (Codex U3d round 3 P2-1: alias/../x)
         prefix = os.sep

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -724,7 +725,7 @@ def test_the_operating_header_is_generated_from_the_committed_blobs(record_repo,
     repo, header = record_repo
     log = tmp_path / "argv.log"
     wrapper = tmp_path / "py.sh"
-    wrapper.write_text(f'#!/bin/sh\necho "$@" >> {log}\nexec {sys.executable} "$@"\n')
+    wrapper.write_text(f'#!/bin/sh\necho "$@" >> {shlex.quote(str(log))}\nexec {shlex.quote(sys.executable)} "$@"\n')
     wrapper.chmod(0o755)
     out = tmp_path / "v.h"
     gen = subprocess.run(
@@ -735,6 +736,20 @@ def test_the_operating_header_is_generated_from_the_committed_blobs(record_repo,
     generating = [ln for ln in log.read_text().splitlines() if "--out" in ln]
     assert len(generating) == 1 and f"{out}.stage/config/real/vehicle.yaml" in generating[0], generating
     assert out.read_text() == header.read_text() and not Path(f"{out}.stage").exists()
+
+
+def test_the_operating_build_refuses_an_absolute_chassis_model_path(record_repo, tmp_path):
+    """Codex U3d round 5 P2-1: the header is generated from a staged copy, which a path outside it would leave."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    absolute = (r2 / "sim" / "models" / "dls08_measured" / "parameters.yaml").as_posix()
+    cfg_path.write_text(re.sub(r"chassis_model: .*", f"chassis_model: {absolute}", cfg_path.read_text()))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "absolute")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "is absolute" in _flat(cfg.stderr), cfg.stderr
 
 
 def test_a_stray_vehicle_header_beside_the_board_source_is_not_compiled(record_repo, tmp_path):

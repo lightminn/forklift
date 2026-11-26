@@ -12,7 +12,7 @@ function(refuse why)
         "commit's config/real/vehicle.yaml and the chassis model it names (operating plan 2026-11-26 2.4, C12).")
 endfunction()
 
-function(check_committed top path)
+function(check_committed top sha path)
     # no symbolic link anywhere on the path: the path itself is the file the generator reads (its
     # resolve() then changes nothing), so the bytes checked are the bytes used (Codex U3d round 2 P2-1)
     get_filename_component(real "${path}" REALPATH)
@@ -26,10 +26,10 @@ function(check_committed top path)
     if(IS_SYMLINK "${path}" OR NOT EXISTS "${path}" OR IS_DIRECTORY "${path}")
         refuse("'${rel}' is not a regular file")
     endif()
-    execute_process(COMMAND git diff --cached --quiet HEAD -- "${rel}" WORKING_DIRECTORY ${top}
+    execute_process(COMMAND git diff --cached --quiet ${sha} -- "${rel}" WORKING_DIRECTORY ${top}
                     RESULT_VARIABLE index_rc OUTPUT_QUIET ERROR_QUIET)
     # the work-tree bytes are hashed directly: git diff skips assume-unchanged / skip-worktree files
-    execute_process(COMMAND git rev-parse "HEAD:${rel}" WORKING_DIRECTORY ${top}
+    execute_process(COMMAND git rev-parse "${sha}:${rel}" WORKING_DIRECTORY ${top}
                     OUTPUT_VARIABLE head_id OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     execute_process(COMMAND git hash-object --no-filters -- "${path}" WORKING_DIRECTORY ${top}
                     OUTPUT_VARIABLE tree_id OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -53,6 +53,16 @@ macro(check_inputs)
             refuse("the repository is not a git repository")
         endif()
         get_filename_component(top "${top}" REALPATH)
+        # one commit for every check and blob read of this run (Codex U3d round 5 P2-2): fixed at the first check,
+        # and HEAD must still be it at the second
+        execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${top}
+                        OUTPUT_VARIABLE head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(NOT sha)
+            set(sha "${head}")
+        endif()
+        if(NOT head OR NOT head STREQUAL sha)
+            refuse("HEAD moved during the header's generation (${sha} -> ${head})")
+        endif()
         execute_process(
             COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${REPO}/src
                     ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${YAML} --print-chassis-as-written
@@ -60,11 +70,14 @@ macro(check_inputs)
         if(rc EQUAL 3)
             refuse("the chassis model path ${YAML} names goes through a symbolic link")
         endif()
+        if(rc EQUAL 4)
+            refuse("the chassis model path ${YAML} names is absolute (it must be relative to the config)")
+        endif()
         if(NOT rc EQUAL 0 OR NOT written)
             refuse("could not read the chassis model path ${YAML} names")
         endif()
-        check_committed("${top}" "${YAML}")
-        check_committed("${top}" "${written}")
+        check_committed("${top}" "${sha}" "${YAML}")
+        check_committed("${top}" "${sha}" "${written}")
         if(NOT written STREQUAL chassis)
             refuse("the chassis model resolves to '${chassis}', not the path '${written}' the config names")
         endif()
@@ -81,11 +94,9 @@ macro(check_inputs)
                 refuse("the build identity '${desc}' names no commit")
             endif()
             set(abbrev "${CMAKE_MATCH_2}")
-            execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${REPO}
-                            OUTPUT_VARIABLE head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-            string(FIND "${head}" "${abbrev}" at)
+            string(FIND "${sha}" "${abbrev}" at)
             if(NOT at EQUAL 0)
-                refuse("HEAD (${head}) is not the commit the build identity names (${abbrev})")
+                refuse("HEAD (${sha}) is not the commit the build identity names (${abbrev})")
             endif()
         endif()
     endif()
@@ -102,10 +113,10 @@ if(COMMITTED)
         file(RELATIVE_PATH rel "${top}" "${path}")
         get_filename_component(dir "${stage}/${rel}" DIRECTORY)
         file(MAKE_DIRECTORY "${dir}")
-        execute_process(COMMAND git cat-file blob "HEAD:${rel}" WORKING_DIRECTORY ${top}
+        execute_process(COMMAND git cat-file blob "${sha}:${rel}" WORKING_DIRECTORY ${top}
                         OUTPUT_FILE "${stage}/${rel}" RESULT_VARIABLE rc ERROR_QUIET)
         if(NOT rc EQUAL 0)
-            refuse("'${rel}' could not be read from HEAD")
+            refuse("'${rel}' could not be read from ${sha}")
         endif()
     endforeach()
     file(RELATIVE_PATH rel_yaml "${top}" "${YAML}")
