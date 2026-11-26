@@ -233,7 +233,10 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
 def _finite(*vals) -> bool:
-    return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
+    try:
+        return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
+    except OverflowError:  # an integer no float can hold (Codex U3e-1 impl round 2 P3)
+        return False
 
 
 def _positive(*vals) -> bool:

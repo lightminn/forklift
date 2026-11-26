@@ -318,24 +318,32 @@ class Operating:
 
     def wait_console(self, timeout=60):
         """The console line, read with a deadline that holds when the child prints nothing (or hangs)."""
-        import selectors
+        import select
 
         end = time.monotonic() + timeout
-        sel = selectors.DefaultSelector()
-        sel.register(self.proc.stdout, selectors.EVENT_READ)
+        fd = self.proc.stdout.fileno()
+        os.set_blocking(fd, False)
+        buf = b""
         try:
             while time.monotonic() < end:
-                if not sel.select(timeout=max(0.0, end - time.monotonic())):
+                ready, _, _ = select.select([fd], [], [], max(0.0, end - time.monotonic()))
+                if not ready:
                     break
-                line = self.proc.stdout.readline()
-                if not line:
+                chunk = os.read(fd, 65536)  # never a blocking readline: a line without its newline keeps the deadline
+                if not chunk:
                     break
-                self.lines.append(line)
-                if line.startswith('{"console"'):
-                    self.port = json.loads(line)["port"]
-                    return self.port
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode() + "\n"
+                    self.lines.append(text)
+                    if text.startswith('{"console"'):
+                        self.port = json.loads(text)["port"]
+                        return self.port
         finally:
-            sel.close()
+            if buf:
+                self.lines.append(buf.decode(errors="replace"))
+            os.set_blocking(fd, True)
         return None
 
     def finish(self, sig=None, timeout=60):
@@ -584,10 +592,10 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
                            if w["kind"] == "DRIVE" and speed.get(w["seq"]) not in (None, 0.0)]
                 acc = accept_rows(run.accept_log) if run.accept_log.exists() else []
                 for w in written:
-                    hit = [a for a in acc if a["kind"] == "DRIVE" and a["seq"] == w["seq"] and a["verdict"] == "accepted"
-                           and a["mono_ns"] >= w["written_ns"]]
-                    if hit:
-                        moving_accepted = hit[0]
+                    # the model's acceptance of that write: same boot and seq, at or after its last write's entry
+                    hit = accepted(acc, "DRIVE", w["seq"], BOOT, w["last_write_ns"] or w["written_ns"])
+                    if hit is not None and hit["verdict"] == "accepted":
+                        moving_accepted = hit
                         break
                 time.sleep(0.2)
             run.scan.cut()
@@ -602,8 +610,12 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
         rows = run.rows()
         perm = _events(rows, "permit")
         latch = next((p for p in perm if p.get("event") == "latched" and p["ns"] >= run.scan.cut_ns), None)
-        assert latch is not None and "scan" in str(latch.get("reason")), [
+        # the verification table's transition: the scan source's boundary after the cut, and the latch it causes
+        # (impl round 2 P2-4) -- not any scan-named stop
+        assert latch is not None and latch.get("reason") == "scan_generation_changed", [
             (p["event"], p.get("reason")) for p in perm if p["ns"] >= run.scan.cut_ns]
+        boundary = [b for b in _events(rows, "scan_boundary") if run.scan.cut_ns <= b["ns"] <= latch["ns"]]
+        assert boundary, _events(rows, "scan_boundary")[-3:]
         assert latch["ns"] < signal_ns
         from forklift_core.mcu_link.messages import Mode
 

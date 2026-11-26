@@ -353,3 +353,37 @@ def test_the_operating_console_stays_on_loopback_unless_lan_is_named(tmp_path, c
     assert "console_lan_needs_origin_host" in json.loads(capsys.readouterr().out)["refused"]
     args = tool.argparse.Namespace(console_lan=True, console_origin_host="192.168.4.1")
     assert tool.real_origin_hosts(args) == ("127.0.0.1", "localhost", "192.168.4.1")
+
+
+def test_the_precheck_refuses_a_fifo_input_before_the_device(tmp_path, capsys, monkeypatch):
+    """Codex U3e-1 implementation round 2 P2-3: a FIFO given to the precheck would block its read with the lock held."""
+    import os
+
+    fifo = tmp_path / "layer.fifo"
+    os.mkfifo(fifo)
+    opened = []
+    monkeypatch.setattr(tool, "_is_pty", lambda d: False)
+    assert tool.main(["--run", "--client", "real", "--precheck", "--device", "/dev/forklift-mcu-none",
+                      "--layer", str(fifo)]) == 2
+    rec = json.loads(capsys.readouterr().out)
+    assert rec["refused"] == ["input_not_regular:layer"] and rec["opened"] == [] and not opened
+
+
+def test_the_operating_scan_socket_never_replaces_an_existing_name(tmp_path):
+    """Codex U3e-1 implementation round 2 P2-2: a stale socket left at the name is not replaced (bind fails)."""
+    import socket
+
+    path = tmp_path / "scan.sock"
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    stale.bind(str(path))
+    stale.close()  # nobody holds it now: scan_feed.bind_socket would replace it
+    ino = path.lstat().st_ino
+    with pytest.raises(OSError):
+        tool._bind_own_socket(path)  # noqa: SLF001
+    assert path.lstat().st_ino == ino
+    path.unlink()
+    s = tool._bind_own_socket(path)  # noqa: SLF001
+    try:
+        assert oct(path.stat().st_mode & 0o777) == oct(0o660) and s.getblocking() is False
+    finally:
+        s.close()

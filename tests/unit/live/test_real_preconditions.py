@@ -552,7 +552,8 @@ def test_a_missing_stop_model_provenance_is_not_a_pass(site):
 
 @pytest.mark.parametrize("key, value", [("latency_s", -0.01), ("latency_s", float("nan")), ("latency_s", True),
                                         ("latency_s", None), ("decel_mps2", 0.0), ("decel_mps2", -1.0),
-                                        ("decel_mps2", float("inf")), ("decel_mps2", "0.5")])
+                                        ("decel_mps2", float("inf")), ("decel_mps2", "0.5"),
+                                        ("latency_s", 10**400)])  # no float holds it (impl round 2 P3)
 @pytest.mark.parametrize("exception", [False, True])
 def test_the_stop_models_values_are_checked_whatever_their_provenance(site, key, value, exception):
     """Codex U3e-1 round 3 P1: measured or excepted, a negative latency or a zero deceleration is refused."""

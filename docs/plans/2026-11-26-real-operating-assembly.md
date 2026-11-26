@@ -408,7 +408,7 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
   3. `prepare_run`(REAL 경로: 사이트 기록·등록부·번들 뿌리, `hil=False`).
   4. `RealTtyTransport.open(D)` — 잠금·pty 거부·같은 fd 의 USB 제품 문자열과 일련번호. REAL 호스트를 만들고 `host.link_identity(tr.usb_product)` 를 먼저 부른다(면제 경고 기록).
   5. **첫 STATE**: REAL 전용 대기(HIL 의 `_first_state` 는 정상 보드를 거부하므로 쓰지 않는다). `transport.first_state` 의 boot 를 보존한다.
-  6. 스캔 소켓을 묶고(이미 있는 경로는 거부, 끝날 때 지움) `make_real_sources`. **IMU 장치 연결은 U3e-1 범위 밖**이다(P2-2: RealSense SDK 호출은 취소·시한이 없고 장치 선택도 첫 장치뿐). IMU 없음 → 미검증 → `imu` 우회로 연다(2.7). 장치 연결은 SDK 호출 시한·일련번호 선택을 갖춘 뒤 따로 한다.
+  6. 스캔 소켓을 묶고(이미 있는 이름은 `bind` 자체가 실패해 거부 — 남은 소켓도 바꾸지 않음, 끝날 때는 아직 소켓을 쥔 채 이 실행의 inode 일 때만 이름을 지움, 구현 2 회차 P2-2) `make_real_sources`. **IMU 장치 연결은 U3e-1 범위 밖**이다(P2-2: RealSense SDK 호출은 취소·시한이 없고 장치 선택도 첫 장치뿐). IMU 없음 → 미검증 → `imu` 우회로 연다(2.7). 장치 연결은 SDK 호출 시한·일련번호 선택을 갖춘 뒤 따로 한다.
   7. `assemble_run` — `assembly_refusal` 이 선행 조건을 판정한다. 그 판정 목록을 `RealRun.judgement` 로 남긴다(조립이 한 번 얻은 목록).
   8. **권한**: 조립 동안 들어온 STATE·장치 상실을 받은 뒤 `transport.grant(run.judgement, 보존한 첫 STATE 의 boot)`. 거짓이면 실행하지 않고 닫는다(`grant_refused`).
   9. 4–8 과 콘솔 시작에는 `autonomy.yaml real_startup_max_s` 기한 하나와 종료 신호를 적용한다. 기한은 각 호출에 **남은 시간**으로 넘긴다: 첫 STATE 대기, SLAM 브리지 연결(지금 고정 5 s 를 남은 시간과 작은 쪽으로), 콘솔 `start(timeout_s=)`(포기하면 늦은 바인드도 취소 플래그로 닫힘, HIL 과 같음). 각 단계 뒤에도 기한·신호를 본다(P2-2).

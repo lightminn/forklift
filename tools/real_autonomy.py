@@ -142,6 +142,11 @@ def run_real_precheck(args) -> int:
         record["refused"] = ["real_needs_device"]
         _write(record, None)
         return 2
+    bad = _inputs_refused({k: v for k, v in real_inputs(args).items() if k not in ("site_record", "registry")})
+    if bad:  # a FIFO would block the judgement's read with the device lock held (Codex U3e-1 impl round 2 P2-3)
+        record["refused"] = bad
+        _write(record, None)
+        return 2
     if _is_pty(args.device):
         record["refused"] = ["real_device_is_pty"]  # a real MCU never links by pty (the model's bench is HIL's)
         _write(record, None)
@@ -205,8 +210,6 @@ def real_run_refused(args) -> list:
     """Step 1 (plan 6.1): everything judged before anything is opened -- the REAL run's own arguments, the HIL and
     replay arguments refused, the inputs regular files (a FIFO would block a read with the device lock held, Codex
     U3e-1 round 3 P2-3), the output folder new and the console's address."""
-    import stat as stat_
-
     out = [f"real_with_{name}" for name, default in REAL_FORBIDDEN if getattr(args, name, default) != default]
     if args.out is not None:
         out.append("real_run_takes_out_dir_not_out")  # the run keeps run.jsonl in --out-dir and prints its end
@@ -223,7 +226,20 @@ def real_run_refused(args) -> list:
         out.append("out_dir_exists")  # a run's record is never written over an earlier one
     if args.scan_socket is not None and os.path.lexists(args.scan_socket):
         out.append("scan_socket_exists")  # never replaced: another run's receiver may be on it
-    for name, path in real_inputs(args).items():
+    out += _inputs_refused(real_inputs(args))
+    if args.host not in LOOPBACK and not args.console_lan:
+        out.append("console_host_needs_console_lan")
+    if args.console_lan and not args.console_origin_host:
+        out.append("console_lan_needs_origin_host")
+    return out
+
+
+def _inputs_refused(inputs: dict) -> list:
+    """Every input a regular file (``stat``: a FIFO, a device or a missing file refused by name)."""
+    import stat as stat_
+
+    out = []
+    for name, path in inputs.items():
         if path is None:
             continue
         try:
@@ -233,10 +249,6 @@ def real_run_refused(args) -> list:
             continue
         if not stat_.S_ISREG(st.st_mode):
             out.append(f"input_not_regular:{name}")
-    if args.host not in LOOPBACK and not args.console_lan:
-        out.append("console_host_needs_console_lan")
-    if args.console_lan and not args.console_origin_host:
-        out.append("console_lan_needs_origin_host")
     return out
 
 
@@ -300,7 +312,6 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     from forklift_core.live.executor_lock import DeviceBusy
     from forklift_core.live.real_loop import real_host
     from forklift_core.mcu_link.build_policy import Client
-    from forklift_core.sensors.scan_feed import bind_socket
 
     # step 3: the preparation (the operating paths: the site record, the registry, the bundle root)
     inputs = real_inputs(args)
@@ -359,11 +370,8 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     # step 6: the sources. The scan socket is this run's own: an existing path is refused (never replaced -- an ending
     # run's cleanup must not unlink a newer run's receiver, impl round 1 P2-2), and only the inode bound here is
     # removed at the end
-    if os.path.lexists(args.scan_socket):
-        end["reason"] = "scan_socket_exists"
-        return 2
     try:
-        sock = bind_socket(args.scan_socket)
+        sock = _bind_own_socket(args.scan_socket)
         st = os.lstat(args.scan_socket)
     except OSError as err:
         end["reason"] = f"scan_socket:{type(err).__name__}:{err}"
@@ -443,6 +451,24 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
 
 
+def _bind_own_socket(path):
+    """The operating run's scan receiver (plan 6.1 step 6, Codex U3e-1 impl round 2 P2-2): a non-blocking Unix datagram
+    socket bound at ``path`` only when nothing is there -- ``bind`` itself fails on an existing name, so no stale or
+    live receiver is ever replaced -- group-writable for the container's user, as ``scan_feed.bind_socket``."""
+    import socket as socket_
+
+    s = socket_.socket(socket_.AF_UNIX, socket_.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket_.SOL_SOCKET, socket_.SO_RCVBUF, 1 << 20)
+        s.bind(str(path))  # EADDRINUSE on any existing name
+        os.chmod(path, 0o660)
+        s.setblocking(False)
+        return s
+    except BaseException:
+        s.close()
+        raise
+
+
 def _drain(tr, host, deadline: float, stop, rlt) -> str | None:
     """Every byte pending on the board's fd read (each a STATE the transport and host take in order) and a hang-up
     seen, within the start's deadline; None when the fd is quiet and the device present."""
@@ -482,11 +508,13 @@ def _release_device(held, why: str) -> None:
 
 
 def _real_cleanup(held, record, end) -> bool:
-    """Step 11's order: the device first (revoke, one close), then the console, the sources and workers, the record
-    and the scan socket's file -- a step that fails does not skip the next. True when the record is complete."""
+    """Step 11's order: the device first (revoke, one close), the scan socket's name (still held, so it cannot be
+    taken over first), then the console, the sources and workers and the record -- a step that fails does not skip
+    the next. True when the record is complete."""
     try:
         _release_device(held, "run_end")
     finally:
+        _remove_scan_path(held)  # while the socket is still held: no other receiver can take the name over first
         try:
             if held.server is not None:
                 end["server_stopped"] = held.server.stop()
@@ -503,21 +531,24 @@ def _real_cleanup(held, record, end) -> bool:
                     if held.prep is not None and held.prep.jobs is not None:
                         held.prep.jobs.close()
             finally:
-                try:
-                    lost = None if held.tr is None else held.tr.lost
-                    if lost is not None:
-                        end["device_lost"] = dict(lost)
-                    ok = record.close(end)
-                    _write({"run": True, "end": end, "record_complete": ok}, None)
-                finally:
-                    if held.scan_path is not None:
-                        try:
-                            st = os.lstat(held.scan_path)
-                            if (st.st_dev, st.st_ino) == held.scan_ino:  # this run's socket, not a newer run's
-                                os.unlink(held.scan_path)
-                        except OSError:
-                            pass
+                lost = None if held.tr is None else held.tr.lost
+                if lost is not None:
+                    end["device_lost"] = dict(lost)
+                ok = record.close(end)
+                _write({"run": True, "end": end, "record_complete": ok}, None)
     return ok
+
+
+def _remove_scan_path(held) -> None:
+    """This run's scan socket name removed, only when it is still this run's inode (Codex U3e-1 impl rounds 1-2)."""
+    if held.scan_path is None:
+        return
+    try:
+        st = os.lstat(held.scan_path)
+        if (st.st_dev, st.st_ino) == held.scan_ino:
+            os.unlink(held.scan_path)
+    except OSError:
+        pass
 
 
 def _plain_output(out: Path, device: str | None) -> bool:

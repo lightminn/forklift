@@ -15,6 +15,7 @@ usage: python real_operating_child.py <config.json>"""
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -67,6 +68,7 @@ def main() -> int:
         if before_config is not None:
             before_config(fd)  # the executor lock on this very fd first, as on the board
         rlt._raw(fd)  # noqa: SLF001
+        os.set_blocking(fd, False)  # as the board's open_raw leaves it: a full pty is EAGAIN, never a wait
         return fd
 
     def factory(device):
