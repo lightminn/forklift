@@ -284,6 +284,20 @@ def test_a_passed_but_eroded_voxel_is_refuted_and_needs_a_recent_certification()
     assert mem.need_recent[idx[seen, 0], idx[seen, 1], idx[seen, 2]].all()
 
 
+def test_a_surely_hidden_voxel_gets_no_certification_from_the_frame():
+    # Codex 7e-2a round 2 P2: a hidden voxel's pixel reading a far background must not certify it
+    check = make()
+    mem = check.memory
+    idx, _ = mem.volume.centres(evaluated=True)
+    rear = (FACE - 0.4 - TIP, 0.0, 0.0)
+    far = np.full((CAM.height, CAM.width), 9.0)  # every ray passes everything
+    vis = np.zeros(len(idx), dtype=bool)  # ... but nothing was expected visible
+    mem.add_frame(1.0, far, CAM, check.optical_from_insertion(rear), check.surfaces, visible=vis)
+    assert not np.isfinite(mem.certified_s).any()
+    mem.add_frame(1.1, far, CAM, check.optical_from_insertion(rear), check.surfaces)  # the Isaac call certifies
+    assert np.isfinite(mem.certified_s).any()
+
+
 # --- the guard -------------------------------------------------------------------------------------------------------
 def test_a_generation_or_correction_change_forgets_before_anything_else():
     state = {"g": (1, ())}

@@ -273,6 +273,13 @@ class ClearanceMemory:
         if k > 0:
             free_grid = _box_filter(free_grid, k, np.min)
         certified = free_grid & self.volume.in_v
+        if visible is not None:
+            # 7e: only a voxel the frame was expected to see is certified by it -- a surely hidden one keeps what it
+            # had (plan 6.2 3; Codex 7e-2a round 2 P2: a stray far pixel certified a hidden voxel for the lifetime)
+            exp = np.zeros(self.volume.shape, dtype=bool)
+            ev = np.asarray(visible, dtype=bool) & inside
+            exp[idx[ev, 0], idx[ev, 1], idx[ev, 2]] = True
+            certified &= exp
         self.certified_s[certified] = float(stamp_s)
         seen = inside & in_v
         code = np.full(len(idx), 5, dtype=np.int8)
