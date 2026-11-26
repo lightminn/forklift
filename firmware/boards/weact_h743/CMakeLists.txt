@@ -51,6 +51,12 @@ set(FW_ESTOP_WAIVED 0)
 if(FW_ESTOP_WAIVER_RECORD AND NOT (FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal"))
     message(FATAL_ERROR "FW_ESTOP_WAIVER_RECORD is only for FW_BUILD=normal with FW_MOTOR_OUTPUT=1.")
 endif()
+if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal" AND FW_VEHICLE_HEADER)
+    # Operating plan 2026-11-26 2.4 (C12): the operating image's vehicle header comes only from this
+    # commit's config/real/vehicle.yaml, so the calibration it was built with is the commit's.
+    message(FATAL_ERROR "FW_VEHICLE_HEADER is not for the open normal (operating) build: its vehicle "
+        "header is generated from config/real/vehicle.yaml of this commit (give FW_PYTHON instead).")
+endif()
 if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal")
     if(NOT FW_ESTOP_WAIVER_RECORD)
         message(FATAL_ERROR "E-stop waiver record: none given. The open normal build needs a committed "

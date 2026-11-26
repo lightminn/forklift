@@ -302,6 +302,14 @@ def record_repo(tmp_path_factory):
     root = tmp_path_factory.mktemp("record_repo")
     repo = root / "repo"
     shutil.copytree(FIRMWARE, repo / "firmware", ignore=shutil.ignore_patterns("build"))
+    # the operating (open normal) build generates its vehicle header from the copy's own vehicle.yaml
+    # (operating plan 2026-11-26 2.4): the config, its chassis model, the generator and the package
+    shutil.copytree(REPO / "config" / "real", repo / "config" / "real")
+    shutil.copytree(REPO / "sim" / "models" / "dls08_measured", repo / "sim" / "models" / "dls08_measured")
+    (repo / "tools").mkdir()
+    shutil.copy2(REPO / "tools" / "real_vehicle_header.py", repo / "tools" / "real_vehicle_header.py")
+    shutil.copytree(REPO / "src" / "forklift_core", repo / "src" / "forklift_core",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "records").mkdir()
     (repo / "records" / "ipropi.md").write_text("# fake\n" + MARKER)
     (repo / "records" / "waiver.md").write_text("# fake\n" + WAIVER_MARKER)
@@ -321,10 +329,19 @@ def _git(repo: Path, *args: str) -> str:
                           cwd=repo, capture_output=True, text=True, check=True).stdout
 
 
-def _configure_in(repo: Path, header: Path, build: Path, *extra: str) -> subprocess.CompletedProcess:
+def _operating(extra) -> bool:
+    return "-DFW_MOTOR_OUTPUT=1" in extra and "-DFW_BUILD=normal" in extra
+
+
+def _configure_in(repo: Path, header: Path, build: Path, *extra: str, header_given: bool | None = None
+                  ) -> subprocess.CompletedProcess:
+    """The open normal (operating) build generates its header from the copy's vehicle.yaml (FW_PYTHON); every other
+    build takes the pre-generated one. ``header_given`` forces either (the refusal test)."""
+    given = not _operating(extra) if header_given is None else header_given
+    vehicle = [f"-DFW_VEHICLE_HEADER={header}"] if given else [f"-DFW_PYTHON={sys.executable}"]
     return subprocess.run(
         ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", *vehicle,
          f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}", *extra],
         capture_output=True, text=True)
 
@@ -535,6 +552,33 @@ def test_normal_build_opens_only_with_the_waiver_record(record_repo, tmp_path):
         assert "would cut the waiver= token" in _flat(res.stdout + res.stderr)
     finally:
         _git(repo, "tag", "-d", "t" + "x" * 80)
+
+
+def test_the_operating_build_refuses_a_given_vehicle_header(record_repo, tmp_path):
+    """Operating plan 2026-11-26 2.4 (C12, U3d): the open normal build's header comes only from the commit's
+    vehicle.yaml -- a header handed in is refused, before any other judgement."""
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md",
+                        header_given=True)
+    assert cfg.returncode != 0
+    assert "FW_VEHICLE_HEADER is not for the open normal (operating) build" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_the_operating_build_generates_its_header_from_the_commits_vehicle_yaml(record_repo, tmp_path):
+    """The header the operating build compiled is the generator's output for the copy's vehicle.yaml: the same
+    calibration id as the host's config (``RealVehicleConfig.calibration_id``)."""
+    from forklift_core.plant.real_vehicle import load_real_vehicle
+
+    repo, header = record_repo
+    build = tmp_path / "b"
+    cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    made = (build / "boards" / "weact_h743" / "generated" / "vehicle_config.h").read_text()
+    calib = load_real_vehicle(repo / "config" / "real" / "vehicle.yaml").calibration_id
+    assert f'"{calib}"' in made and made == header.read_text()  # the same generator, the same yaml
 
 
 def test_the_commissioning_open_build_carries_no_waiver(open_build):

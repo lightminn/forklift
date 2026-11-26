@@ -1,7 +1,11 @@
 # Run at every build (cmake -P): regenerate build_info.h from the current git state. configure_file
 # rewrites the header only when its content changes, so an unchanged tree does not recompile, and
 # a new commit or a dirty tree always reaches the ELF (board design 3.7; Codex B1 review).
-execute_process(COMMAND git describe --always --dirty --abbrev=12
+# --long: a tagged build is always <tag>-<n>-g<abbrev>, never the bare tag, so the commit
+# abbreviation is in every identity whatever the tag is named (operating plan 2026-11-26 U3, Codex
+# U1 round 4: a tag that looks like the long form must not be taken for a commit). The host reads
+# the abbreviation after the last -g (forklift_core.live.real_preconditions.image_commit).
+execute_process(COMMAND git describe --always --dirty --abbrev=12 --long
                 WORKING_DIRECTORY ${SRC_DIR}
                 OUTPUT_VARIABLE FW_GIT_DESCRIBE OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT FW_GIT_DESCRIBE)

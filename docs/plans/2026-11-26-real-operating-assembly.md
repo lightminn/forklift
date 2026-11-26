@@ -156,6 +156,8 @@
   - 이미지: USB 제품 문자열(빌드 종류·`git describe`·기록·면제 표식). 기록에는 그 빌드가 만든 차량 헤더의 보정 식별자(`firmware_vehicle_calibration_id`)를 함께 둔다. 이것이 지금 `vehicle.yaml` 보정 식별자와 같아야 한다.
     - 제품 문자열의 `git describe` 에 `-dirty` 가 있으면 거부한다.
     - 운영 빌드에서 `FW_VEHICLE_HEADER` 덮어쓰기를 금지한다(펌웨어 CMake 의 빌드 종류 검사, 한 줄). 그러면 헤더는 그 커밋의 `vehicle.yaml` 에서만 만들어진다. 지금 펌웨어 교차 시험(`tests/integration/test_firmware_cross.py` 298·499)이 정상 빌드에 덮어쓰기를 넘기므로, 그 fixture 가 헤더 생성 경로를 타도록 `vehicle.yaml`·생성 도구를 복사본에 넣고, 덮어쓰기 거부 시험을 따로 둔다(Codex 4 회차 P2).
+    - 구현(U3d): 보드 CMake 가 열린 normal 빌드(`FW_BUILD=normal`·`FW_MOTOR_OUTPUT=1`, 운영 이미지)에 `FW_VEHICLE_HEADER` 가 오면 구성 단계에서 거부한다(다른 판정보다 먼저). 교차 시험 fixture 는 복사본에 `config/real`·`sim/models/dls08_measured`·생성 도구·`src/forklift_core` 를 넣고, 운영 빌드만 `FW_PYTHON` 으로 헤더를 만든다(나머지 빌드는 지금처럼 미리 만든 헤더). 덮어쓰기 거부 시험과, 만든 헤더가 같은 생성기의 출력(같은 보정 식별자)인지 보는 시험을 둔다.
+    - 구현(U3d): 펌웨어 식별자의 `git describe` 에 `--long` 을 더했다. 태그가 붙은 커밋에서도 `<태그>-0-g<약어>` 라 커밋 약어가 늘 있고, 호스트 `image_commit` 은 마지막 `-g` 뒤를 읽는다. main 에는 태그가 없어 main 에서 만든 이미지의 제품 문자열은 바뀌지 않는다(태그 없음 → 약어만). U3d 이전에 정확히 태그된 커밋에서 만든 이미지는 태그만 보이므로, 태그가 긴 형식처럼 생긴 경우만 C12 기록의 제품 문자열·판독 해시로 걸러진다.
     - 굽은 이미지를 판독해 빌드 산출물과 sha256 을 대조한 결과도 기록에 둔다(벤치 5 분).
     - **운영 관문**: 최종 판독 뒤 다시 굽으면 S10 승인 기록(C1·C2·C3·C11·C12)이 무효다. 다시 판독·확인한다. 같은 커밋·같은 표식으로 다시 구우면 실행기는 구별할 입력이 없다. 그래서 이것은 사람이 지키는 관문이다(7 절, Codex 3 회차 P1-2).
   - 실제로 읽는 정지·시간 설정 파일 sha256: `obstacle_layer_real.yaml`, `obstacle_layer.yaml`(지연 예산), 오도메트리 나이 표(`odometry_age` 가 가리키는 파일), `vehicle.yaml`, `safety_watch.yaml`

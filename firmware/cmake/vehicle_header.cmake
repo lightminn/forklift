@@ -2,7 +2,8 @@
 # config/real/vehicle.yaml with tools/real_vehicle_header.py (plan P0-6: the vehicle values are
 # written once, in that YAML) and make <target> depend on it. Needs FW_PYTHON: a Python that can
 # import forklift_core. FW_VEHICLE_HEADER=<file> uses an already generated header instead (a build
-# outside the repository, e.g. the identity test's temporary copy).
+# outside the repository, e.g. the identity test's temporary copy) -- except on the open normal
+# (operating) build, which the board CMake refuses with it (operating plan 2026-11-26 2.4).
 function(fw_vehicle_header target out_dir)
     if(FW_VEHICLE_HEADER)
         configure_file(${FW_VEHICLE_HEADER} ${out_dir}/vehicle_config.h COPYONLY)

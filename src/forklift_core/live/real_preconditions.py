@@ -306,8 +306,11 @@ def _bind_bad(f: Facts, k: str, v) -> bool:
 
 def image_commit(product) -> str | None:
     """The commit abbreviation in a USB product string ``forklift-mcu <kind> <outputs> <git describe>...`` (the
-    firmware's ``git describe --always --dirty --abbrev=12``: a bare abbreviation or ``<tag>-<n>-g<abbrev>``); None
-    when absent, dirty or not hex."""
+    firmware's ``git describe --always --dirty --abbrev=12 --long``: a bare abbreviation when no tag is reachable,
+    else ``<tag>-<n>-g<abbrev>`` even on the tagged commit itself -- the abbreviation after the last ``-g``, whatever
+    the tag is named); None when absent, dirty or not hex. An image built before ``--long`` (U3d) from an exactly
+    tagged commit shows the bare tag: refused unless the tag itself looks like the long form, which only the C12
+    record's exact product string and readback hash then catch."""
     import re
 
     parts = str(product or "").split()
