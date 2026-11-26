@@ -142,6 +142,9 @@ class ManualWorker:
     def submit(self, job, fn) -> None:
         self.pending = (job, fn)  # the newest request only
 
+    def drop_pending(self) -> None:
+        self.pending = None
+
     def step(self) -> None:
         if self.pending is not None:
             job, fn = self.pending
@@ -191,6 +194,11 @@ class ThreadWorker:
         with self._lock:
             out, self.done = self.done, []
         return out
+
+    def drop_pending(self) -> None:
+        """A request not started yet goes (U3a: an evidence boundary); one already running ends stale by its key."""
+        with self._lock:
+            self.pending = None
 
     def close(self) -> None:
         with self._wake:

@@ -147,3 +147,44 @@ def test_an_unqualified_imu_refuses_the_submit_until_the_imu_bypass():
     assert r.loop._ready(r.now, "submit") != "imu:unqualified"  # noqa: SLF001
     status = r.loop.real_status(r.now)
     assert status["operating"] is True and status["imu_unqualified"] is True and "imu" in status["bypassed"]
+
+
+# --- Codex U3a round 1 ----------------------------------------------------------------------------------------------
+def test_a_boundary_drops_a_layer_request_not_started_yet():
+    """P2: a request waiting in the worker would compute the old grid and delay the new generation's."""
+    from forklift_core.live.real_layer import ManualWorker
+
+    r = _driving()
+    w = ManualWorker()
+    r.layer.worker = w
+    w.submit({"key": "old"}, lambda job: {"snapshot": None})
+    r.loop.scan_boundary(r.now, "lidar")
+    assert w.pending is None
+    w.step()
+    assert w.take() == []
+
+
+def test_a_late_reply_of_the_old_generation_never_refreshes_the_evidence():
+    """P2: after the boundary only a processed reply whose evidence began after it vouches for SLAM; the new layer's
+    install and that reply are each needed (readiness names what is still missing)."""
+    r = Rig(frames=True, real_requests=True, reloc=True, real_layer=True, operating=True)
+    r.start()
+    r.tick(40)
+    loop = r.loop
+    loop.scan_boundary(r.now, "lidar")
+    t_b = loop._t(r.now)  # noqa: SLF001
+    assert loop._fresh_ns is None and loop._ready(r.now, "drive") == "layer:missing"  # noqa: SLF001
+    # a reply of a scan taken before the boundary arrives late
+    r.slam.auto = False
+    r.slam.extra.append(r.slam.reply(t_b - 0.05))
+    r.tick()
+    assert loop._fresh_ns is None and loop.reloc_dropped["before_scan_boundary"] == 1  # noqa: SLF001
+    # the new layer is installed from the scans after the boundary; SLAM still has nothing new
+    r.tick(20)
+    assert r.layer.installed_key() is not None
+    assert loop._fresh_ns is None  # noqa: SLF001
+    assert (loop._ready(r.now, "drive") or "").startswith("slam:")  # noqa: SLF001 -- the new layer alone is not enough
+    # a reply of a scan after the boundary: both new pieces of evidence are there
+    r.slam.extra.append(r.slam.reply(loop._t(r.now)))  # noqa: SLF001
+    r.tick()
+    assert loop._fresh_ns is not None  # noqa: SLF001

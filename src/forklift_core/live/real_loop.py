@@ -406,6 +406,9 @@ class RealLoop:
         self._last_scan = None  # the newest scan id passed in this epoch
         self.provenance = None  # (epoch, attempt, scan id, stamp) of the reply the applied correction came from
         self._fresh_ns = None  # the newest real processed reply of this epoch (first beam, host ns)
+        # U3a: no reply whose evidence began before the operating run's last scan evidence boundary refreshes it
+        # (core seconds; a late reply of the old generation never vouches for the new one -- Codex U3a round 1 P2)
+        self._evidence_floor_s = float("-inf")
         self.reloc_dropped: Counter = Counter()
         self.reloc_gen = None  # the relocalization generation the loop opened
         self._reloc_reset_due = False  # the tracker's and the core's reset, after the mission is over
@@ -962,6 +965,8 @@ class RealLoop:
                 why = "epoch"
             elif lo < self.t_epoch:
                 why = "before_epoch"
+            elif lo < self._evidence_floor_s:
+                why = "before_scan_boundary"
             elif hi > t + 1e-9:
                 why = "future"
             elif self._last_stamp is not None and stamp < self._last_stamp:
@@ -1303,8 +1308,12 @@ class RealLoop:
             lay._placed_id = 0  # noqa: SLF001
             lay.last_scan_s.clear()
             lay.last_beam_s.clear()
+            drop = getattr(lay.worker, "drop_pending", None)
+            if drop is not None:
+                drop()  # a request not started yet would compute the old grid (Codex U3a round 1 P2)
             lay.evidence_boundary()
         self._fresh_ns = None
+        self._evidence_floor_s = t
         if self.attempt is not None:
             self._attempt_end(t, "refused", "relocalize_voided:scan_boundary")
         self._emit({"t": "scan_boundary", "ns": int(now_ns), "sensor": str(sensor), "count": self.scan_boundaries})

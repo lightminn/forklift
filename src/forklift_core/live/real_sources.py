@@ -12,11 +12,13 @@ behind the loop's calls, the replay's delivery rules (``replay_sources.ReplaySca
 - a socket error is a new generation and the run's end (``fatal = "scan_socket_error"``);
 - a frame carrying the synthetic mark is the run's end (``fatal = "scan_synthetic"``): an operating run never takes a
   simulator's frames;
-- an evidence boundary (unlock U3a, plan 2.5): a producer change or a frame that loses its qualification (no
-  ``frame_bound`` for it: ``to_layer_scan`` refuses it) -- even within one producer generation -- emits
-  ``("boundary", sensor)`` for the loop (its latch, ``scan_generation_changed``), drops the scans of this call from
-  before it, and a lost qualification opens a new feed generation told to SLAM (what waits or is in flight there is
-  cut); ``last_refusal`` keeps the newest refusal's reason for the console;
+- an evidence boundary (unlock U3a, plan 2.5; Codex U3a round 1 P1): once a scan was taken, every break of the input
+  generation -- the feed's generation raised for any reason (a producer change, ids going back, the clock pair
+  established again, a receive gap, a socket error) -- a ``clock_jump`` refusal (the break itself, before the clock is
+  established again), and a frame that loses its qualification (no ``frame_bound`` for it: ``to_layer_scan`` refuses
+  it, which opens a feed generation of its own so SLAM cuts what it holds) emit ``("boundary", sensor)`` for the loop
+  (its latch, ``scan_generation_changed``, with the evidence thrown away before any install) and drop the scans of
+  this call from before it; ``last_refusal`` keeps the newest refusal's reason for the console;
 - a receive gap found on a read drops the scans of this call from before it (the layer sees lost, connected, then
   only later scans; SLAM is never told an older generation after the gap's);
 - one call delivers one generation: scans read in the same call before the newest (feed, producer) generation are
@@ -64,6 +66,9 @@ class RealScanSource:
         self._producer = None  # the last accepted scan's producer generation (a gap's new feed generation keeps it)
         self.last_refusal: str | None = None  # the newest frame's refusal reason (feed or frame_bound), for the console
         self.last_boundary: str | None = None
+        self._seen_gen: int | None = None  # the feed generation last looked at (a change since is a boundary)
+        self._any_taken = False  # a scan was taken: before it there is no evidence a boundary could void
+        self._last_key = None  # the last taken scan's (feed, producer) generation
         self.last_delivered_s: float | None = None
 
     # --- the loop's calls ---------------------------------------------------------------------------------------------
@@ -111,12 +116,25 @@ class RealScanSource:
         self._events.append(("lost", self.sensor))
         self._tell((self.feed.generation, self._producer))
 
-    def _boundary(self, items, why: str) -> None:
-        """An evidence boundary (U3a): the loop latches on it; the scans of this call before it never go."""
+    def _boundary(self, items: list, why: str) -> None:
+        """An evidence boundary (U3a): the loop latches on it; the scans of this call before it never go (``items``
+        emptied in place). None before any scan was taken (no evidence to void)."""
+        if not self._any_taken:
+            return
         self.counts["boundaries"] += 1
         self.counts["before_boundary_dropped"] += sum(1 for it in items if it[2] is not None)
+        items.clear()
         self.last_boundary = why
+        self._last_key = None  # the next scan starts the new generation (no second boundary for the same break)
         self._events.append(("boundary", self.sensor))
+
+    def _watch_generation(self, items: list) -> None:
+        """A feed generation raised since the last look is a boundary (whatever raised it)."""
+        g = self.feed.generation
+        if self._seen_gen is not None and g != self._seen_gen:
+            why = self.feed.generation_why[-1] if self.feed.generation_why else "generation"
+            self._boundary(items, f"feed_generation:{why}")
+        self._seen_gen = g
 
     def _end(self, why: str) -> None:
         """The run's end: the reason fixed first (a SLAM error on the way never replaces it), the layer told the
@@ -157,14 +175,16 @@ class RealScanSource:
                 # from before the gap are dropped (the layer sees lost, connected, then only scans after it; SLAM is
                 # never told an older generation after the gap's -- Codex U2a round 1 P2-1)
                 self.counts["before_gap_dropped"] += sum(1 for it in items if it[2] is not None)
-                items = []
+                items.clear()
                 self._open_gap()
+                self._watch_generation(items)
             if self._gap_open:
                 self._gap_open = False
                 self._events.append(("connected", self.sensor))
             self._last_rx = recv
             synthetic_before = self.feed.synthetic_frames
             scan, why = self.feed.judge(data, recv)
+            self._watch_generation(items)  # a producer change, ids back, the clock established again: a boundary
             if self.feed.synthetic_frames != synthetic_before or (scan is not None and scan.meta.get("synthetic")):
                 self.counts["synthetic"] += 1  # whatever the verdict: an operating run takes no simulator frame
                 self._end("scan_synthetic")
@@ -172,10 +192,13 @@ class RealScanSource:
             if scan is None:
                 self.counts[f"feed_{why}"] += 1
                 self.last_refusal = f"feed:{why}"
+                if why == "clock_jump":
+                    self._boundary(items, "clock_jump")  # the break itself: no evidence on the old clock pair goes on
                 continue
-            if self._producer is not None and scan.producer_gen != self._producer:
-                self._boundary(items, "producer_changed")  # an adapter restart, however short (plan 2.5)
-                items = []
+            key = (scan.feed_gen, scan.producer_gen)
+            if self._last_key is not None and key != self._last_key:
+                self._boundary(items, "generation_changed")  # whatever the feed said: a scan of another generation
+            self._last_key = key
             self._producer = scan.producer_gen
             layer, lwhy = to_layer_scan(scan, self.cfg, self.start_ns, sensor=self.sensor)
             if layer is None:
@@ -184,13 +207,15 @@ class RealScanSource:
                 self.counts[f"layer_{lwhy}"] += 1
                 self.last_refusal = f"frame:{lwhy}"
                 self._boundary(items, f"qualification:{lwhy}")
-                items = []
                 self.feed.new_generation("qualification_lost")
+                self._seen_gen = self.feed.generation  # this boundary's own generation (not a second boundary)
                 self._tell((self.feed.generation, self._producer))
                 continue
+            self._any_taken = True
             items.append(("scan", scan, layer))
         if not items and not self._gap_open and self._last_rx is not None and now - self._last_rx > SCAN_GAP_NS:
             self._open_gap()  # a quiet call past the gap
+            self._watch_generation(items)
         if items:
             # one call delivers one generation: the scans before the newest (feed, producer) generation of this read
             # are dropped as the gap's are -- SLAM is never told an older generation after a newer one, and the layer

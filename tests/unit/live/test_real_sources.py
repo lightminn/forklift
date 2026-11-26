@@ -176,7 +176,8 @@ def test_a_gap_inside_one_read_drops_the_scans_before_it(frames):
     clock.queue = [frames[i][0], frames[k][0]]
     now = clock.ns = frames[k][0]
     told = len(slam.log)
-    assert src.scan_source_events(now) == [("lost", "lidar"), ("connected", "lidar")]
+    # U3a: the gap's new feed generation is an evidence boundary too (Codex U3a round 1 P1)
+    assert src.scan_source_events(now) == [("lost", "lidar"), ("boundary", "lidar"), ("connected", "lidar")]
     out = src.scans(now)
     assert src.counts["before_gap_dropped"] == 1 and src.counts["receive_gaps"] == 1 and len(out) <= 1
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
@@ -251,7 +252,7 @@ def test_one_call_delivers_one_generation(frames, monkeypatch):
     # U3a: the producer change is an evidence boundary -- the older scans of the read are dropped there
     assert src.counts["before_boundary_dropped"] == 2 and len(out) == 2
     assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")] and src.counts["boundaries"] == 1
-    assert src.last_boundary == "producer_changed"
+    assert src.last_boundary == "generation_changed"
     assert [e[2][2] for e in offers] == ids[2:]  # exactly the newer generation's two scans
     assert gens and all(g[1] in switched for g in gens) and all(e[1][1] in switched for e in offers)
 
@@ -675,3 +676,64 @@ def test_a_lost_qualification_in_one_producer_generation_is_a_boundary(frames, m
     offers = [e for e in slam.log[told:] if e[0] == "offer"]
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     assert [o[1][0] for o in offers] == [src.feed.generation] and gens[0][0] == src.feed.generation
+
+
+def _warm(src, tx, clock, frames):
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    return i
+
+
+def test_the_clock_established_again_in_one_producer_generation_is_a_boundary(frames, monkeypatch):
+    """Codex U3a round 1 P1: a feed generation raised for the clock (same producer) is a boundary, not only SLAM's."""
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    real = src.feed.judge
+    calls = {"n": 0}
+
+    def judge(data, recv):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            src.feed.new_generation("clock")  # the clock pair established again on this frame
+        return real(data, recv)
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    burst = frames[i:i + 3]
+    stamps = iter(r for r, _ in burst)
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, burst[-1][0]))
+    for _recv, data in burst:
+        tx.send(data)
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")]
+    out = src.scans(burst[-1][0])
+    assert src.counts["before_boundary_dropped"] == 1 and len(out) == 2
+    assert src.last_boundary == "feed_generation:clock"
+
+
+def test_a_clock_jump_refusal_is_a_boundary_at_once(frames, monkeypatch):
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    monkeypatch.setattr(src.feed, "judge", lambda data, recv: (None, "clock_jump"))
+    tx.send(frames[i][1])
+    clock.ns = frames[i][0]
+    assert src.scan_source_events(clock.ns) == [("boundary", "lidar")]
+    assert src.last_boundary == "clock_jump" and src.last_refusal == "feed:clock_jump"
+
+
+def test_a_boundary_before_any_scan_was_taken_is_none(frames, monkeypatch):
+    """Nothing taken yet: no evidence to void, so the start (the feed establishing) never latches the run."""
+    tx, rx = pair()
+    clock = Clock()
+    src = source(rx, clock)
+    monkeypatch.setattr(src.feed, "judge", lambda data, recv: (None, "clock_jump"))
+    tx.send(frames[0][1])
+    clock.ns = frames[0][0]
+    assert src.scan_source_events(clock.ns) == [] and src.counts["boundaries"] == 0
