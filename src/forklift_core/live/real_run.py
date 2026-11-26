@@ -312,6 +312,8 @@ class RunPrep:
     replay: object = None  # replay_assembly.ReplayPlan (7r), None for every other run
     site: object = None  # real_site.SiteBundle of the operating run (U2b), None for every other run
     lidar: object = None  # the operating run's LidarConfig, loaded once with the layer file (U2a; None on HIL/replay)
+    # U3c (plan 2.6): the pallet confirmation's lift target, test pallet and mass, from the record the assembly judged
+    operator_load: dict | None = None
 
 
 class _Handover:
@@ -1039,6 +1041,7 @@ def real_preconditions(prep, host, transport) -> list:
         changed_calib = False
     facts.vehicle_calibration_id = prep.vehicle.calibration_id
     out = rp.operating_preconditions(facts)
+    prep.operator_load = rp.operator_load(facts)  # the same record bytes as the judgement (plan 2.9)
     if changed_calib:
         out.append("precondition:files_changed:vehicle_calibration")
     # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
@@ -1319,6 +1322,11 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
             loop.check_pallet_pose = None if cfg.check_pallet_pose is None else tuple(cfg.check_pallet_pose)
             for key in ("mission_time_budget_s", "insert_time_min_s"):
                 setattr(loop, key, run_time_setting(prep.data, key, getattr(loop, key)))
+            # U3c (plan 2.9): an assembled operating run passed every assembly precondition; the confirmation's load
+            from forklift_core.live.real_preconditions import ASSEMBLY_CHECKS
+
+            loop.preconditions_passed = ASSEMBLY_CHECKS
+            loop.operator_load = prep.operator_load
         box["loop"] = loop
         arbiter.stop_evidence = lambda now: loop.physical_stop(now)
         if real_slam:

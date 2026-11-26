@@ -456,3 +456,37 @@ def test_an_unreadable_chassis_file_is_a_missing_fact_never_compared_away(site, 
     monkeypatch.setattr(rp, "_sha_or_none", fake)
     out = rp.operating_preconditions(site.facts())
     assert "precondition:facts_missing:chassis_urdf" in out
+
+
+# --- U3c (plan 2.9): the console's summary and the pallet confirmation's load ---------------------------------------
+def test_the_assembly_checks_are_every_precondition_but_the_run_time_ones():
+    from_items = {c for c, _ in rp.ITEMS.values()}
+    assert set(rp.ASSEMBLY_CHECKS) == from_items | {"C1", "C6"}  # the board and the bundle, judged without a record
+    assert "C7" not in rp.ASSEMBLY_CHECKS and "C8" not in rp.ASSEMBLY_CHECKS  # judged at readiness and the submit
+    assert len(rp.ASSEMBLY_CHECKS) == 12
+
+
+def test_the_confirmation_load_is_the_judged_records(site):
+    f = site.facts()
+    assert rp.operator_load(f) == {"lift_target_m": pytest.approx(float(f.settings["lift_target_m"])),
+                                   "test_pallet": f.s10a.pallet_id, "pallet_mass_kg": 4.5}
+    site.write_record({"schema": rp.SCHEMA, "items": {}, "config_exceptions": []})
+    assert rp.operator_load(site.facts()) is None  # no lift item: nothing to show
+
+
+def test_the_run_keeps_the_load_of_the_record_it_judged(site, monkeypatch):
+    """real_run.real_preconditions keeps operator_load on the prep from the same facts as the judgement."""
+    from types import SimpleNamespace
+
+    from forklift_core.live import real_run
+
+    f = site.facts()
+    monkeypatch.setattr(rp, "gather", lambda **kw: f)
+    prep = SimpleNamespace(paths=SimpleNamespace(preconditions=None, lidar_config=None, imu_config=None,
+                                                 settings=None, s10a=None, layer=None, budget=None, vehicle=None,
+                                                 watch=None),
+                           geometry=SimpleNamespace(inserted_offset_m=f.inserted_offset_m),
+                           vehicle=SimpleNamespace(calibration_id=f.vehicle_calibration_id), hashes={},
+                           operator_load=None)
+    real_run.real_preconditions(prep, None, None)
+    assert prep.operator_load == rp.operator_load(f) and prep.operator_load["pallet_mass_kg"] == 4.5

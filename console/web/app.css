@@ -447,6 +447,14 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .real-panel .rp-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .real-panel input { width: 72px; }
 .real-panel .btn.warn { border-color: var(--warn); color: var(--warn); }
+/* U3c (operating plan 2.9): precondition rows -- pass grey, blocked red, bypassed orange; the pallet confirmation's lines */
+.real-panel .rp-pres { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.real-panel .rp-pres[hidden], .real-panel .rp-checks[hidden] { display: none; }
+.real-panel .rp-pre.pass, .real-panel .rp-pre.note { color: var(--muted); }
+.real-panel .rp-pre.blocked { color: var(--crit); }
+.real-panel .rp-pre.bypassed { color: var(--warn); }
+.real-panel .rp-checks { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.real-panel .rp-checks input { width: auto; }
 /* the panel under both STOP places in the stacking (desktop top bar 25, phone bottom bar 40; 5c-1b r2-r3 P1), and on
    phones above the bottom STOP bar */
 @media (max-width: 760px) {

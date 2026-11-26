@@ -273,6 +273,10 @@ class RealLoop:
         self.mission_time_budget_s = rca.MISSION_TIME_BUDGET_S
         self.insert_time_min_s = rca.INSERT_TIME_MIN_S
         self.check_pallet_pose = None
+        # U3c (plan 2.9): the assembly's passed preconditions and the load the pallet confirmation's sixth line shows
+        # ({lift_target_m, test_pallet, pallet_mass_kg} from the record the assembly judged) -- the run sets them
+        self.preconditions_passed: tuple = ()
+        self.operator_load: dict | None = None
         self._insert_moving = False
         self._zero_judged = False
         self.scan_refusal = None  # () -> the scan source's newest refusal reason (the run sets it; plan 2.5 console)
@@ -451,6 +455,18 @@ class RealLoop:
         self._d5_armed_for = None
         self._d5_moved_for = None  # the mission a STATE showed moved within that span (latched)
         self._register_serial = 0  # every pallet registration on this run (Codex round 2 P2-1: same pose, same rev)
+        # U3c (Codex round 1 P1-2): the bypass region of the newest registration, shown before the eyes check it
+        self._register_region: dict | None = None
+        # U3c (Codex round 2 P1): every still span (standing, continuous odometry, fresh SLAM) gets a number; the
+        # pallet confirmation names the span its six lines were ticked in, so a move in between voids them
+        self._still_serial = 0
+        # its start on the D5-confirmation run: the odometry pose, the lift and the relocalization state -- a span
+        # ends when they move past the eyes' tolerance however slowly (Codex round 3 P1) or a relocalization opens or
+        # closes (round 3 P2), so the next span gets a new number
+        self._span_base: dict | None = None
+        # the span of the confirmation a submit used: its range keeps growing on every STATE until the mission's
+        # first ARM is written (Codex round 5 P2-2: the eyes' tolerance is from what they saw, not from the submit)
+        self._d5_used_span: dict | None = None
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -584,18 +600,30 @@ class RealLoop:
             rev_ = register_pallet(core, msg["pallet_id"], msg["pose"])
             if not self._d5_confirm_required():
                 return None, {"targets_revision": rev_}
+            # U3c (Codex round 2 P2-2): a registration the targets did not take (a carried pallet keeps no pose)
+            # changes nothing here -- no serial, no region, the earlier confirmation as it was
+            pose = core.targets.pallets[msg["pallet_id"]].pose
+            if pose is None or self.d5_region is None:
+                return "pallet_not_registered", {}
+            region = [float(v) for v in self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))]
             # U3b-2 (Codex rounds 1-2 P2): a pallet registered again -- even at the same pose and revision, as when a
             # pallet is swapped -- needs the eyes again, and a confirmation sent from the screen before it is stale
             self._register_serial += 1
             if self.operator_start is not None:
                 self.operator_start.void("registered")
-            return None, {"targets_revision": rev_, "register_serial": self._register_serial}
+            self._register_region = {"pallet_id": msg["pallet_id"], "register_serial": self._register_serial,
+                                     "targets_revision": rev_, "region": region}
+            return None, {"targets_revision": rev_, "register_serial": self._register_serial, "region": region}
         if kind == "operator_start":
             if core.relocalize_generation() is not None:
                 return "relocalize_required", {}  # 5c-2 (6, 2): no start check while the place is not known
             if not disarmed:
                 return "armed", {}
             if self.still_since_ns is None:
+                # U3c (Codex round 6 P3): not still now, so the span a confirmation names has ended -- the truck
+                # moved since its six lines were ticked
+                if self._d5_confirm_required() and type(msg.get("still_serial")) is int:
+                    return "still_changed", {}
                 # standing on the MCU samples but no fresh SLAM: say so (5c-2, 6, 3)
                 return ("slam_stale" if self.stand_since_ns is not None else "not_still"), {}
             lease = self.link.a.lease
@@ -693,6 +721,11 @@ class RealLoop:
             # U3b-2: what the D5 confirmation bound (pallet, revision, relocalization generation, region), or None
             "operator_start_binding": None if start is None or start.binding is None else dict(start.binding),
             "register_serial": self._register_serial if self._d5_confirm_required() else None,
+            # U3c (Codex round 2 P1): the still span now (None while not still) -- the confirmation names it
+            "still_serial": self._still_serial if self.still_since_ns is not None else None,
+            # U3c: the region the newest registration's confirmation would bind (the same d5_region), before it
+            "register_region": None if self._register_region is None or not self._d5_confirm_required()
+            else {**self._register_region, "region": list(self._register_region["region"])},
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
@@ -713,7 +746,40 @@ class RealLoop:
             "operating": self.operating,
             "imu_unqualified": self.imu_unqualified,
             "scan": {"last_refusal": self._scan_refusal_now(), "boundaries": self.scan_boundaries},
+            # U3c (plan 2.9): the operating run's precondition rows (None elsewhere)
+            "preconditions": self._preconditions_view(a) if self.operating else None,
         }
+
+    def _preconditions_view(self, a) -> dict:
+        """The console's precondition rows (plan 2.9): the assembly's passed items, then the run-time ones -- C7 IMU,
+        C8 D5 (the bypass, and without depth the per-pallet confirmation, which no bypass replaces) and the scan
+        source's newest refusal. A row's state is ``pass``, ``blocked`` or ``bypassed`` (the scan row: ``note``), with
+        the refusal as ``why``."""
+        def row(cid, item, state, why=None):
+            return {"id": cid, "item": item, "state": state, "why": why}
+
+        bypass = self.bypass
+        if "imu" in bypass:
+            imu = row("C7", "imu", "bypassed", "imu:unqualified" if self.imu_unqualified else None)
+        else:
+            imu = row("C7", "imu", "blocked", "imu:unqualified") if self.imu_unqualified else row("C7", "imu", "pass")
+        rows = [imu]
+        # the bypass first: with a depth source too it turns the pocket check off (Codex U3c round 1 P2-3)
+        if "d5_pocket" in bypass:
+            rows.append(row("C8", "d5_pocket", "bypassed"))
+        elif self.depth_source is not None:
+            rows.append(row("C8", "d5_pocket", "pass"))
+        else:
+            rows.append(row("C8", "d5_pocket", "blocked", "d5_pocket:no_depth_source"))
+        if self.depth_source is None:
+            shown = self.operator_start is not None and self._start_shown(a)
+            rows.append(row("C8", "pallet_confirm", "pass") if shown
+                        else row("C8", "pallet_confirm", "blocked", "operator_start:unconfirmed"))
+        # the scan source keeps its newest refusal after later frames are taken: told, not a block (``note``)
+        refusal = self._scan_refusal_now()
+        rows.append(row("C5", "scan", "note", None if refusal is None else str(refusal)))
+        return {"passed": list(self.preconditions_passed),
+                "load": None if self.operator_load is None else dict(self.operator_load), "runtime": rows}
 
     def _scan_refusal_now(self):
         try:
@@ -775,7 +841,7 @@ class RealLoop:
         self.reloc_gen = gen
         if self.attempt is not None:
             self._attempt_end(t, "refused", "relocalize_superseded")
-        self.still_since_ns = None
+        self._end_still()
         self.stand_since_ns = None
         if self.operator_start is not None:
             self.operator_start.void("relocalize")
@@ -1247,6 +1313,7 @@ class RealLoop:
         self.odom_pose = tuple(float(v) for v in step.pose)
         # U3b-2 (Codex round 3 P2): every STATE is judged against the eyes' baseline, latched until the first ARM --
         # a later sample of the same read never hides an earlier one past the tolerance (a broken odometry too)
+        self._span_note(float(state.lift_m), bool(step.continuity_broken))
         self._d5_watch(float(state.lift_m), bool(step.continuity_broken))
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
@@ -1254,7 +1321,7 @@ class RealLoop:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
             self.odom_gen += 1
             self._odom_good = False
-            self.still_since_ns = None
+            self._end_still()
             self.stand_since_ns = None
         else:
             self._odom_good = True
@@ -1554,11 +1621,67 @@ class RealLoop:
         sl = self.evidence.slam(now_ns)
         fresh_slam = sl.pose_reply_ns is not None and now_ns - sl.pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
         still = standing and self.odom_continuous and fresh_slam
+        lift = lifts[-1] if standing else None
+        if still and self.still_since_ns is not None and self._span_moved():
+            still = False  # the span ends here; the next still tick starts a new one with a new number
         if not still:
+            if self.still_since_ns is not None:
+                self._span_ended()
             self.still_since_ns = None
         elif self.still_since_ns is None:
             self.still_since_ns = int(now_ns)
+            self._still_serial += 1
+            self._span_base = {"pose": tuple(float(v) for v in self.odom_pose), "lo": lift, "hi": lift,
+                               "bad": lift is None, "gen": self.reloc_gen, "open": self.core.relocalize_generation()}
         return still
+
+    def _span_moved(self) -> bool:
+        """On the D5-confirmation run: whether the truck moved within the still span by more than the eyes' tolerance
+        between any two of its moments (Codex U3c rounds 4-5) -- the STATEs' notes (``_span_note``) -- or the
+        relocalization state is not the start's."""
+        b = self._span_base
+        if not self._d5_confirm_required() or b is None:
+            return False
+        return self._span_out(b) or b["gen"] != self.reloc_gen or b["open"] != self.core.relocalize_generation()
+
+    def _span_out(self, b: dict) -> bool:
+        """A span's notes past the tolerance: a bad sample, the lift range over the port's tolerance, or the odometry
+        more than half of D5_STILL_M / D5_STILL_RAD from the span's start (so any two poses are within the whole)."""
+        if b["bad"] or b["lo"] is None or b["hi"] - b["lo"] > float(getattr(self.port, "lift_still_m", 0.0)):
+            return True
+        x0, y0, h0 = b["pose"]
+        x, y, h = (float(v) for v in self.odom_pose)
+        return math.hypot(x - x0, y - y0) > D5_STILL_M / 2 or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD / 2
+
+    def _span_note(self, lift: float, broken: bool) -> None:
+        """Every STATE (each of a read on its own): the lift into the open span's range and the used span's, and
+        whether the odometry left them (D5-confirmation run only)."""
+        if not self._d5_confirm_required():
+            return
+        for b in (self._span_base, self._d5_used_span):
+            if b is None:
+                continue
+            if broken or not math.isfinite(lift) or b["lo"] is None:
+                b["bad"] = True
+                continue
+            b["lo"], b["hi"] = min(b["lo"], lift), max(b["hi"], lift)
+            if self._span_out(b):
+                b["bad"] = True
+
+    def _end_still(self) -> None:
+        """The still span ends outside ``_still`` (an odometry break, a relocalization opened): as there."""
+        if self.still_since_ns is not None:
+            self._span_ended()
+        self.still_since_ns = None
+
+    def _span_ended(self) -> None:
+        """A still span ended: on the D5-confirmation run a confirmation given in it and not yet used is void (the
+        truck moved after the eyes checked)."""
+        self._span_base = None
+        st = self.operator_start
+        if self._d5_confirm_required() and st is not None and st.binding is not None \
+                and st.binding.get("still_serial") == self._still_serial:
+            st.void("moved")
 
     def _t(self, now_ns: int) -> float:
         return (int(now_ns) - self.start_ns) / 1e9
@@ -1650,7 +1773,7 @@ class RealLoop:
             self._odom_broken = True
             self.odom_gen += 1
             self._odom_good = False
-            self.still_since_ns = None
+            self._end_still()
             self.stand_since_ns = None
         if self.operating and self.scan_events is not None and self.fatal_source is None:
             # U3a (Codex U3 split round 1 P1-2): the scan source's events before any install this tick -- a boundary
@@ -1707,7 +1830,7 @@ class RealLoop:
             # U3b-2 (Codex rounds 1-2 P1): the truck moved between the submit that used the D5 confirmation and the
             # first ARM written (an ARM queued and not yet out included) -- what the eyes cleared no longer holds;
             # the mission ends (a new check, a new submit)
-            self.operator_start.used, self._d5_base = None, None
+            self.operator_start.used, self._d5_base, self._d5_used_span = None, None, None
             core.commands.terminate("cancelled", t, "operator_start_moved")
         if core.slam is not None:
             core.slam["stop_now"] = still
@@ -1915,10 +2038,19 @@ class RealLoop:
         from forklift_core.live import real_assembly as asm_
 
         pid, rev, serial = msg.get("pallet_id"), msg.get("targets_revision"), msg.get("register_serial")
-        if not isinstance(pid, str) or type(rev) is not int or type(serial) is not int:
+        still = msg.get("still_serial")
+        if not isinstance(pid, str) or type(rev) is not int or type(serial) is not int or type(still) is not int:
             return "operator_start_needs_registration"
-        if rev != int(self.core.targets.revision) or serial != self._register_serial:
+        reg = self._register_region
+        if reg is None:
+            return "pallet_not_registered"  # no registration on this run yet
+        # the registration itself (Codex U3c round 2 P2-1): its own pallet and revision -- a list moved on since
+        # (a pose correction) is not what the eyes were shown
+        if (rev != int(self.core.targets.revision) or serial != self._register_serial
+                or reg["register_serial"] != serial or reg["targets_revision"] != rev or reg["pallet_id"] != pid):
             return "targets_changed"
+        if self.still_since_ns is None or still != self._still_serial:
+            return "still_changed"  # the truck moved since the six lines were ticked (Codex U3c round 2 P1)
         if asm_.s10_submit_refusal(self.core, pid) is not None:
             return "pallet_not_registered"
         if self.d5_region is None:
@@ -1929,13 +2061,18 @@ class RealLoop:
         """The binding of a confirmation ``_d5_refusal`` passed: the whole bypass region computed from that
         registration (plan 2.6: the region the eyes must clear is the region exempted)."""
         pid, rev = msg["pallet_id"], int(msg["targets_revision"])
-        pose = self.core.targets.pallets[pid].pose
-        region = self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))  # the check's own geometry
+        # the region computed at that registration with the check's own geometry -- the one the console showed
+        # (U3c); _d5_refusal made sure the registration is this one and the list has not moved since
+        region = self._register_region["region"]
         return {"pallet_id": pid, "targets_revision": rev, "register_serial": int(msg["register_serial"]),
-                "reloc_gen": self.reloc_gen, "region": [float(v) for v in region]}
+                "still_serial": int(msg["still_serial"]), "reloc_gen": self.reloc_gen,
+                "region": [float(v) for v in region]}
 
     def _d5_moved(self, lift, broken: bool = False) -> bool:
-        """This odometry pose and this lift against the baseline the D5 confirmation was used at."""
+        """This odometry pose and this lift against the baseline the D5 confirmation was used at, and the range of the
+        still span the confirmation was given in, from the eyes' check on (Codex U3c round 5 P2-2)."""
+        if self._d5_used_span is not None and self._span_out(self._d5_used_span):
+            return True
         b = self._d5_base
         x0, y0, h0 = b[1]
         x, y, h = (float(v) for v in self.odom_pose)
@@ -2150,6 +2287,7 @@ class RealLoop:
                     self._emit({"t": "operator_start_used", "ns": int(now_ns), **self.operator_start.used})
                     lift_ = float(self.samples[-1].state.lift_m) if self.samples else None
                     self._d5_base = (cmds.mission_id, tuple(float(v) for v in self.odom_pose), lift_)
+                    self._d5_used_span = self._span_base  # the same notes go on, until the first ARM is written
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None and self._planning_ready():
@@ -3045,6 +3183,7 @@ class RealLoop:
             permit.written(kind, seq, written_ns)
             if kind == "ARM":
                 self._d5_armed_for = self.core.commands.mission_id  # U3b-2: the eyes' span ends at the ARM written
+                self._d5_used_span = None  # its notes end there too (Codex U3c round 6 P3)
             if self.closing and kind == "DISARM" and self.host.state is not None:
                 self.closing_disarms.append((self.host.state.boot_id, int(seq) & 0xFFFF, int(written_ns)))
             self._emit({"t": "frame_written", "kind": kind, "seq": int(seq) & 0xFFFF, "written_ns": int(written_ns),
