@@ -124,6 +124,7 @@
     - 남은 시간이 `mission_time_budget_s`(새 설정, 잠정 300 s)보다 적으면 제출을 거부한다(`run_time_short`). 여유를 두려는 검사이고 보장은 아니다. 실행 시한은 벽시계로 흐르고 미션 작업 시계는 대기·일시정지를 빼기 때문이다(Codex 3 회차 P2).
     - 그래서 삽입 진입과 재개 직전에도 남은 시간(잠정 120 s)을 다시 본다. 모자라면 그 단계로 들어가지 않고 대기 프레임이다.
     - 시한이 실제로 닿으면 지금의 정지와 현장 복구 절차가 우선이다.
+    - 구현(U3b-1): `autonomy.yaml` `mission_time_budget_s`·`insert_time_min_s`·`real_startup_max_s`. 실행 시한은 `RealRun.run` 이 루프에 넘기는 하나다. 삽입 전환 직전에 모자라면 `arrive()` 를 하지 않고 대기 프레임(`run_time_short:insert`), 삽입 중 재개(0 프레임 뒤 첫 비영 프레임)는 비영 프레임이 실제로 쓰일 때까지 `run_time_short:resume` 으로 기다린다. 시한과 종료 신호는 모든 비 DISARM 프레임의 첫 바이트·이어쓰기 관문에서도 본다.
   - 기동 시한은 새 설정값(`autonomy.yaml` `real_startup_max_s`, 잠정 30 s)이다.
   - **수신량**: `ScanFeed.poll()` 은 큐를 비울 때까지 읽는다. REAL 어댑터는 한 틱에 읽는 원시 데이터그램 수를 제한한다(잠정 8, `read_capped` 로 센다). 남은 것은 버리지 않고 다음 틱에 읽는다(밀린 수신은 공백이 아니다). 한 틱에 층으로 가는 스캔은 마지막 4 개이고 나머지는 센다(`cut`). 원천 사건(`lost`·세대 변경)은 같은 틱의 송신 판단 전에 루프에 전한다.
 
@@ -173,6 +174,7 @@
       - 그 두 단계에 후진 구간이 있으면 채택을 거부한다.
       - 승인 통로는 승인 배치(`start_rear`, `check_pallet_pose`)에서 정한 선분 하나다. 시작점에서 **삽입 끝**(접근 직선 끝 + 접근 간격 + 목표 삽입 깊이, `pallet_mission.py` 399·2014)까지 잇고, 좌우 0.10 m 다. `approach`·`insert` 의 자세가 하나라도 그 밖이면 거부한다(Codex 4 회차 P1-1). 방위 변화 한도만으로는 15° 안의 S자 측면 우회를 못 막는다.
   - C4 의 `approved_limited` 는 같은 값(`approved_max_speed_mps`, 배치·경로 한도)으로 실행기에 전해진다.
+  - 구현(U3b-1, `live/real_case_a.py`): 배치·시작점·실행 시간은 제출마다 판정한다 — `RealSession.tick_start` 가 `link.begin` 뒤 이번 묶음의 첫 제출을 읽어 그 대상으로 `submit_refusal` 을 정한다(`commands.py` 무변경). 경로는 채택 훅(`live_mission_start` 의 `started`)에서 보고, 어기면 ARM 전에 미션이 끝난다. 시작점은 운영판에서 `_off_start` 가 `start_pose` 우회를 보지 않아, 제출·무장 준비·첫 비영 DRIVE 와 모든 ARM 송신(재시도 포함)에서 본다.
 - **출력**: `precondition:<항목>:<이유>` 목록이다.
   - 우회 불가 항목이 하나라도 있으면 조립을 거부한다. 콘솔은 뜨지 않으므로 종료 코드 2, 표준 출력, 기록의 끝 행에 사유를 남긴다.
   - 우회 가능 항목(C7)은 조립을 막지 않는다. 런타임 준비 판정에서 막히고 세션 우회로 연다.

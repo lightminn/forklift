@@ -968,6 +968,37 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     return out
 
 
+def run_time_setting(data: dict, key: str, default: float) -> float:
+    """A run-time margin from autonomy.yaml (U3b-1): a finite positive number, else the run is refused -- a NaN would
+    leave every comparison open (Codex U3b-1 round 1 P2-4)."""
+    v = data.get(key, default) if isinstance(data, dict) else default
+    try:
+        ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(float(v)) and v > 0
+    except OverflowError:
+        ok = False  # an integer too large for a float (round 2 P3)
+    if not ok:
+        raise AssemblyRefused([f"settings_unreadable:{key}"])
+    return float(v)
+
+
+def _case_a_started(prep):
+    """The operating run's adoption check (plan 2.4, U3b-1): the adopted plan's approach and insert go forward only
+    and stay within the approved corridor -- S10-A's taped start to the insert end on the approved placement -- else
+    the adoption raises and the loop ends the mission before any ARM."""
+    from forklift_core.live import real_case_a as rca
+
+    def started(t, inputs, plan, ready):
+        cfg = prep.cfg
+        if cfg.check_pallet_pose is None:
+            raise asm.RealRequireFailed("case_a:placement_unset")
+        seg = rca.corridor(cfg.start_rear, cfg.check_pallet_pose, prep.geometry.inserted_offset_m)
+        why = rca.path_refusal(plan, seg)
+        if why is not None:
+            raise asm.RealRequireFailed(why)
+
+    return started
+
+
 def board_facts(host, transport) -> dict:
     """The first STATE's facts for the operating preconditions: the opened fd's USB product string and serial, the
     first STATE read on that fd (the transport's own; else the host's latest), the host's build refusal for it, and
@@ -1150,7 +1181,8 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                           scan_max_age_s=float(lc["permission"]["sensor_timeout_s"]), worker=worker,
                           odom_now=lambda: box["loop"].odom_travel)
         hooks = asm.RealHooks(lift_m=lambda: float("nan") if host.state is None else float(host.state.lift_m),
-                              odom_base=odom_base, ready=lambda t, inputs: None, started=lambda *a: None,
+                              odom_base=odom_base, ready=lambda t, inputs: None,
+                              started=_case_a_started(prep) if sources.client is Client.REAL else (lambda *a: None),
                               record=lambda name, obj: _emit(events, {"t": "record", "name": str(name)}),
                               geometry=prep.geometry,
                               # the depth source's frame and check builder (PR 7; HIL has none: D5 only by the bypass)
@@ -1278,6 +1310,11 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                         scan_feed=scan_feed, events=events, operating=operating,
                         scan_events=scan_events if operating else None, imu_unqualified=imu_unqualified)
         loop.scan_refusal = lambda: getattr(scans, "last_refusal", None)
+        if operating:
+            # U3b-1 (plan 2.2, 2.4): the approved placement and the run-time margins (the run sets its deadline)
+            loop.check_pallet_pose = None if cfg.check_pallet_pose is None else tuple(cfg.check_pallet_pose)
+            for key in ("mission_time_budget_s", "insert_time_min_s"):
+                setattr(loop, key, run_time_setting(prep.data, key, getattr(loop, key)))
         box["loop"] = loop
         arbiter.stop_evidence = lambda now: loop.physical_stop(now)
         if real_slam:
@@ -1483,6 +1520,9 @@ class RealRun:
         sleep = sleep or (lambda s: (stop.wait(s) if stop is not None else time.sleep(s)))
         first = int(self.clock())
         deadline = first + int(float(duration_s) * 1e9)
+        # U3b-1 (plan 2.2): the one deadline the submit, the insert and every write read, and the stop flag
+        self.loop.run_deadline_ns = deadline
+        self.loop.run_stopping = (lambda: stop.is_set()) if stop is not None else None
         nxt = first
         self._permit_seen = getattr(self, "_permit_seen", 0)
         while True:

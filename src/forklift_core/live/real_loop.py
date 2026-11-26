@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from forklift_core.live import real_autonomy as ra
+from forklift_core.live import real_case_a as rca
 from forklift_core.live.odom_history import ENCODER_CUT, odom_entry, odometry_step
 from forklift_core.live.output_book import Frame, OutputBook
 from forklift_core.live.real_assembly import freeze_submit, known_request
@@ -114,15 +115,23 @@ class RealSession:
         # the run refuses new missions until the executor restarts (the stopping side)
         self.collect_failed: str | None = None
 
-    def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict, collect=None) -> tuple:
+    def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict, collect=None,
+                   submit_check=None) -> tuple:
         """``link.begin`` -> collect -> ``commands.apply`` -> collect (design 2.1 5): a mission the head ended (a latch
-        in ``permit.tick``) is collected before the apply could clear its final status."""
+        in ``permit.tick``) is collected before the apply could clear its final status. ``submit_check(queue)``: the
+        operating run's judgement of this batch's submit itself (unlock U3b-1) -- read after ``link.begin`` took the
+        console's requests in, it refuses through the batch's ``submit_refusal`` (the commands' first submit is the
+        only one a batch can accept; the commands themselves are not changed)."""
         from forklift_core.mission.commands import Context
 
         self.began = True  # before the call: a begin that raises part-way has taken requests in (6a design 5)
         stop_kind = self.link.begin(now_mono, feedback)
         if collect is not None:
             collect()
+        if submit_check is not None and context_kwargs.get("submit_refusal") is None:
+            queued = list(getattr(self.core.commands, "_queue", ()))  # read only (U3b-1)
+            if any(getattr(c, "kind", None) == "submit" for c in queued):
+                context_kwargs = {**context_kwargs, "submit_refusal": submit_check(queued)}
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, **context_kwargs))
         self.last_records = records  # kept before the second collect (a failing collect leaves them settled)
         if collect is not None:
@@ -252,6 +261,16 @@ class RealLoop:
         self.operating, self.scan_events = bool(operating), scan_events
         self.imu_unqualified = bool(imu_unqualified) and self.operating
         self.scan_boundaries = 0
+        # U3b-1 (plan 2.2, 2.4): the run's single deadline and stop flag (the run sets them), the run-time margins,
+        # and S10-A's approved placement (case A); whether this mission's insert moves now (a resume is the first
+        # moving frame after a zero one)
+        self.run_deadline_ns: int | None = None
+        self.run_stopping = None
+        self.mission_time_budget_s = rca.MISSION_TIME_BUDGET_S
+        self.insert_time_min_s = rca.INSERT_TIME_MIN_S
+        self.check_pallet_pose = None
+        self._insert_moving = False
+        self._zero_judged = False
         self.scan_refusal = None  # () -> the scan source's newest refusal reason (the run sets it; plan 2.5 console)
         # 6a-2b (design 10): the run's scan feed after the tick's STATE (None: the rig feeds before cycle), a source's
         # fatal error (set by the run's source guard or here; the run ends on it), the closing state (DISARM only,
@@ -1017,7 +1036,8 @@ class RealLoop:
                 abs(math.atan2(math.sin(float(rear[2]) - syaw), math.cos(float(rear[2]) - syaw))))
 
     def _off_start(self, rear) -> bool:
-        if self.start_rear is None or self._bypassed("start_pose") or rear is None:
+        # the operating run checks the start whatever the start_pose bypass says (plan 2.4, U3b-1)
+        if self.start_rear is None or (self._bypassed("start_pose") and not self.operating) or rear is None:
             return False
         d, yaw = self._start_gap(rear)
         return d > START_TOL_M or yaw > START_TOL_RAD
@@ -1702,7 +1722,8 @@ class RealLoop:
         self.serial = self.link.emergency(now_ns / 1e9)  # the emergency batch first (its serial: the send's reference)
         self._stop_kind, self._cmd_records = self.session.tick_start(
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
-                                        "localization_ok": True, "start_blocked": self._start_blocked()}, collect=lambda: self._collect(now_ns, t, rec))
+                                        "localization_ok": True, "start_blocked": self._start_blocked()}, collect=lambda: self._collect(now_ns, t, rec),
+            submit_check=(lambda q: self._operating_submit_refusal(q, now_ns)) if self.operating else None)
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
         if self.fatal_source is not None:
             # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed); the
@@ -1837,6 +1858,35 @@ class RealLoop:
             self._resession = False
             self.delay_bound.restart_check()
             self.permit.restart_session(now_ns)
+
+    def _partial_is_zero(self) -> bool:
+        """The frame left half written is a zero or a hold (some of its bytes are out)."""
+        partial = getattr(self.transport, "partial_frame", None)
+        if partial is None:
+            return False
+        b = next((f for f in self.book.frames if f.seq == (int(partial.seq) & 0xFFFF)), None)
+        return b is not None and (b.kind in HOLDING_KINDS or (b.kind == "drive" and float(b.speed_mps) == 0.0))
+
+    def _operating_submit_refusal(self, queued, now_ns: int) -> str | None:
+        """The operating run's judgement of this batch's submit (plan 2.2, 2.4): enough run time left, the truck at
+        the taped start whatever the start_pose bypass, and the submitted pallet on the approved placement."""
+        judged = int(self.clock())  # the instant it is judged at, not the tick's start (Codex U3b-1 round 1 P2-3)
+        if rca.remaining_s(self.run_deadline_ns, judged) < self.mission_time_budget_s:
+            return "run_time_short"
+        try:
+            # this tick's odometry under the applied correction (the tick's own control pose comes later)
+            rear = tuple(float(v) for v in self.core.hooks.slam_rear(self._t(judged)))
+        except Exception:  # noqa: BLE001 -- no pose now: no submit
+            rear = None
+        if self.start_rear is None or rear is None:
+            return "case_a:start_unknown"
+        if self._off_start(rear):
+            return "case_a:not_at_start"
+        sub = next((c for c in queued if getattr(c, "kind", None) == "submit"), None)
+        pallet = None if sub is None else self.core.targets.pallets.get(sub.pallet_id)
+        pose = None if pallet is None or pallet.pose is None else (
+            float(pallet.pose.x_m), float(pallet.pose.y_m), float(pallet.pose.yaw_rad))
+        return rca.placement_refusal(pose, self.check_pallet_pose)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         if self.session.collect_failed is not None:
@@ -2059,7 +2109,11 @@ class RealLoop:
             requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
                                                           command_.tracking, command_.rear)
             dwell_hold, safety_hold = command_.dwell_hold, command_.safety_hold
-            if tracking.status == "arrived":
+            if (tracking.status == "arrived" and self.operating and ms.phase == "approach"
+                    and rca.remaining_s(self.run_deadline_ns, int(self.clock())) < self.insert_time_min_s):
+                # U3b-1 (plan 2.2): too little run time for the insert -- its entry is withheld, a wait frame instead
+                arrival_wait = "run_time_short:insert"
+            elif tracking.status == "arrived":
                 arrival_ = core.arrive(t, tracking)
                 if arrival_.rear is not None:
                     rear = arrival_.rear
@@ -2646,6 +2700,15 @@ class RealLoop:
             if self.real_layer is not None and (not getattr(self.core.options, "obstacle_act", False)
                                                 or self.core.obstacle.get("layer") is not self.real_layer):
                 return "send:obstacle_layer_off", "alarm"  # design 3 at the write too (Codex 5a impl round 5 P1)
+            if self.operating:
+                # U3b-1 (plan 2.2, 2.4): the run's deadline and stop at the write itself (a DISARM is never judged
+                # here); the start before every ARM sent, its retries included, whatever the start_pose bypass
+                if self.run_deadline_ns is not None and ns >= int(self.run_deadline_ns):
+                    return "run_deadline", "alarm"
+                if self.run_stopping is not None and self.run_stopping():
+                    return "run_stopping", "alarm"
+                if frame.kind == "ARM" and (self._rear_now is None or self._off_start(self._rear_now)):
+                    return "not_at_start", "alarm"
             if frame.kind == "ARM" and why is not None and not ra.latches(why):
                 return f"arm_wait:{why}", "alarm"  # no new ARM while a wait holds: latch, a rearm (design 3)
             if frame.kind == "ARM":
@@ -2708,6 +2771,19 @@ class RealLoop:
             if (booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
                     and self._moved_for != self.core.commands.mission_id and self._off_start(self._rear_now)):
                 return "not_at_start", "alarm"  # 5c-2 (6, 6): at the first byte and a continuation alike
+            if self.operating and booked is not None and (
+                    booked.kind in HOLDING_KINDS or (booked.kind == "drive" and float(booked.speed_mps) == 0.0)):
+                # Codex U3b-1 round 1 P2-1: a zero or a hold going out (its continuation included) ends the insert's
+                # motion now -- a moving frame judged after it in the same transmit is a resume; if no byte of it goes
+                # out (a 0-byte EAGAIN), the transmit's end puts the motion back (round 2 P2-2)
+                self._insert_moving = False
+                self._zero_judged = True
+            if (self.operating and booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
+                    and self.core.ms.phase == "insert" and not self._insert_moving
+                    and rca.remaining_s(self.run_deadline_ns, ns) < self.insert_time_min_s):
+                # U3b-1 (plan 2.2): a resume inside the insert -- the first moving frame after a zero one, judged until
+                # one is written whole (a zero DRIVE between does not end the wait) -- needs the margin left
+                return "run_time_short:resume", "wait"
             if booked is not None and booked.kind == "drive":
                 # a normal DRIVE (moving or a small lift step alike, round 6 P1-3): a wait reason that came up since the
                 # decision, or 30 ms spent (round 4 P1-4)
@@ -2729,6 +2805,11 @@ class RealLoop:
                 limit = min(limit, decided + int((WRITE_MARGIN_S - WRITE_ALLOWANCE_S) * 1e9))
             judged = int(self.clock())
             self._judged_ns = judged
+            if self.operating and ((self.run_stopping is not None and self.run_stopping())
+                                   or (self.run_deadline_ns is not None and judged >= int(self.run_deadline_ns))):
+                # Codex U3b-1 round 1 P2-2: the stop and the deadline again at the last read before the write
+                return ("run_stopping" if self.run_stopping is not None and self.run_stopping() else "run_deadline"), \
+                    "alarm"
             if judged > limit:
                 if frame.kind == "DRIVE" and booked is None and decided is not None \
                         and judged > decided + int((WRITE_MARGIN_S - WRITE_ALLOWANCE_S) * 1e9):
@@ -2794,6 +2875,7 @@ class RealLoop:
         if self.real_layer is not None and not self.closing and permit.anchor_disarm(now_ns):
             pass  # an anchor DISARM queued (design 1.1): written with this send
         self._cancel_arm = None
+        moving_before, self._zero_judged, zero_out = self._insert_moving, False, False
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
             if kind == "DRIVE":
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
@@ -2820,6 +2902,14 @@ class RealLoop:
                 fb_ = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
                 if fb_ is not None and fb_.kind == "drive" and float(fb_.speed_mps) != 0.0:
                     self._moved_for = self.core.commands.mission_id  # 5c-2 (6, 6): the start check ends
+                if fb_ is not None and fb_.kind == "drive":
+                    # U3b-1: the insert moves from its first moving frame written whole until a zero one is
+                    self._insert_moving = self.core.ms.phase == "insert" and float(fb_.speed_mps) != 0.0
+                elif fb_ is not None and fb_.kind in HOLDING_KINDS:
+                    self._insert_moving = False  # a position hold written: the next moving frame is a resume
+                if fb_ is not None and (fb_.kind in HOLDING_KINDS
+                                        or (fb_.kind == "drive" and float(fb_.speed_mps) == 0.0)):
+                    zero_out = True
                 booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
                 if booked is not None and booked.kind == "drive":
                     self.waiting = None  # a normal DRIVE out: the wait is over
@@ -2828,6 +2918,8 @@ class RealLoop:
                 steer = self._steer_of.get(int(seq) & 0xFFFF)
                 if steer is not None:
                     self.steering_command = steer.copy()  # the next slew starts from what was written (P2-5)
+        if self._zero_judged and not zero_out and not self._partial_is_zero():
+            self._insert_moving = moving_before  # no byte of the judged zero went out: the motion never stopped
         if self._cancel_arm is not None:
             self.host.cancel_arm(now_ns, self._cancel_arm)  # the permit latches arm_failed / revoked on its tick
             self._cancel_arm = None

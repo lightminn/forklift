@@ -14,3 +14,9 @@ speeds:                      # rear-axle m/s per phase, all within s10a.yaml max
   return_home: 0.12
 mission_stages: [approach, insert, extract, transport, withdraw, return_home]
 imu: required                # the IMU watch (safety wiring design 4): required | none -- provisional required
+# the operating REAL run's run time (docs/plans/2026-11-26-real-operating-assembly.md 2.2, unlock U3b-1; provisional):
+# a submit needs mission_time_budget_s left on the run's deadline, the insert's entry and every resume inside it
+# insert_time_min_s; real_startup_max_s bounds the first STATE, the sources and the console together at start (U3d)
+mission_time_budget_s: 300
+insert_time_min_s: 120
+real_startup_max_s: 30
