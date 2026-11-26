@@ -7,7 +7,7 @@
                     [--estop-release-ms N] [--silent-at-ms N]
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
    --hand-turn-duration-ms D]
-                    [--commission-build 1 [--commission-time-ms N] [--commission-single 1]]
+                    [--commission-build 1 [--commission-time-ms N] [--commission-single 1] [--bench 1]]
                     [--outputs-locked 1]
                     [--encoder-sign-flip 0|1] [--encoder-frozen 0|1] [--encoder-test-thresholds 1]
                     [--stop-grace-ms N]
@@ -475,6 +475,9 @@ int main(int argc, char **argv)
     cfg = make_config(commission, commission_time_ms, locked || hil_plant, enc_test, stop_grace_ms);
     cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     cfg.commission_single_axis = arg_long(argc, argv, "--commission-single", 0) != 0; /* fw-single */
+    /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): --bench 1 -- the bench image (an open commissioning model that takes
+       BENCH_SET); the product string ends " lim=lr1 bench". */
+    cfg.bench_build = arg_long(argc, argv, "--bench", 0) != 0;
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.p.enc_frozen = (int)enc_frozen;

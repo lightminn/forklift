@@ -692,6 +692,13 @@ class CommissionSession(Session):
         # stop leaves out (--bypass), whether the board must carry lim=lr1, and a scenario (locked boards only)
         self.duty_max, self.ignore, self.large, self.scenario = duty_max, ignore, large, scenario
         self.preflight_product: str | None = None
+        # diag/fw-bench: the run's BENCH_SET (None: the image's defaults on a bench board), what the board took, and
+        # the KTH turn stop with its running count
+        self.bench: bl.BenchAsk | None = None
+        self.bench_taken: dict | None = None
+        self.stop_kth_turns: float | None = None
+        self._kth_prev: float | None = None
+        self._kth_rad = 0.0
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -727,18 +734,51 @@ class CommissionSession(Session):
             raise Refused("single-axis: a fw-single product with outputs_locked in STATE: the board disagrees")
         # the arming's zero COMMISSION fixes this run's axis on fw-single; every other path keeps L(0)
         self.b.host.commission_zero_axis = self.axis if single_image else 0
-        if self.axis >= 2 and not self.sensorless:
+        # diag/fw-bench: on the bench image every run sends its BENCH_SET before the ARM (the defaults when none was
+        # asked), so a previous run's overrides never carry over; bench values on another image are refused
+        bench_img = bl.bench_image(self.preflight_product)
+        if self.bench is not None and not bench_img:
+            raise Refused(f"bench: {self.preflight_product!r} is not the bench image (no product ending "
+                          f"'{' '.join(bl.BENCH_SUFFIX)}')")
+        if bench_img:
+            self._bench_set()
+            state = self.b.state
+        if self.axis >= 2 and not self.sensorless and self.window is not None:
             v = state.steering_rad if self.axis == 2 else state.lift_m
             lo, hi = self.window
             if not (v == v and lo < v < hi):
                 raise Refused(f"window: the axis value {v} is not inside ({lo}, {hi})")
         # every pre-ARM check passed: the board and conditions the ARM is about to be asked on (a refused board has no
         # row; whether the ARM was then taken is the "armed" row)
+        if self.axis >= 2 and not self.sensorless and self.window is None and not self._range_off():
+            raise Refused("window: steering and lift need --window unless the bench run turns their range off")
         self.b.emit({"t": "pre_arm_checked", "product": self.preflight_product,
                      "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
                      "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
                      "single_axis": single_image, "sensorless": self.sensorless,
                      "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
+
+    def _range_off(self) -> bool:
+        name = {2: "steer_range", 3: "lift_range"}.get(self.axis)
+        return self.bench is not None and name in self.bench.names
+
+    def _bench_set(self) -> None:
+        """diag/fw-bench: send this run's BENCH_SET and read the board's acceptance (its seq in STATE.last_rx_seq) and
+        its BENCH_OVERRIDES bit; anything else refuses the run before the ARM."""
+        b = self.b
+        ask = self.bench or bl.BenchAsk(self.axis, (), None, None)
+        blocked = b.host.bench_set(ask.bypass, ask.duty_max_e4(), ask.time_ms(), time.monotonic_ns())
+        if blocked is not None:
+            raise Refused(f"bench: BENCH_SET not queued ({blocked.reason})")
+        seq = b.host.last_queued_seq
+        if not b.run_until(lambda: b.state is not None and b.state.last_rx_seq == seq, 1.0):
+            why = None if b.state is None else b.state.reject_reason.name
+            raise Refused(f"bench: the board did not take BENCH_SET seq {seq} (reject {why})")
+        if not b.run_until(lambda: bool(b.state.fault_flags & FaultFlag.BENCH_OVERRIDES) == ask.overrides(), 0.5):
+            raise Refused("bench: the board's BENCH_OVERRIDES bit disagrees with the BENCH_SET it took")
+        self.bench_taken = {"seq": seq, "bypass": list(ask.names), "duty_max_e4": list(ask.duty_max_e4()),
+                            "time_ms": list(ask.time_ms()), "overrides": ask.overrides()}
+        b.emit({"t": "bench_set", **self.bench_taken})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
         raise Refused("the commissioning tool sends no DRIVE")
@@ -825,6 +865,17 @@ class CommissionSession(Session):
         if self.sensorless:
             return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
         v = state.steering_rad if self.axis == 2 else state.lift_m
+        if self.stop_kth_turns is not None and self.axis == 2 and v == v:
+            if self._kth_prev is not None:
+                d = math.remainder(v - self._kth_prev, math.tau)
+                if abs(d) > bl.BENCH_KTH_STEP_MAX_RAD:
+                    return "kth_step_ambiguous"  # too far in one STATE to tell the way round: stop, never guess
+                self._kth_rad += d
+            self._kth_prev = v
+            if abs(self._kth_rad) >= self.stop_kth_turns * math.tau:
+                return "kth_turns"
+        if self.window is None:
+            return None  # diag/fw-bench: the range is off for this run; the hold ends by time or the turn count
         lo, hi = self.window
         return None if v == v and lo <= v <= hi else "window"
 
@@ -1509,6 +1560,13 @@ def main(argv=None) -> int:
     cm.add_argument("--motor-detached", action="store_true",
                     help="fw-single steering/lift: the motor is off the mechanism (retyped on a terminal, recorded); "
                          "required there, since no end stop protects a coupled axis without its sensor checks")
+    # DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the bench image's session overrides (sent before every ARM on it)
+    cm.add_argument("--bench-bypass", help="fw-bench: comma names the board turns off for this run "
+                                           f"({', '.join(sorted(bl.BENCH_BYPASS_BITS))}); the stopping side never")
+    cm.add_argument("--bench-duty-max", type=float, help="fw-bench: this axis's duty limit for the run, (0, 1]")
+    cm.add_argument("--bench-time-max", type=float, help="fw-bench: this axis's continuous output limit for the run, s")
+    cm.add_argument("--stop-kth-turns", type=float,
+                    help="steering: stop once the KTH has turned this many turns either way (unwrapped per STATE)")
     cm.add_argument("--sensorless", action="store_true",
                     help="fw-single steering/lift with no KTH window (instead of --window): output and stop only")
     cm.add_argument("--wheels-lifted", action="store_true",
@@ -1695,6 +1753,42 @@ def main(argv=None) -> int:
     return 0
 
 
+def _bench_ask(args) -> bl.BenchAsk | None:
+    """diag/fw-bench: the run's BENCH_SET, or None when no bench argument was given (a bench board then gets its
+    defaults)."""
+    given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max")]
+    if all(v is None for v in given):
+        return None
+    try:
+        names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
+    except bl.LimitRefused as exc:
+        raise Refused(str(exc)) from None
+    for k in ("bench_duty_max", "bench_time_max"):
+        v = getattr(args, k, None)
+        if v is not None and not math.isfinite(v):
+            raise Refused(f"{k.replace('_', '-')}: a finite number")
+    ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
+                      getattr(args, "bench_time_max", None))
+    if (why := bl.bench_refusal(ask)) is not None:
+        raise Refused(why)
+    return ask
+
+
+def _kth_summary(samples: list, ch: int = 2) -> dict:
+    """diag/fw-bench: the steering KTH's travel over the run -- while the axis was driven (its applied duty non-zero)
+    and from then to the record's end (the coast included) -- unwrapped per STATE."""
+    idx = [i for i, s in enumerate(samples) if s.state.duty_e4[ch] != 0]
+    if not idx:
+        return {"driven_turns": 0.0, "driven_s": 0.0, "mean_turns_per_s": None, "to_end_turns": 0.0,
+                "ambiguous": False}
+    span = samples[idx[0]:idx[-1] + 1]
+    turns, amb = bl.kth_turns([s.state.steering_rad for s in span])
+    secs = (span[-1].state.mcu_time_us - span[0].state.mcu_time_us) / 1e6
+    to_end, amb2 = bl.kth_turns([s.state.steering_rad for s in samples[idx[0]:]])
+    return {"driven_turns": turns, "driven_s": secs, "mean_turns_per_s": turns / secs if secs > 0 else None,
+            "to_end_turns": to_end, "ambiguous": amb or amb2}
+
+
 def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[str, ...]]:
     """Design ② 2 and 10 and 2026-11-25 1.2: the tool's own limits, before anything is sent. Returns what the run
     asks, its profile and its bypass names."""
@@ -1703,6 +1797,19 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         names = bl.parse_bypass(getattr(args, "bypass", None))
     except bl.LimitRefused as exc:
         raise Refused(str(exc)) from None
+    # diag/fw-bench: a plain run only, and the KTH turn stop on the steering's own sensor
+    bench = _bench_ask(args)
+    if bench is not None and (getattr(args, "single_axis", False) or getattr(args, "scenario", None) is not None
+                              or getattr(args, "profile_tri", None) is not None):
+        raise Refused("bench: a plain run only (no --single-axis, --scenario or --profile-tri)")
+    turns = getattr(args, "stop_kth_turns", None)
+    if turns is not None:
+        if axis != 2:
+            raise Refused("stop-kth-turns: the steering axis (M) only")
+        if getattr(args, "sensorless", False):
+            raise Refused("stop-kth-turns: needs the KTH (not --sensorless)")
+        if not (math.isfinite(turns) and 0 < turns <= bl.BENCH_KTH_TURNS_MAX):
+            raise Refused(f"stop-kth-turns: in (0, {bl.BENCH_KTH_TURNS_MAX:g}]")
     if names and axis >= 2:
         raise Refused("bypass: the encoder early stop is a wheel's (L or R)")
     # fw-single (partial-parts plan 2026-11-25 PR-B): steering and lift only with the motor off the mechanism, with
@@ -1798,6 +1905,23 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         raise Refused("seconds: required without --scenario")
     peak = (profile.max_abs_e4 / 10000.0 if profile is not None else abs(args.duty)) * (1 if args.duty > 0 else -1)
     ask = bl.RunAsk(axis, peak, seconds)
+    if bench is not None and axis >= 2:
+        # diag/fw-bench: steering and lift under the run's own limits (the image's 0.15 / 2 s when not given), the
+        # tool's hold a margin under the board's time limit
+        duty_lim = bench.duty_max if bench.duty_max is not None else COMMISSION_DUTY_MAX
+        t_lim = (bench.time_max_s if bench.time_max_s is not None
+                 else bl.BENCH_DEFAULT_TIME_MS[axis] / 1000.0) - bl.TIME_MARGIN_S
+        if not 0 < abs(ask.duty) <= duty_lim + 1e-12:
+            raise Refused(f"duty must be nonzero and within +-{duty_lim:g} (the bench run's limit)")
+        if not COMMISSION_HOLD_MIN_S <= seconds <= t_lim:
+            raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {t_lim:g}] (the bench run's time limit less "
+                          f"{bl.TIME_MARGIN_S} s)")
+        range_off = (axis == 2 and "steer_range" in bench.names) or (axis == 3 and "lift_range" in bench.names)
+        if range_off and args.window is not None:
+            raise Refused("window: the range is off for this run -- give no --window (stop by time or turns)")
+        if not range_off and not sensorless and (args.window is None or not args.window[0] < args.window[1]):
+            raise Refused("window: steering and lift need --window LO HI with LO < HI")
+        return ask, profile, names + tuple(f"bench:{n}" for n in bench.names)
     if bl.is_large(ask):
         why = bl.large_refusal(ask, wheels_lifted=getattr(args, "wheels_lifted", False),
                                vcc_watched=getattr(args, "vcc_watched", False),
@@ -1822,6 +1946,13 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
     elif axis < 2 and args.window is not None:
         raise Refused("window: a wheel takes no window")
+    if bench is not None:
+        # diag/fw-bench, a wheel: the run's own limits may only be lower than the image's (1.0, the validator's ms)
+        if bench.duty_max is not None and abs(ask.duty) > bench.duty_max + 1e-12:
+            raise Refused(f"duty must be within +-{bench.duty_max:g} (the bench run's limit)")
+        if bench.time_max_s is not None and seconds > bench.time_max_s - bl.TIME_MARGIN_S:
+            raise Refused(f"seconds must be at most {bench.time_max_s - bl.TIME_MARGIN_S:g} (the bench run's limit)")
+        names = names + tuple(f"bench:{n}" for n in bench.names)
     return ask, profile, names
 
 
@@ -1960,7 +2091,16 @@ def execute(args, bench: Bench) -> dict:
             session.duty_max = bl.WHEEL_DUTY_MAX_OPEN if session.large else COMMISSION_DUTY_MAX
             session.ignore = bl.ignored_bits(names, AXES[args.axis])
             session.scenario = getattr(args, "scenario", None)
+            session.bench = _bench_ask(args)  # diag/fw-bench
+            session.stop_kth_turns = getattr(args, "stop_kth_turns", None)
+            if session.bench is not None and session.bench.duty_max is not None:
+                session.duty_max = (session.bench.duty_max if AXES[args.axis] >= 2
+                                    else min(session.duty_max, session.bench.duty_max))
             conditions = {"bypass": list(names), "large": session.large,
+                          "bench": None if session.bench is None else {
+                              "bypass": list(session.bench.names), "duty_max": session.bench.duty_max,
+                              "time_max_s": session.bench.time_max_s},
+                          "stop_kth_turns": session.stop_kth_turns,
                           "asked": {"duty": ask.duty, "seconds": ask.seconds},
                           "profile_tri": None if profile is None else list(args.profile_tri)}
             bench.emit({"t": "run_conditions", **conditions})
@@ -1969,6 +2109,8 @@ def execute(args, bench: Bench) -> dict:
             if getattr(args, "motor_detached", False):
                 _confirm_detached(args.axis)  # retyped on a terminal, whatever --yes (partial-parts plan v4)
                 bench.emit({"t": "confirmed", "what": "motor_detached", "axis": args.axis})
+            bench_note = ("" if conditions["bench"] is None else f", BENCH overrides {conditions['bench']}") + (
+                "" if session.stop_kth_turns is None else f", stop at {session.stop_kth_turns:g} KTH turns")
             if getattr(args, "scenario", None) == "duty_disarm":
                 what = (f"commission scenario duty_disarm: will ARM and drive wheel {args.axis} at duty {args.duty}, at "
                         f"most {args.seconds} s, until it has held that duty 0.5 s, then DISARM and watch it stop.")
@@ -1982,7 +2124,8 @@ def execute(args, bench: Bench) -> dict:
                         f"{ask.seconds} s (window {args.window}"
                         f"{'' if profile is None else f', triangle {list(args.profile_tri)}'}"
                         f"{'' if not names else f', checks off: {list(names)}'}"
-                        f"{', single-axis image: the other channels stay cut' if getattr(args, 'single_axis', False) else ''}).")
+                        f"{', single-axis image: the other channels stay cut' if getattr(args, 'single_axis', False) else ''}"
+                        f"{bench_note}).")
             _confirm(args, what + " Outputs on only after the IPROPI protection is confirmed (user decision); "
                                   "the window inside the mechanical limits.")
             if getattr(args, "markers", False):
@@ -2016,6 +2159,10 @@ def execute(args, bench: Bench) -> dict:
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
                 result.update(conditions, board_product=session.preflight_product)
+                if session.bench_taken is not None:
+                    result["bench_set"] = session.bench_taken  # what the board took, by its seq
+                if AXES[args.axis] == 2 and not getattr(args, "sensorless", False):
+                    result["kth"] = _kth_summary(bench.samples)  # diag/fw-bench: turns, time, mean speed
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
                     # (partial-parts plan v4)

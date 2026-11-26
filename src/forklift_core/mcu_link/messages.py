@@ -125,7 +125,7 @@ class ResetCause(IntEnum):
     OTHER = 4
 
 
-_FAULT_MASK = (1 << 25) - 1
+_FAULT_MASK = ((1 << 25) - 1) | (1 << 31)  # diag/fw-bench: bit 31 BENCH_OVERRIDES
 _STATE_FLAG_MASK = (1 << 8) - 1
 
 

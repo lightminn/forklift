@@ -158,3 +158,99 @@ def board_refusal(product: str | None) -> str | None:
 
 def confirmation_phrase(ask: RunAsk) -> str:
     return f"duty {abs(ask.duty):g}, {ask.seconds:g} s, wheels lifted and fixed"
+
+
+# ---- DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's session overrides ----------------------
+# The bench image ends its USB product string with exactly these tokens (gen_build_info.cmake).
+BENCH_SUFFIX = ("lim=lr1", "bench")
+# The checks a BENCH_SET may turn off for one run (firmware drive.h DRIVE_BENCH_*). The stopping side -- overcurrent,
+# driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun -- has no name and never will.
+BENCH_BYPASS_BITS = {"steer_range": 1 << 0, "lift_range": 1 << 1}
+# The bench image's defaults (the open commissioning build's limits, board_config.c, pinned by the unit test):
+# L, R duty 1.0 and the validator's ms ceiling, M, H 0.15 / 2 s.
+BENCH_DEFAULT_DUTY_E4 = (10000, 10000, 1500, 1500)
+BENCH_DEFAULT_TIME_MS = (0x7FFFFFFF // 1000, 0x7FFFFFFF // 1000, 2000, 2000)
+BENCH_TIME_MAX_MS = 0x7FFFFFFF // 1000
+BENCH_KTH_TURNS_MAX = 100.0
+BENCH_KTH_STEP_MAX_RAD = 0.75 * 3.141592653589793  # one STATE's change beyond this cannot be unwrapped safely
+
+
+def bench_image(product: str | None) -> bool:
+    """Whether a USB product string is the bench image's: the open commissioning prefix and the exact suffix."""
+    return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX)
+            and tuple(product.split()[-len(BENCH_SUFFIX):]) == BENCH_SUFFIX)
+
+
+def parse_bench_bypass(text: str | None) -> tuple[str, ...]:
+    if not text:
+        return ()
+    names = tuple(dict.fromkeys(n.strip() for n in text.split(",") if n.strip()))
+    unknown = [n for n in names if n not in BENCH_BYPASS_BITS]
+    if unknown:
+        raise LimitRefused(f"bench-bypass: unknown name(s) {unknown}; known {sorted(BENCH_BYPASS_BITS)} "
+                           "(the stopping side is never bypassed)")
+    return names
+
+
+@dataclass(frozen=True)
+class BenchAsk:
+    """One run's BENCH_SET: the bypass names, and the run axis's duty and time limits (the other axes at the image's
+    defaults)."""
+
+    axis: int
+    names: tuple[str, ...]
+    duty_max: float | None  # None: the image's default for the axis
+    time_max_s: float | None
+
+    @property
+    def bypass(self) -> int:
+        out = 0
+        for n in self.names:
+            out |= BENCH_BYPASS_BITS[n]
+        return out
+
+    def duty_max_e4(self) -> tuple[int, ...]:
+        out = list(BENCH_DEFAULT_DUTY_E4)
+        if self.duty_max is not None:
+            out[self.axis] = int(round(self.duty_max * 10000))
+        return tuple(out)
+
+    def time_ms(self) -> tuple[int, ...]:
+        out = list(BENCH_DEFAULT_TIME_MS)
+        if self.time_max_s is not None:
+            out[self.axis] = int(round(self.time_max_s * 1000))
+        return tuple(out)
+
+    def overrides(self) -> bool:
+        return (self.bypass != 0 or self.duty_max_e4() != BENCH_DEFAULT_DUTY_E4
+                or self.time_ms() != BENCH_DEFAULT_TIME_MS)
+
+
+def bench_refusal(ask: BenchAsk) -> str | None:
+    if ask.duty_max is not None and not 0 < ask.duty_max <= 1.0:
+        return "bench-duty-max: in (0, 1]"
+    if ask.time_max_s is not None and not 0.001 <= ask.time_max_s <= BENCH_TIME_MAX_MS / 1000.0:
+        return f"bench-time-max: in [0.001, {BENCH_TIME_MAX_MS / 1000.0:g}] s"
+    if "steer_range" in ask.names and ask.axis != 2:
+        return "bench-bypass steer_range: the steering axis (M) only"
+    if "lift_range" in ask.names and ask.axis != 3:
+        return "bench-bypass lift_range: the lift axis (H) only"
+    return None
+
+
+def kth_turns(values, step_max: float = BENCH_KTH_STEP_MAX_RAD) -> tuple[float, bool]:
+    """(turns, ambiguous): the unwrapped travel of a sequence of wrapped angles (rad, in (-pi, pi]) in turns; a step
+    beyond ``step_max`` makes the count ambiguous (a sample too far from the last to tell the way round)."""
+    import math
+
+    total, prev, ambiguous = 0.0, None, False
+    for v in values:
+        if v is None or not math.isfinite(v):
+            continue
+        if prev is not None:
+            d = math.remainder(v - prev, math.tau)
+            if abs(d) > step_max:
+                ambiguous = True
+            total += d
+        prev = v
+    return total / math.tau, ambiguous
