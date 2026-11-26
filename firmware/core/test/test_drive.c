@@ -2300,7 +2300,7 @@ static void bench_m_needs_a_fresh_count(void)
     three[1].u.commission.arm_gen = gen;
     three[2].u.commission.arm_gen = gen;
     seq = (uint16_t)(seq + 3);
-    tick_msgs(three, 2); /* ARM + M(0): the zero itself is refused by the freshness check */
+    tick_msgs(three, 2); /* ARM + M(0): refused -- the gap rule loses the count, the freshness clause guards too */
     CHECK_EQ_U(d.arm_gen, gen);
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
     tick_msgs(&three[2], 1); /* M(0.12) then: no zero was ever taken */
@@ -2324,6 +2324,38 @@ static void bench_m_needs_a_fresh_count(void)
     tick_msgs(four, 4);
     CHECK(d.bench_kth_lost);
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    /* a jump in DISARMED, then the next cycle a skipped 0x0000 frame with ARM + L(0) + M(0) + M(0.12): no step was
+       counted normally since the loss, so the ARM keeps it (Codex round 7 P2) */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    set_steer(0.1);
+    tick();
+    CHECK(d.bench_kth_lost);
+    in.abs_frame[0] = 0x0000;
+    gen = (uint16_t)(d.arm_gen + 1u);
+    link_msg five[4] = {arm_msg(seq, d.boot_id, echo_now()),
+                        commission_msg((uint16_t)(seq + 1), DRIVE_CH_L, 0, 150, echo_now()),
+                        commission_msg((uint16_t)(seq + 2), DRIVE_CH_M, 0, 150, echo_now()),
+                        commission_msg((uint16_t)(seq + 3), DRIVE_CH_M, 1200, 150, echo_now())};
+    for (int k = 1; k < 4; k++) {
+        five[k].u.commission.arm_gen = gen;
+    }
+    tick_msgs(five, 4);
+    CHECK(d.bench_kth_lost);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    /* once normal steps are counted again, the next ARM clears it and M is taken */
+    set_steer(0.1);
+    ticks(3);
+    send(simple(LINK_DISARM, (uint16_t)(seq + 4)));
+    ticks(5);
+    send(arm_msg((uint16_t)(seq + 5), d.boot_id, echo_now()));
+    CHECK(!d.bench_kth_lost);
+    send(commission_msg((uint16_t)(seq + 6), DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
 }
 
 static void bench_limits_are_the_sessions(void)

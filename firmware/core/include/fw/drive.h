@@ -231,7 +231,8 @@ typedef struct drive {
     bool bench_kth_have;
     uint64_t bench_kth_last_us; /* the last valid frame's MCU time */
     bool bench_kth_lost;        /* since the last ARM: a step the counter could not tell */
-    uint64_t bench_kth_lost_us; /* the cycle it was last found lost (an ARM in that cycle keeps it) */
+    uint64_t bench_kth_lost_us; /* the cycle it was last found lost */
+    uint64_t bench_kth_ok_us;   /* the cycle of the last step counted normally (an ARM clears a loss only after one) */
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

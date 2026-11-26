@@ -499,6 +499,7 @@ static void read_sensors(drive *d, const drive_inputs *in)
                     d->bench_kth_lost_us = d->time_us;
                 } else {
                     d->bench_kth_counts += (uint32_t)step; /* modular: the host reads differences */
+                    d->bench_kth_ok_us = d->time_us;
                 }
             }
             d->bench_kth_prev = a12;
@@ -848,8 +849,9 @@ static void handle_arm(drive *d, const link_msg *m)
     d->mode = DRIVE_MODE_ARMED;
     d->latched &= ~ARM_CLEARS;
 #if defined(FW_CORE_BENCH)
-    if (!(d->bench_kth_lost && d->bench_kth_lost_us == d->time_us)) {
-        /* diag/fw-bench: a new arming counts afresh -- except a loss found in this very cycle (Codex round 6) */
+    if (!d->bench_kth_lost || d->bench_kth_ok_us > d->bench_kth_lost_us) {
+        /* diag/fw-bench: a new arming counts afresh -- only once a step has been counted normally after the loss
+           (Codex rounds 6-7: not a loss found in this cycle, nor one the counter has not recovered from) */
         d->bench_kth_lost = false;
         d->latched &= ~DRIVE_FAULT_BENCH_KTH_LOST;
     }
