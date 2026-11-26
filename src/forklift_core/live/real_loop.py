@@ -455,6 +455,8 @@ class RealLoop:
         self._d5_armed_for = None
         self._d5_moved_for = None  # the mission a STATE showed moved within that span (latched)
         self._register_serial = 0  # every pallet registration on this run (Codex round 2 P2-1: same pose, same rev)
+        # U3c (Codex round 1 P1-2): the bypass region of the newest registration, shown before the eyes check it
+        self._register_region: dict | None = None
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -593,7 +595,11 @@ class RealLoop:
             self._register_serial += 1
             if self.operator_start is not None:
                 self.operator_start.void("registered")
-            return None, {"targets_revision": rev_, "register_serial": self._register_serial}
+            pose = core.targets.pallets[msg["pallet_id"]].pose
+            region = [float(v) for v in self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))]
+            self._register_region = {"pallet_id": msg["pallet_id"], "register_serial": self._register_serial,
+                                     "targets_revision": rev_, "region": region}
+            return None, {"targets_revision": rev_, "register_serial": self._register_serial, "region": region}
         if kind == "operator_start":
             if core.relocalize_generation() is not None:
                 return "relocalize_required", {}  # 5c-2 (6, 2): no start check while the place is not known
@@ -697,6 +703,9 @@ class RealLoop:
             # U3b-2: what the D5 confirmation bound (pallet, revision, relocalization generation, region), or None
             "operator_start_binding": None if start is None or start.binding is None else dict(start.binding),
             "register_serial": self._register_serial if self._d5_confirm_required() else None,
+            # U3c: the region the newest registration's confirmation would bind (the same d5_region), before it
+            "register_region": None if self._register_region is None or not self._d5_confirm_required()
+            else {**self._register_region, "region": list(self._register_region["region"])},
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
@@ -735,11 +744,14 @@ class RealLoop:
         else:
             imu = row("C7", "imu", "blocked", "imu:unqualified") if self.imu_unqualified else row("C7", "imu", "pass")
         rows = [imu]
-        if self.depth_source is not None:
+        # the bypass first: with a depth source too it turns the pocket check off (Codex U3c round 1 P2-3)
+        if "d5_pocket" in bypass:
+            rows.append(row("C8", "d5_pocket", "bypassed"))
+        elif self.depth_source is not None:
             rows.append(row("C8", "d5_pocket", "pass"))
         else:
-            rows.append(row("C8", "d5_pocket", "bypassed") if "d5_pocket" in bypass
-                        else row("C8", "d5_pocket", "blocked", "d5_pocket:no_depth_source"))
+            rows.append(row("C8", "d5_pocket", "blocked", "d5_pocket:no_depth_source"))
+        if self.depth_source is None:
             shown = self.operator_start is not None and self._start_shown(a)
             rows.append(row("C8", "pallet_confirm", "pass") if shown
                         else row("C8", "pallet_confirm", "blocked", "operator_start:unconfirmed"))

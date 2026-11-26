@@ -1012,6 +1012,7 @@ function frame(now) {
       stale: m.stale,
       armedCandidate: m.armedCandidate,
       placeGhost: m.placeMode ? m.placeGhost : null,
+      confirmRegion: m.realPanel?.confirmRegion ?? null, // U3c: the pallet confirmation's region
     },
     tok,
     m.view,

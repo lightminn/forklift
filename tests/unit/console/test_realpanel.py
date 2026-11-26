@@ -124,7 +124,7 @@ U3C_DRIVER = """
 import * as P from "file://%s";
 const base = {t: "real_status", session_epoch: 3, permit: {state: "OFF"}, mission: {status: "idle"}, bypassed: [],
   targets_revision: 5};
-const pre = {passed: ["C1", "C2"], load: {lift_target_m: 0.2, test_pallet: "P-S10", pallet_mass_kg: 4.5},
+const pre = {passed: ["C1", "C2"], load: {lift_target_m: 0.204, test_pallet: "P-S10", pallet_mass_kg: 4.56},
   runtime: [{id: "C7", item: "imu", state: "bypassed", why: "imu:unqualified"},
             {id: "C8", item: "d5_pocket", state: "blocked", why: "d5_pocket:no_depth_source"},
             {id: "C8", item: "pallet_confirm", state: "pass", why: null},
@@ -147,6 +147,21 @@ out.state = [P.startStateText({...d5, operator_start: true, operator_start_bindi
                {pallet_id: "P-S10", register_serial: 2, region: [1, 2, 1.8, 0.8, Math.PI / 2]}}),
              P.startStateText({...base, operator_start: true}), P.startStateText({...base, operator_start: false})];
 out.sig = P.statusSig(d5) === P.statusSig({...d5, register_serial: 3});
+out.newerList = [P.startFields(reg, d5, {targets_revision: 6}), P.startFields(reg, d5, {targets_revision: 5})];
+const rr = {pallet_id: "P-S10", register_serial: 2, targets_revision: 5, region: [1, 2, 1.8, 0.8, 0]};
+const d5r = {...d5, register_region: rr};
+out.region = [P.confirmRegion(reg, d5r), P.confirmRegion({...reg, serial: 1}, d5r),
+              P.confirmRegion({...reg, pallet: "Q"}, d5r), P.confirmRegion(reg, d5), P.confirmRegion(null, d5r)];
+out.regionText = P.regionText([1, 2, 1.8, 0.8, 0]);
+const g = {session_epoch: 3, lease_id: "L1"};
+const k0 = P.checksKey(d5r, g, reg, out.texts);
+out.keys = [k0 === P.checksKey(d5r, g, reg, out.texts),
+            k0 === P.checksKey(d5r, {...g, lease_id: "L2"}, reg, out.texts),          // another lease
+            k0 === P.checksKey(d5r, g, {...reg, pose: [1.5, 2, 0]}, out.texts),       // another registered pose
+            k0 === P.checksKey({...d5r, relocalize_generation: 4}, g, reg, out.texts), // a relocalization
+            P.checksKey(d5r, g, null, out.texts)];
+const opb = (st) => Object.fromEntries(P.bypassButtons(st, true).map((b) => [b.check, b.enabled]));
+out.opButtons = [opb({...d5, operating: true}), opb({...base, operating: false})];
 console.log(JSON.stringify(out));
 """
 
@@ -167,8 +182,8 @@ def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
     ]
     assert out["noRows"] == [[], [], []]
     assert out["texts"] == ["포크가 포켓 밖에 있음", "포켓 둘이 비어 있음", "팔레트 윗면과 등록 사각형 안에 다른 물체 없음",
-                            "승강 목표 0.20 m + 팔레트 높이까지 위 공간 비어 있음", "빈 포크·승강 내림",
-                            "C11 에서 승인한 시험 팔레트 P-S10, 질량 4.5 kg 이하"]
+                            "승강 목표 0.204 m + 팔레트 높이까지 위 공간 비어 있음", "빈 포크·승강 내림",
+                            "C11 에서 승인한 시험 팔레트 P-S10, 질량 4.56 kg 이하"]  # as approved, not rounded
     assert out["noTexts"] == [None, None]
     assert out["textsNoLoad"][3] == "승강 목표 — m + 팔레트 높이까지 위 공간 비어 있음"
     assert out["textsNoLoad"][5] == "C11 에서 승인한 시험 팔레트 —, 질량 — kg 이하"
@@ -178,3 +193,10 @@ def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
     assert out["state"][0] == "확인됨 · P-S10 · 등록 #2 · 영역 중심 (1.00, 2.00) m · 1.80×0.80 m · 90.0°"
     assert out["state"][1:] == ["확인됨", ""]
     assert out["sig"] is False  # a press drawn for one registration is not taken for the next
+    assert out["newerList"] == [None, {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2}]
+    assert out["region"] == [[1, 2, 1.8, 0.8, 0], None, None, None, None]  # only this console's registration
+    assert out["regionText"].endswith("중심 (1.00, 2.00) m · 1.80×0.80 m · 0.0°")
+    assert out["keys"] == [True, False, False, False, ""]  # the ticks are bound to the lease, pose and generation
+    assert out["opButtons"][0]["layer_timing"] is False and out["opButtons"][0]["operator_start"] is False
+    assert out["opButtons"][0]["imu"] is True and out["opButtons"][1]["layer_timing"] is True
+    assert out["opButtons"][1]["operator_start"] is True

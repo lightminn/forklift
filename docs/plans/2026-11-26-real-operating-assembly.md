@@ -251,10 +251,11 @@
 - 팔레트 확인 버튼(2.6)을 두고, 문구는 `profile.js` 거부 문구 표에 더한다.
 - 구현(U3c):
   - `real_status.preconditions` 는 운영판에서만 있다(그 밖은 `null`). `passed` 는 조립이 판정한 항목(`real_preconditions.ASSEMBLY_CHECKS`, C7·C8 을 뺀 열둘)이고 실행이 넣는다. 조립을 통과한 운영 실행만 이 루프를 만든다.
-  - `runtime` 줄은 `{id, item, state, why}` 다. C7 `imu`: 우회 중이면 `bypassed`, 아니면 미검증이면 `blocked`(`imu:unqualified`), 그 밖은 `pass`. C8 `d5_pocket`: 깊이 원천이 있으면 `pass`, 없으면 우회 중 `bypassed`·아니면 `blocked`(`d5_pocket:no_depth_source`). 깊이 원천이 없을 때만 C8 `pallet_confirm` 줄이 있고, 지금 등록의 확인이 보이면 `pass`, 아니면 `blocked`(`operator_start:unconfirmed`). 우회로 바뀌지 않는다.
+  - `runtime` 줄은 `{id, item, state, why}` 다. C7 `imu`: 우회 중이면 `bypassed`, 아니면 미검증이면 `blocked`(`imu:unqualified`), 그 밖은 `pass`. C8 `d5_pocket`: 우회 중이면 깊이 원천이 있어도 `bypassed`(코어가 포켓 검사를 건너뜀), 아니면 깊이 원천이 있으면 `pass`, 없으면 `blocked`(`d5_pocket:no_depth_source`). 깊이 원천이 없을 때만 C8 `pallet_confirm` 줄이 있고, 지금 등록의 확인이 보이면 `pass`, 아니면 `blocked`(`operator_start:unconfirmed`). 우회로 바뀌지 않는다.
   - 스캔 줄(C5 `scan`)은 원천이 마지막 거부를 지우지 않고 남기므로 막힘이 아니라 `note`(회색)이고, 거부가 있으면 `why` 에 싣는다.
+  - 등록 응답과 `real_status.register_region` 이 그 등록의 우회 영역(확인이 묶을 `d5_region` 과 같은 값)을 싣는다. 콘솔은 확인 **전에** 이 영역을 숫자와 지도 위 주황 점선으로 보인다.
   - `load` 는 여섯째·넷째 문구의 값이다: `lift_target_m`(설정), C11 기록의 `test_pallet`·`pallet_mass_kg`. 조립이 판정한 같은 기록 바이트에서 `RunPrep.operator_load` 로 넘긴다.
-  - 콘솔은 줄을 회색·빨강·주황('우회 중: …', IMU 는 '(기울기 감시 꺼짐)')으로 그린다. 확인이 필요한 실행(`register_serial` 이 정수)에서는 시작 확인 버튼이 '팔레트 확인'이 되고, 여섯 문구를 확인란으로 보인다. 여섯을 모두 표시해야 보내며, 등록 번호가 바뀌면 표시가 풀린다. 요청은 이 콘솔이 한 등록(팔레트·revision·`register_serial`, 등록 응답에서 받음)을 싣고, 입력이 등록과 다르거나 차의 지금 등록과 다르면 보내지 않는다. 확인 줄에는 묶인 팔레트·등록 번호·우회 영역(중심·크기·축)을 보인다. 확인이 필요 없는 실행은 지금처럼 빈 요청이다.
+  - 콘솔은 줄을 회색·빨강·주황('우회 중: …', IMU 는 '(기울기 감시 꺼짐)')으로 그린다. 확인이 필요한 실행(`register_serial` 이 정수)에서는 시작 확인 버튼이 '팔레트 확인'이 되고, 여섯 문구를 확인란으로 보인다. 여섯을 모두 표시해야 보낸다. 표시는 세션·lease·등록(팔레트·자세·revision·번호)·재위치 세대·문구에 묶여 하나라도 바뀌면 풀리고, 팔레트·자세 입력을 고치면(되돌려도) 풀리며, 보낼 때 소비된다. 승인값(질량·승강 목표)은 기록 그대로 보인다(반올림하지 않음). 운영판에서 차가 늘 거부하는 우회 버튼(`layer_timing`, 깊이 없는 `operator_start`)은 닫는다. 요청은 이 콘솔이 한 등록(팔레트·revision·`register_serial`, 등록 응답에서 받음)을 싣고, 입력이 등록과 다르거나 차의 지금 등록과 다르면 보내지 않는다. 확인 줄에는 묶인 팔레트·등록 번호·우회 영역(중심·크기·축)을 보인다. 확인이 필요 없는 실행은 지금처럼 빈 요청이다.
 
 ### 2.10 기록 형식 — C11 승강(학교 수준)
 

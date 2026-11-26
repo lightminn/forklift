@@ -2,8 +2,8 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, manualOnlyNotice, palletConfirmTexts, panelShown, poseOf,
-  preconditionRows, relocalizeClosedWhy, relocalizeResult, relocalizeView, startFields, startStateText, statusIsMine,
+import { answerKey, answerStillOpen, bypassButtons, checksKey, confirmRegion, manualOnlyNotice, palletConfirmTexts,
+  panelShown, poseOf, preconditionRows, regionText, relocalizeClosedWhy, relocalizeResult, relocalizeView, startFields, startStateText, statusIsMine,
   statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
 
 const $ = (id) => document.getElementById(id);
@@ -131,22 +131,32 @@ export function bindRealPanel(m, rejectText, clientId) {
   $("rp-start").onclick = guard(() => {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다");
     const st = m.session.realStatus;
-    const fields = startFields(panel.registered, st);
+    const fields = startFields(panel.registered, st, m.session.targets);
     if (fields === null) return say("팔레트를 (다시) 등록한 뒤 확인하세요");
-    if (palletConfirmTexts(st) !== null) {
-      // U3c (plan 2.6): the six lines ticked, for the registration drawn, and the inputs still name it
-      const boxes = [...document.querySelectorAll("#rp-checks input[type=checkbox]")];
-      if (!boxes.length || boxes.some((b) => !b.checked)) return say("여섯 항목을 모두 눈으로 확인하고 표시하세요");
+    const texts = palletConfirmTexts(st);
+    if (texts !== null) {
+      // U3c (plan 2.6): the six lines ticked for exactly the registration, lease and region on screen now
+      // (Codex round 1 P1-1), and the inputs still name the registration
       const reg = panel.registered;
+      if (!confirmRegion(reg, st)) return say("확인할 영역이 아직 오지 않았습니다 · 잠시 뒤 다시 보세요");
+      const box = $("rp-checks");
+      const boxes = [...box.querySelectorAll("input[type=checkbox]")];
+      if (box.dataset.key !== checksKey(st, gens(), reg, texts) || boxes.length !== texts.length
+        || boxes.some((b) => !b.checked)) return say("여섯 항목을 모두 눈으로 확인하고 표시하세요");
       const pose = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
       if ($("rp-pallet").value !== reg.pallet || !pose || pose.some((v, i) => Math.abs(v - reg.pose[i]) > 1e-9)) {
         return say("등록한 뒤 팔레트나 자세를 바꿨습니다 · 다시 등록하세요");
       }
+      for (const b of boxes) b.checked = false; // consumed by this one send (Codex round 1 P2-2)
     }
-    send("operator_start", fields, "시작 확인을 보냈습니다").then(() => {
-      for (const b of document.querySelectorAll("#rp-checks input[type=checkbox]")) b.checked = false;
-    });
+    send("operator_start", fields, "시작 확인을 보냈습니다");
   }, "rp-start");
+  // U3c (Codex round 1 P1-1): an edit of the pallet or the pose unticks the six lines, even if edited back
+  for (const id of ["rp-pallet", "rp-x", "rp-y", "rp-yaw"]) {
+    $(id).addEventListener("input", () => {
+      for (const b of $("rp-checks").querySelectorAll("input[type=checkbox]")) b.checked = false;
+    });
+  }
   $("rp-submit").onclick = guard(() => {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다"); // from the toggle's send on (r2 P2-3)
     const rev = submitRevision(panel.registered, m.session.realStatus, m.session.targets);
@@ -318,14 +328,20 @@ export function renderRealPanel(m, clientId) {
     pre.dataset.sig = rowSig;
   }
   pre.hidden = rows.length === 0;
-  // U3c (plan 2.6): the six lines of the pallet confirmation, unticked again for every new registration
+  // U3c (plan 2.6): the region the confirmation would bind, then the six lines -- only for this console's current
+  // registration, unticked again whenever the session, lease, registration, generation or lines change
   const texts = palletConfirmTexts(st);
+  const region = texts === null ? null : confirmRegion(panel.registered, st);
+  panel.confirmRegion = region; // the map draws it (main.js)
   const checks = $("rp-checks");
   checks.hidden = texts === null;
   $("rp-start").textContent = texts === null ? "시작 확인" : "팔레트 확인";
-  const checkSig = texts === null ? "" : `${st.session_epoch}:${st.register_serial}:${texts.join("|")}`;
-  if (checks.dataset.sig !== checkSig) {
-    checks.replaceChildren(...(texts ?? []).map((text, i) => {
+  const ckey = region ? checksKey(st, gens, panel.registered, texts) : "";
+  if (checks.dataset.key !== ckey) {
+    const head = document.createElement("div");
+    head.className = "hint";
+    head.textContent = region ? regionText(region) : "팔레트를 등록하면 확인할 영역과 여섯 항목이 나옵니다";
+    checks.replaceChildren(head, ...(region ? texts : []).map((text, i) => {
       const label = document.createElement("label");
       const box = document.createElement("input");
       box.type = "checkbox";
@@ -333,7 +349,7 @@ export function renderRealPanel(m, clientId) {
       label.append(box, ` ${i + 1}. ${text}`);
       return label;
     }));
-    checks.dataset.sig = checkSig;
+    checks.dataset.key = ckey;
   }
   const key = answerKey(st);
   panel.opKey = key;

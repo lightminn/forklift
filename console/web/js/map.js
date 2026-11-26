@@ -210,6 +210,22 @@ export function drawMap(cv, model, tok, view, layers) {
     }
   }
 
+  // U3c (operating plan 2.6, Codex round 1 P1-2): the region the pallet confirmation binds (pallet + bands) -- what
+  // the operator's eyes must clear, dashed in the warning colour
+  const cr = model.confirmRegion;
+  if (Array.isArray(cr) && cr.length === 5 && cr.every(Number.isFinite)) {
+    const [x, y] = P(cr[0], cr[1]);
+    c.save();
+    c.translate(x, y);
+    c.rotate(-cr[4]);
+    c.strokeStyle = tok.warn ?? "#f5a524";
+    c.lineWidth = 1.6;
+    c.setLineDash([6, 4]);
+    c.strokeRect((-cr[2] / 2) * sc, (-cr[3] / 2) * sc, cr[2] * sc, cr[3] * sc);
+    c.setLineDash([]);
+    c.restore();
+  }
+
   // plan as a road: wide grey band, darker core, reverse stretches dashed amber, nodes at cusps
   const plan = st?.plan;
   if (layers.plan && plan && plan.poses.length > 1 && st.mode !== "TELEOP") {

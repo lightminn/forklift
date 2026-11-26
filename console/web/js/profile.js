@@ -271,6 +271,9 @@ export const REJECT = {
   "operator_start:unconfirmed": "이 팔레트·등록 번호의 시작 확인이 없습니다 · 화면을 보고 다시 확인하세요",
   "not_ready:operator_start:unconfirmed": "시작 확인이 없습니다 · 화면을 보고 확인한 뒤 제출하세요",
   // U3c (operating plan 2.7, 2.9): the precondition row of an IMU that did not qualify
+  // U3c (Codex round 1 P3-2): the scan source's refusals the precondition row tells (real_sources.py), reason after
+  "feed:": "스캔 수신을 거부했습니다",
+  "frame:": "스캔 프레임이 자격을 잃었습니다",
   "imu:unqualified": "IMU 가 검증되지 않았습니다 · imu 우회를 켜야 제출·무장할 수 있습니다(우회 중에는 기울기 감시 꺼짐)",
   // U3b-1: the operating run's case A and run time
   run_time_short: "남은 실행 시간이 모자랍니다",

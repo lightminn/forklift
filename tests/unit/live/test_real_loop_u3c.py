@@ -4,9 +4,11 @@ confirmation, the scan source's newest refusal), each pass / blocked / bypassed 
 
 from forklift_core.live.real_preconditions import ASSEMBLY_CHECKS
 
-from real_loop_rig import Rig
+import pytest
+
+from real_loop_rig import PALLET, Rig
 from test_real_loop_console import ask
-from test_real_loop_u3b2 import _confirmed, register, rig
+from test_real_loop_u3b2 import REGION, _confirmed, register, rig
 
 
 def rows(r):
@@ -33,10 +35,31 @@ def test_without_depth_the_d5_rows_follow_the_bypass_and_the_confirmation():
     assert rows(r)[("C8", "pallet_confirm")] == ("blocked", "operator_start:unconfirmed")
 
 
-def test_a_run_with_depth_has_no_confirmation_row():
+def test_a_run_with_depth_has_no_confirmation_row_and_shows_its_bypass():
     r = rig(no_depth=False)
     got = rows(r)
     assert got[("C8", "d5_pocket")] == ("pass", None) and ("C8", "pallet_confirm") not in got
+    reply, _ = ask(r, "check_bypass", check="d5_pocket", on=True)
+    assert reply["t"] == "ack", reply
+    r.tick()
+    assert r.core.d5_bypassed and rows(r)[("C8", "d5_pocket")] == ("bypassed", None)  # Codex round 1 P2-3
+
+
+def test_the_registration_tells_its_region_before_the_confirmation():
+    """Codex round 1 P1-2: the region the confirmation binds is on screen before the eyes check it."""
+    r = rig()
+    assert r.loop.real_status(r.now)["register_region"] is None
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    assert reply["t"] == "ack" and reply["region"] == pytest.approx(REGION), reply
+    shown = r.loop.real_status(r.now)["register_region"]
+    assert shown["register_serial"] == reply["register_serial"] and shown["pallet_id"] == pid
+    assert shown["targets_revision"] == reply["targets_revision"] and shown["region"] == pytest.approx(REGION)
+    r.tick(30)
+    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=reply["targets_revision"],
+                register_serial=reply["register_serial"])
+    assert ok["t"] == "ack" and ok["region"] == pytest.approx(shown["region"])  # the region shown is the one bound
+    assert rig(no_depth=False).loop.real_status(0)["register_region"] is None  # with depth: no confirmation
 
 
 def test_an_unqualified_imu_is_blocked_until_bypassed():
