@@ -399,35 +399,41 @@ lift:
 
 U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험이다. **잠금(`unlock_incomplete`)은 그대로**이고, 운영 코드의 함수 서명에 판정 주입은 두지 않는다. 그래서 U3e-1 이 머지돼도 실차는 열리지 않는다.
 
+- **C13 정지 모델 근거**(Codex U3e-1 2 회차 P1-1, U3e-2 전에 닫음): `obstacle_layer_real.yaml` 의 `permission.latency_s`·`decel_mps2` 는 실행 층이 그대로 쓰는 정지 모델인데 지금 판정은 그 파일의 해시만 묶는다. 두 값에 `provenance`(`measured`·`source`·`until: S5`)를 두고(층 설정 로더가 받는 자리에, 팔레트 다리·`hwday` 도구가 같은 파일을 읽으니 그쪽 로더도 확인), `PROVENANCE_FILES` 에 `layer` 를, `REQUIRED_PROVENANCE` 에 그 두 값을 더한다. 잠정값이면 `precondition:C13:layer:<키>:unmeasured`, 총괄 예외 `decision_id` 가 있으면 통과. 지금 값(0.30 s·0.5 m/s²)은 잠정이라 거부된다.
+- **REAL 콘솔 접속 범위**(P1-2): REAL 은 기본으로 루프백(`127.0.0.1`)에만 묶는다. 다른 주소는 `--console-lan` 을 명시해야 하고 기록에 경고로 남긴다(운용 콘솔 결정 2026-10-13 '인증 나중' — 그때까지 같은 망의 누구나 lease 를 받을 수 있다는 것을 기록과 시작 출력에 적는다). REAL 에서는 WebSocket `Origin` 이 콘솔을 내준 그 주소·포트가 아니면 연결을 거부한다(브라우저의 다른 사이트 요청 차단). HIL 은 지금 그대로다.
+
 - **실행 경로**: `tools/real_autonomy.py --run --client real --device D --scan-socket P --slam-bridge S [--imu-serial N] --site-record R --bundle-root B --duration-s T --out-dir O`.
   1. **인자**(아무것도 열기 전): 장치·소켓·출력 폴더·시간, 그리고 HIL·재생 전용 인자(`--hil-model`·`--hil-inject`·`--replay`·`--allow-synthetic`·`--hil-slam-bridge`·`--map-bundle`)가 있으면 거부.
   2. **기록**: `O` 는 새 폴더여야 하고, `O/run.jsonl` 을 배타 생성(`O_CREAT|O_EXCL|O_NOFOLLOW`)해 연 fd 가 일반 파일인지 본다(U1 의 `_plain_output` 과 같은 이유, Codex U3e-1 P1-3). 기록을 열 수 있게 된 뒤의 거부는 종료 코드 2·표준 출력·끝 행에 같은 사유로 남는다.
   3. `prepare_run`(REAL 경로: 사이트 기록·등록부·번들 뿌리, `hil=False`).
   4. `RealTtyTransport.open(D)` — 잠금·pty 거부·같은 fd 의 USB 제품 문자열과 일련번호. REAL 호스트를 만들고 `host.link_identity(tr.usb_product)` 를 먼저 부른다(면제 경고 기록).
   5. **첫 STATE**: REAL 전용 대기(HIL 의 `_first_state` 는 정상 보드를 거부하므로 쓰지 않는다). `transport.first_state` 의 boot 를 보존한다.
-  6. 스캔 소켓을 묶고(이미 있는 경로는 거부, 끝날 때 지움) `make_real_sources`. `--imu-serial N` 이면 RealSense 를 열어 그 일련번호인지 보고 아니면 닫고 거부한다. 없으면 IMU 없음(미검증 — `imu` 우회로 연다).
+  6. 스캔 소켓을 묶고(이미 있는 경로는 거부, 끝날 때 지움) `make_real_sources`. **IMU 장치 연결은 U3e-1 범위 밖**이다(P2-2: RealSense SDK 호출은 취소·시한이 없고 장치 선택도 첫 장치뿐). IMU 없음 → 미검증 → `imu` 우회로 연다(2.7). 장치 연결은 SDK 호출 시한·일련번호 선택을 갖춘 뒤 따로 한다.
   7. `assemble_run` — `assembly_refusal` 이 선행 조건을 판정한다. 그 판정 목록을 `RealRun.judgement` 로 남긴다(조립이 한 번 얻은 목록).
   8. **권한**: 조립 동안 들어온 STATE·장치 상실을 받은 뒤 `transport.grant(run.judgement, 보존한 첫 STATE 의 boot)`. 거짓이면 실행하지 않고 닫는다(`grant_refused`).
-  9. 4–8 과 콘솔 시작에는 `autonomy.yaml real_startup_max_s` 기한 하나와 종료 신호를 적용한다.
+  9. 4–8 과 콘솔 시작에는 `autonomy.yaml real_startup_max_s` 기한 하나와 종료 신호를 적용한다. 기한은 각 호출에 **남은 시간**으로 넘긴다: 첫 STATE 대기, SLAM 브리지 연결(지금 고정 5 s 를 남은 시간과 작은 쪽으로), 콘솔 `start(timeout_s=)`(포기하면 늦은 바인드도 취소 플래그로 닫힘, HIL 과 같음). 각 단계 뒤에도 기한·신호를 본다(P2-2).
   10. 콘솔, 세션, 실행. 세션 시작을 시도한 뒤의 예외는 모두 `run.close()` 로 간다.
-  11. **닫기**: 링크가 살아 있으면 DISARM 확인 또는 확인 시한(`CLOSING_CONFIRM_S`)까지 fd·잠금을 쥔다. 장치 상실은 다시 열지 않고 `link_lost`, 확인 시한 초과는 `disarm_unconfirmed` 로 구별한다. 어느 출구든 권한을 폐기(`revoke`)하고 fd 는 한 번만 닫는다. 정리 순서는 원천 closers → 작업자(`close_workers`, 시한 있음) → 기록 → 스캔 소켓 파일 → fd(잠금 해제).
-  12. `--duration-s` 만료는 정상 종료(위 닫기)다.
+  11. **닫기**: 링크가 살아 있으면 DISARM 확인 또는 확인 시한(`CLOSING_CONFIRM_S`)까지 fd·잠금을 쥔다. 장치 상실은 다시 열지 않고 `link_lost`, 확인 시한 초과는 `disarm_unconfirmed` 로 구별한다. 닫기 판정이 끝나면 **먼저** 권한 폐기(`revoke`)와 fd 해제(잠금 해제, 한 번만)를 하고, 그 뒤에 막힐 수 있는 정리를 한다(P2-3): 콘솔 `stop()` → 원천 closers → 작업자(`close_workers`) → 기록 닫기 → 스캔 소켓 파일 삭제. 앞 단계가 실패해도 뒤 단계는 한다.
+  12. `--duration-s` 만료·신호는 위 닫기를 거쳐, **DISARM 확인과 기록 완결이 둘 다 있을 때만** 종료 코드 0 이다. 그 밖은 실패 코드(HIL 과 같은 구분).
 - **판정 주입 없음**(Codex P1-1): `assemble_run`·실행 함수의 서명은 바꾸지 않는다. 끝까지 도는 시험은 pytest 의 `monkeypatch` 로 `real_preconditions.operating_preconditions` 를 감싸 `unlock_incomplete` **한 항목만** 뺀다. 나머지 판정(C1–C14·설정 해시 재대조·`operator_load`)은 시험 사이트에서 실제로 돈다.
 - **D5 깊이 원천은 U3e-1 범위가 아니다**(7e-2b 보류). 운영은 `d5_pocket` 우회와 팔레트 확인(2.6)으로만 간다.
 - **끝까지 도는 시험**(`tests/integration/test_real_run_operating.py`, 실행 경로의 내부 함수를 직접 부름):
   - **장치**: 시험이 pty 를 열고 `mcu_model --hil-plant 0`(출력 열림·비상정지 배선 — `estop_wired`, 면제 분기는 타지 않음)을 붙인다. `RealTtyTransport.open(pty, allow_pty=True, product_reader=, serial_reader=)` 로 운영 제품 문자열(`forklift-mcu normal OPEN <약어> rec=…`)과 일련번호를 준다. 시험용 하위 클래스가 첫 쓰기와 모든 이어쓰기의 시각·프레임 종류·seq·실제 바이트 수를 남긴다(`EAGAIN` 은 0). "운동 바이트 0" 은 이 기록으로 판정한다(Codex P2-4).
+  - **근거 파일**(2 회차 P2-1): 운영 조립의 `gather` 는 저장소 루트 안의 근거 파일만 받는다. 그래서 시험 설정과 기록은 임시 폴더에 두되, 기록의 `evidence`·`basis_doc` 는 저장소에 넣는 시험 전용 파일(`tests/fixtures/operating/` 아래, '시험 전용 — 측정 아님' 표기)을 가리킨다.
   - **사이트**(Codex P2-2): 시험용 `lidar.yaml`(장착 측정됨·시간 상한·근거·`applies_to` 가 보내는 프레임과 일치)을 **먼저** 만들고, 그 해시로 조사 보고서·등록부·번들을 만든다. 팔레트는 2.6 m(3.0 m 는 승강 전 SLAM 유지 한도를 넘긴 기록이 있음). 시험용 `autonomy.yaml` 은 `mission_time_budget_s`·`insert_time_min_s` 를 줄여 실행 시간을 짧게 한다. S10 선행 조건 기록 C2–C14 는 그 설정·보드에 묶어 채운다(`test_real_preconditions.Site` 와 같은 방식).
   - **스캔**: 시험 스레드가 SDK 어댑터 프레임을 매 회전 새 ID·취득 시각으로 보낸다. 빈 통로를 덮는 범위 안의 유한한 먼 거리값이다(무효 빔 아님). 자세와 무관하므로 이 시험이 보는 것은 빈 통로의 실행과 정지까지다. 장애물 투영·SLAM 정합 정확도는 범위 밖이다.
   - **SLAM**: `fake_slam_bridge.FakeBridge` 에 실 브리지와 같은 비교 모드를 더한다. 기대 `map_id`·장착 변환을 받고, 맞는 `hello` 의 `laser_digest` 를 그 세션의 `ready` 에 싣는다. 비교 없는 기존 모드는 구형 브리지 거부 시험에 그대로 쓴다(Codex P1-2).
   - **경우**:
     1. **판정 무주입, 유효한 시험 사이트**: 조립이 거부되고 사유는 `precondition:unlock_incomplete` 하나다. 이것이 잠금까지 도달했다는 증거다. 장치에 쓴 바이트 전체 0.
-    2. **저장소 기본 설정(사이트·기록 없음)으로 실행 CLI 를 서브프로세스로**: 장치를 열기 전 또는 조립 전 거부, 장치 바이트 0. U3e-2 머지 표의 '저장소 기본값으로 어느 관문에서 거부되는지'에 쓰는 사유 목록을 남긴다.
+    2. **저장소 기본 설정으로 실행 CLI 를 서브프로세스로**(P3): 필수 인자를 모두 채우고 등록부에 없는 사이트 기록을 준다 → `precondition:site_bundle:no_row`, 장치는 열리지 않음(장치 경로에 남은 바이트 0). CLI 가 실제 `prepare_run` 을 탔다는 증거다. U3e-2 머지 표의 '저장소 기본값으로 어느 관문에서 거부되는지'는 저장소 설정 그대로 `gather`+`operating_preconditions` 를 돌린 사유 목록으로 따로 만든다.
     3. **정상**(Codex P2-3): 세션 DISARM 교환 뒤 `OFF`·정지 → lease·echo → 재위치 확인(요청 뒤 이번 epoch 의 `processed`·새 층 설치·`confirmed` 까지) → 팔레트 등록 → `d5_pocket`·`imu` 우회 → 팔레트 확인(`pallet_id`·`targets_revision`·`register_serial`·`still_serial`) → 제출 → ARM → 비영 DRIVE(모두 ≤ 0.06 m/s) → 승강 → `lifted` 확인 요청에 `operator_answer(confirm)` → `s10_lifted` 기록, 정지 DRIVE 수락, 미션 DISARM 과 같은 boot·seq 의 DISARMED STATE → 그 뒤 실행 종료의 별도 DISARM 확인.
     4. **출발 전 거부**: 팔레트 확인 없이 제출 → 정확한 거부 사유, 세션 전체 ARM·DRIVE 바이트 0. 주입 감싸기가 `unlock_incomplete` 외 사유 하나(예: C1 `dirty_image`)를 남기면 조립 거부·바이트 0.
-    5. **주행 중 스캔 단절**: 이동 DRIVE 수락을 먼저 확인한다. 그 뒤 스캔 송신을 끊고, 마지막 스캔의 유효기한·`scan_boundary`·정지 결정을 기록한다. 그 뒤 새 ARM·DRIVE(바퀴 0 인 승강·조향 DRIVE 포함)의 첫 쓰기·이어쓰기 0, DISARM 확인.
-    6. **도구가 직접 맡는 것**(실제 pty 경로): 실행 중 SIGTERM → 닫기 DISARM 확인과 잠금 해제(다른 프로세스가 장치를 잠글 수 있음). 실행 중 pty 상실 → `link_lost`, 재연결 없음, 권한 폐기.
-  - **CLI 거부**(서브프로세스): pty 장치, HIL·재생 전용 인자, 이미 있는 출력 폴더.
-- **머지 요청 표**(Codex P2-5): 5 절 항목마다 '실제 도구 배선까지 검증(위 시험)'과 '단위 시험에서만 검증'을 나눠 적는다. 단위에서만 남는 항목: 면제·비면제 신원(`test_estop_waiver`)·dirty(`test_real_preconditions` C1), 확인 뒤 lease·재위치·revision 변경(U3b-2·U3c), 계획 대기 중 시작점 이탈·배치·S자·남은 시간(U3b-1), 무장 중 보드 표식 변경(`test_real_tty_transport`), 빠른 스캔 재시작·같은 읽기 단절과 복귀·이전 층 작업 완료(U3a), 구형 브리지(`laser_checked`), 부분 쓰기 중 신호(`test_real_tty_transport`), `layer_timing` 거부·IMU 제출·무장 차단(U3a).
+    5. **주행 중 스캔 단절**: 이동 DRIVE 수락을 먼저 확인한다. 그 뒤 스캔 송신을 끊고, 마지막 스캔의 유효기한·`scan_boundary`·정지 결정을 기록한다. 종료 신호를 보내기 **전에** `scan_generation_changed`(또는 수신 공백) 래치와 그 래치의 DISARM 확인이 있어야 한다(2 회차 P2-4). 그 뒤 새 ARM·DRIVE(바퀴 0 인 승강·조향 DRIVE 포함)의 첫 쓰기·이어쓰기 0.
+    6. **도구가 직접 맡는 것**(실제 pty 경로): 실행 중(쓰기가 오가는 동안) SIGTERM → DISARM 확인 **전에는** 다른 프로세스가 장치 잠금을 얻지 못하고, 확인 **뒤에는** 얻는다(조기 fd 해제 검출). 실행 중 pty 상실 → `link_lost`, 재연결 없음, 권한 폐기.
+  - **CLI 거부**(서브프로세스): pty 장치, HIL·재생 전용 인자(`--hil-model-arg` 포함), 이미 있는 출력 폴더, `--console-lan` 없는 비루프백 `--host`.
+  - **콘솔**: REAL 실행에서 다른 `Origin` 의 WebSocket 은 거부, 같은 `Origin` 은 받음.
+  - **C13**: 잠정 `latency_s`·`decel_mps2` 거부, 측정됨 또는 총괄 예외면 통과(단위). 팔레트 다리·`hwday` 도구가 새 `provenance` 키로 깨지지 않음.
+- **머지 요청 표**(Codex P2-5, 2 회차 P2-4): 5 절 항목마다 셋 중 하나로 적는다 — '도구 배선까지 검증(위 시험)', '단위 시험이 그 전이를 실제로 만듦(시험 이름)', '미검증(이유)'. 시험 이름만 걸지 않고 그 시험이 해당 전이를 실제로 만드는지 확인해 적는다. 이미 알려진 것: `test_real_tty_transport` 의 보드 표식 시험은 권한을 얻기 전에 표식을 바꾸고, 부분 쓰기 시험은 `revoke("test")` 를 직접 부르며, U3b-1 시작점 시험은 제출 전 이탈이다 — U3e-1 에서 각각 '권한 뒤 표식 변경으로 철회', '실제 신호 배선', '계획 대기 중 이탈' 시험을 더하거나 미검증으로 적는다.
 - **게이트**: 미션 코어·장애물 층·Isaac 러너를 건드리지 않는다(실행 도구·`real_run` 조립의 판정 목록 보존·기록 열기·시험만). 재생 게이트는 필요 없다. 회귀는 `test_real_run_hil*`(4 CPU), 브리지 시험, 전체 pytest 를 최종 트리에서 한 번.
 
 #### 6.1 자체 검토
@@ -450,6 +456,13 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
 | agy ⑧ | D5·IMU 장치 경로 | D5 범위 밖 명시, `--imu-serial` |
 | agy ⑨ | 단절 판정 시점과 큐 | 경우 5 의 기록 항목 |
 | agy ⑪⑫ | 회귀 게이트·만료·소켓 파일·출력 폴더 | 게이트 줄, 12 단계, 6 단계, 2 단계 |
+| Codex 2 회차 P1-1 | C13 이 `obstacle_layer_real.yaml` 의 정지 모델 값 근거를 검사하지 않음 | `provenance` 추가·`PROVENANCE_FILES` 에 `layer`, 잠정값 거부(U3e-1) |
+| Codex 2 회차 P1-2 | REAL 콘솔이 외부 주소에 묶이면 같은 망 누구나 lease | 기본 루프백, `--console-lan` 명시·경고 기록, REAL `Origin` 검사 |
+| Codex 2 회차 P2-1 | 임시 근거 경로는 운영 `gather` 가 거부 | 저장소의 시험 전용 근거 파일 |
+| Codex 2 회차 P2-2 | 기동 기한 집행 위치·RealSense 시한·장치 선택 | 남은 시간을 각 호출에, IMU 장치 연결은 범위 밖 |
+| Codex 2 회차 P2-3 | 콘솔 회수·폐기와 fd 해제 순서·종료 코드 | 11·12 단계, SIGTERM 잠금 시험 |
+| Codex 2 회차 P2-4 | 머지 표의 단위 시험 인용이 전이를 입증 못함 | 셋 중 하나로 적기, 세 시험 보강 또는 미검증 |
+| Codex 2 회차 P3 | CLI 사례 2 가 인자 누락으로도 합격 | 필수 인자 채우고 `site_bundle:no_row` |
 
 ## 7. 남는 위험과 실기 전용 항목
 
