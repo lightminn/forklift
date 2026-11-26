@@ -972,7 +972,11 @@ def run_time_setting(data: dict, key: str, default: float) -> float:
     """A run-time margin from autonomy.yaml (U3b-1): a finite positive number, else the run is refused -- a NaN would
     leave every comparison open (Codex U3b-1 round 1 P2-4)."""
     v = data.get(key, default) if isinstance(data, dict) else default
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or v <= 0:
+    try:
+        ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(float(v)) and v > 0
+    except OverflowError:
+        ok = False  # an integer too large for a float (round 2 P3)
+    if not ok:
         raise AssemblyRefused([f"settings_unreadable:{key}"])
     return float(v)
 

@@ -270,6 +270,7 @@ class RealLoop:
         self.insert_time_min_s = rca.INSERT_TIME_MIN_S
         self.check_pallet_pose = None
         self._insert_moving = False
+        self._zero_judged = False
         self.scan_refusal = None  # () -> the scan source's newest refusal reason (the run sets it; plan 2.5 console)
         # 6a-2b (design 10): the run's scan feed after the tick's STATE (None: the rig feeds before cycle), a source's
         # fatal error (set by the run's source guard or here; the run ends on it), the closing state (DISARM only,
@@ -1858,6 +1859,14 @@ class RealLoop:
             self.delay_bound.restart_check()
             self.permit.restart_session(now_ns)
 
+    def _partial_is_zero(self) -> bool:
+        """The frame left half written is a zero or a hold (some of its bytes are out)."""
+        partial = getattr(self.transport, "partial_frame", None)
+        if partial is None:
+            return False
+        b = next((f for f in self.book.frames if f.seq == (int(partial.seq) & 0xFFFF)), None)
+        return b is not None and (b.kind in HOLDING_KINDS or (b.kind == "drive" and float(b.speed_mps) == 0.0))
+
     def _operating_submit_refusal(self, queued, now_ns: int) -> str | None:
         """The operating run's judgement of this batch's submit (plan 2.2, 2.4): enough run time left, the truck at
         the taped start whatever the start_pose bypass, and the submitted pallet on the approved placement."""
@@ -2765,8 +2774,10 @@ class RealLoop:
             if self.operating and booked is not None and (
                     booked.kind in HOLDING_KINDS or (booked.kind == "drive" and float(booked.speed_mps) == 0.0)):
                 # Codex U3b-1 round 1 P2-1: a zero or a hold going out (its continuation included) ends the insert's
-                # motion now -- a moving frame judged after it in the same transmit is a resume
+                # motion now -- a moving frame judged after it in the same transmit is a resume; if no byte of it goes
+                # out (a 0-byte EAGAIN), the transmit's end puts the motion back (round 2 P2-2)
                 self._insert_moving = False
+                self._zero_judged = True
             if (self.operating and booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
                     and self.core.ms.phase == "insert" and not self._insert_moving
                     and rca.remaining_s(self.run_deadline_ns, ns) < self.insert_time_min_s):
@@ -2864,6 +2875,7 @@ class RealLoop:
         if self.real_layer is not None and not self.closing and permit.anchor_disarm(now_ns):
             pass  # an anchor DISARM queued (design 1.1): written with this send
         self._cancel_arm = None
+        moving_before, self._zero_judged, zero_out = self._insert_moving, False, False
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
             if kind == "DRIVE":
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
@@ -2895,6 +2907,9 @@ class RealLoop:
                     self._insert_moving = self.core.ms.phase == "insert" and float(fb_.speed_mps) != 0.0
                 elif fb_ is not None and fb_.kind in HOLDING_KINDS:
                     self._insert_moving = False  # a position hold written: the next moving frame is a resume
+                if fb_ is not None and (fb_.kind in HOLDING_KINDS
+                                        or (fb_.kind == "drive" and float(fb_.speed_mps) == 0.0)):
+                    zero_out = True
                 booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
                 if booked is not None and booked.kind == "drive":
                     self.waiting = None  # a normal DRIVE out: the wait is over
@@ -2903,6 +2918,8 @@ class RealLoop:
                 steer = self._steer_of.get(int(seq) & 0xFFFF)
                 if steer is not None:
                     self.steering_command = steer.copy()  # the next slew starts from what was written (P2-5)
+        if self._zero_judged and not zero_out and not self._partial_is_zero():
+            self._insert_moving = moving_before  # no byte of the judged zero went out: the motion never stopped
         if self._cancel_arm is not None:
             self.host.cancel_arm(now_ns, self._cancel_arm)  # the permit latches arm_failed / revoked on its tick
             self._cancel_arm = None

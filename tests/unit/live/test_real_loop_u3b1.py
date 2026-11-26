@@ -177,7 +177,7 @@ def test_off_the_operating_run_nothing_changes():
 
 
 # --- Codex U3b-1 round 1 ---------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -5, True, "300"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -5, True, "300", 10 ** 309])
 def test_a_run_time_margin_that_is_not_a_finite_positive_number_refuses_the_run(value):
     from forklift_core.live import real_run as rr
     from forklift_core.live.real_assembly import AssemblyRefused
@@ -236,3 +236,24 @@ def test_a_resume_after_zero_frames_in_the_insert_waits_for_the_margin():
     r.layer.worker.step()
     r.tick(20)
     assert not any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
+
+
+def test_a_zero_frame_that_never_went_out_does_not_count_as_a_stop():
+    """Codex U3b-1 round 2 P2-2: a 0-byte EAGAIN on the zero frames leaves the insert moving -- the drive goes on
+    without a resume wait once the wait clears."""
+    r = Rig(frames=True, operator=[(1, "confirm")], operating=True, real_layer=True)
+    r.start()
+    r.tick(40)
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "insert" and r.loop._insert_moving, 3000)  # noqa: SLF001
+    r.loop.run_deadline_ns = r.now + int(100 * 1e9)
+    r.layer.worker.held = True
+    r.transport.eagain = {"DRIVE"}  # no byte of any DRIVE goes out
+    r.tick(1)
+    assert r.loop._insert_moving  # noqa: SLF001 -- nothing went out: the motion was never stopped
+    r.transport.eagain = set()
+    r.layer.worker.held = False
+    r.layer.worker.step()
+    since = len(r.transport.sent)
+    r.tick(20)
+    assert any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
