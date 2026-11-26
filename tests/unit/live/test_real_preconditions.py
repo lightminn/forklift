@@ -14,7 +14,7 @@ from forklift_core.live import real_preconditions as rp
 REPO = Path(__file__).resolve().parents[3]
 REAL = REPO / "config" / "real"
 SERIAL = "0123456789ABCDEF01234567"
-PRODUCT = "forklift-mcu normal open v1.2-3-gabcdef0 waiver=v1"
+PRODUCT = "forklift-mcu normal open v1.2-3-gabcdef012345 waiver=0123abcd"
 BOARD = {"usb_product": PRODUCT, "usb_serial": SERIAL, "state_seen": True, "drive_refusal": None, "boot_id": 7}
 
 
@@ -46,6 +46,8 @@ class Site:
             shutil.copy(REAL / name, cfg / name)
         s10a = yaml.safe_load((REAL / "s10a.yaml").read_text())
         s10a["check_pallet_pose"] = [3.0, 0.0, 0.0]
+        s10a["map_id"] = "site-map-1"
+        s10a["pallet"].update(depth_m=0.6, width_m=0.8)
         (cfg / "s10a.yaml").write_text(yaml.safe_dump(s10a, sort_keys=False))
         layer = yaml.safe_load((REAL / "obstacle_layer_real.yaml").read_text())
         odo = REPO / layer["odometry_age"]
@@ -88,12 +90,13 @@ class Site:
         common = {"status": "pass", "evidence": "docs/evidence.md", "date": "2026-12-01"}
         binds = {
             "s5_safety": {"board_serial": SERIAL, "product": PRODUCT, "stop_files": stop},
-            "iwdg_evidence": {"commit": "abcdef0", "board_serial": SERIAL},
+            "iwdg_evidence": {"commit": "abcdef0123456789", "board_serial": SERIAL},
             "fault_detection": {"board_serial": SERIAL, "product": PRODUCT},
             "port_review": {},
             "scan_load": {"lidar_sha256": f.lidar_sha256, "scan_image": "img"},
             "scan_coverage": {"lidar_sha256": f.lidar_sha256, "start_rear": list(f.s10a.start_rear),
-                              "check_pallet_pose": list(f.s10a.check_pallet_pose), "corridor_half_width_m": 0.10},
+                              "check_pallet_pose": list(f.s10a.check_pallet_pose), "corridor_half_width_m": 0.10,
+                              "map_id": f.s10a.map_id, "inserted_offset_m": f.inserted_offset_m},
             "s10_speed": {"approved_max_speed_mps": 0.15, "tested_speed_mps": 0.15, "approved_cases": ["A"]},
             "start_taped": {"start_rear": list(f.s10a.start_rear)},
             "lift": {"board_serial": SERIAL, "lift_target_m": f.settings["lift_target_m"],
@@ -220,6 +223,11 @@ def test_lift_and_pallet_settings_are_bound(site):
      "precondition:C12:firmware_build:readback_sha256"),
     (lambda r: r["items"]["iwdg_evidence"]["binds"].update(commit="1234567"),
      "precondition:C2:iwdg_evidence:commit"),
+    (lambda r: r["items"]["iwdg_evidence"]["binds"].update(commit="abcdef0999999"),
+     "precondition:C2:iwdg_evidence:commit"),  # the first seven agree, the rest of the abbreviation does not
+    (lambda r: r["items"]["scan_coverage"]["binds"].update(map_id="other"), "precondition:C5:scan_coverage:map_id"),
+    (lambda r: r["items"]["scan_coverage"]["binds"].update(inserted_offset_m=0.5),
+     "precondition:C5:scan_coverage:inserted_offset_m"),
     (lambda r: r["items"]["s10_speed"]["binds"].update(approved_max_speed_mps=None),
      "precondition:C9:s10_speed:approved_max_speed_mps"),
     (lambda r: r["items"]["s10_speed"]["binds"].update(approved_max_speed_mps=float("nan")),
@@ -385,3 +393,38 @@ def test_an_invalid_lidar_file_is_refused_by_its_own_loader(site):
     out = rp.operating_preconditions(site.facts())
     assert any(r.startswith("precondition:C5:lidar:invalid:") for r in out)
     assert "precondition:C5:lidar:first_beam_err_s" in out
+
+
+@pytest.mark.parametrize("product,abbrev", [
+    ("forklift-mcu normal open 1a9afd50ebd4", "1a9afd50ebd4"),
+    ("forklift-mcu normal open v1.2-3-gabcdef012345 waiver=0123abcd", "abcdef012345"),
+    ("forklift-mcu normal open 1a9afd50ebd4-dirty", None),
+    ("forklift-mcu normal open unknown", None),
+    ("something else", None),
+    (None, None),
+])
+def test_the_image_commit_is_the_whole_describe_abbreviation(product, abbrev):
+    assert rp.image_commit(product) == abbrev
+
+
+def test_a_changed_pallet_depth_moves_the_corridor_end_and_voids_coverage(site):
+    s10 = site.root / "config/real/s10a.yaml"
+    rec = site.full_record()
+    d = yaml.safe_load(s10.read_text())
+    d["pallet"]["depth_m"] = 0.8
+    s10.write_text(yaml.safe_dump(d, sort_keys=False))
+    site.write_record(rec)
+    assert "precondition:C5:scan_coverage:inserted_offset_m" in rp.operating_preconditions(site.facts())
+
+
+def test_malformed_settings_and_exceptions_are_structured_refusals(site):
+    p = site.root / "config/real/lidar.yaml"
+    d = yaml.safe_load(p.read_text())
+    d["timing"] = "broken"
+    p.write_text(yaml.safe_dump(d, sort_keys=False))
+    out = rp.operating_preconditions(site.facts())
+    assert "precondition:C5:lidar:basis" in out
+    rec = site.full_record()
+    rec["config_exceptions"] = [{"file": ["watch"], "key": "current", "decision_id": "D"}]
+    site.write_record(rec)
+    assert "precondition:record:config_exceptions" in rp.operating_preconditions(site.facts())

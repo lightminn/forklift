@@ -344,7 +344,8 @@ class RealTtyTransport(LoopTtyTransport):
         from forklift_core.live.executor_lock import lock_fd
         from forklift_core.live.model_peer import PTY_SLAVE_MAJORS
 
-        opener = rml.open_raw if opener is None else opener
+        opener = (lambda p, before_config=None: rml.open_raw(p, before_config=before_config, strict=True)) \
+            if opener is None else opener
         lock = (lambda fd: lock_fd(fd, path)) if lock is None else lock
         fd = opener(path, before_config=lock)
         try:
@@ -367,9 +368,11 @@ class RealTtyTransport(LoopTtyTransport):
         empty. False (nothing granted): not locked, no first STATE, a non-empty judgement, a boot other than the one
         the board last showed, a bad build seen, already revoked or lost."""
         if (not self.locked or self.first_state is None or not isinstance(judgement, list) or judgement
-                or boot_id in (None, 0) or int(boot_id) != self._last_boot or self.bad_build_seen
+                or not self.usb_product or not self.usb_serial
+                or boot_id in (None, 0) or int(boot_id) != int(self.first_state.boot_id)
+                or int(boot_id) != self._last_boot or self.bad_build_seen
                 or self.revoked is not None or self.lost is not None):
-            return False
+            return False  # the judged boot (the first STATE's) must still be the board's current one
         self._token, self._grant_boot = object(), int(boot_id)
         self._event({"t": "real_operating", "granted": True, "boot": int(boot_id), "ns": int(self.clock())})
         return True

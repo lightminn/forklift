@@ -424,7 +424,9 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     if not plan.success:
         raise AssemblyRefused([f"check_plan:{plan.status}"])
     hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
-    moved = [name for name, sha in hashes.items() if hashes_at_start.get(name) != sha]
+    odo = layer_cfg.get("odometry_age") if isinstance(layer_cfg, dict) else None
+    hashes["odometry_age"] = _sha_or_none(REPO / odo) if odo else None
+    moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:
         raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
     if replay is not None:
@@ -744,12 +746,14 @@ def real_preconditions(prep, host, transport) -> list:
         facts = rp.gather(record_path=p.preconditions, lidar_path=p.lidar_config, imu_path=p.imu_config,
                           settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
                           vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
-    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+    except rp.GATHER_ERRORS as err:
         return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
     out = rp.operating_preconditions(facts)
     # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
     out += [f"precondition:files_changed:{name}" for name, sha in facts.file_hashes.items()
             if name in prep.hashes and prep.hashes[name] != sha]
+    if facts.stop_files.get("odometry_age") != prep.hashes.get("odometry_age"):
+        out.append("precondition:files_changed:odometry_age")
     return out
 
 
@@ -842,7 +846,10 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     # the real layer from the configuration files (10.9: the budget, the overdue end, the scan period, the state
     # delay and the sensor timeout read here, not the rig's constants)
     lc, b = prep.layer_cfg, prep.layer_cfg["bridge"]
-    age = json.loads((REPO / lc["odometry_age"]).read_text())
+    data = (REPO / lc["odometry_age"]).read_bytes()  # one read: parsed and hashed from the same bytes
+    if prep.hashes.get("odometry_age") is not None and hashlib.sha256(data).hexdigest() != prep.hashes["odometry_age"]:
+        raise AssemblyRefused(["files_changed:odometry_age"])  # the table judged is the table the layer takes
+    age = json.loads(data.decode("utf-8"))
     table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
     kappa = max(abs(k) for k in vehicle.steering.curvatures_inv_m)
     # the layer's grid over the S10-A field and a metre round it (the odometry frame is the map frame at the HIL start,

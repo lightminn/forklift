@@ -200,3 +200,47 @@ def test_motion_bytes_are_written_only_while_the_permission_holds():
     t.revoke("test")
     assert t._write_rest(drive, None) is False and t._cur_at == 5  # no continuation after the revocation
     os.close(m)
+
+
+def test_grant_is_tied_to_the_judged_first_boot_and_an_identity():
+    m, t = make()
+    os.write(m, encode(state(boot=7), 0) + encode(state(boot=8), 0))  # two boots in one read
+    t.receive(Host(), 0)
+    assert t.first_state.boot_id == 7 and t.last_boot == 8
+    assert t.grant([], 8) is False and t.grant([], 7) is False  # the judged boot is no longer current
+    os.close(m)
+    m2, t2 = make(product=None)
+    feed(m2, t2, state())
+    assert t2.grant([], 7) is False  # no USB identity
+    os.close(m2)
+
+
+def test_a_failed_raw_setting_refuses_the_strict_open(monkeypatch):
+    import termios
+
+    import real_mcu_link as rml
+
+    m, s = pair()
+    name = os.ttyname(s)
+    os.close(s)
+
+    def boom(*a, **k):
+        raise termios.error("EINTR")
+
+    monkeypatch.setattr(termios, "tcsetattr", boom)
+    opened = []
+    real_open = os.open
+
+    def spy(*a, **k):
+        fd = real_open(*a, **k)
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", spy)
+    with pytest.raises(OSError):
+        rml.open_raw(name, strict=True)
+    with pytest.raises(OSError):
+        os.fstat(opened[-1])  # closed
+    fd = rml.open_raw(name)  # the lenient opening keeps the old behaviour
+    os.close(fd)
+    os.close(m)

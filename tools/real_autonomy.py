@@ -175,7 +175,7 @@ def run_real_precheck(args) -> int:
                               watch_path=args.watch, board=board)
             record["refused"] = rp.operating_preconditions(facts)
             record["imu_qualified"] = rp.imu_qualified(facts)
-        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+        except rp.GATHER_ERRORS as err:
             record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
         _write(record, args.out)
         return 2 if record["refused"] else 0
@@ -217,9 +217,26 @@ def _is_pty(device: str) -> bool:
 
 
 def _write(record: dict, out: Path | None) -> None:
+    """The record printed and, with ``out``, written to a regular file only: the file is opened without following a
+    link and without blocking, and checked on the opened fd itself before one byte is written (never a device, a FIFO,
+    a socket -- the real board's own node or an alias of it; Codex unlock U1 review round 2 P2-1)."""
+    import stat as stat_
+
     text = json.dumps(record, indent=2, default=str)
     if out is not None:
-        out.write_text(text)
+        try:
+            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o644)
+        except OSError as err:
+            print(json.dumps({"out_refused": f"{type(err).__name__}:{err}"}), flush=True)
+        else:
+            try:
+                if stat_.S_ISREG(os.fstat(fd).st_mode):
+                    os.ftruncate(fd, 0)
+                    os.write(fd, text.encode())
+                else:
+                    print(json.dumps({"out_refused": "not_a_regular_file"}), flush=True)
+            finally:
+                os.close(fd)
     print(text, flush=True)
 
 

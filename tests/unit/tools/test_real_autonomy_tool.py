@@ -215,3 +215,29 @@ def test_the_real_precheck_never_writes_its_record_to_a_device(tmp_path, capsys)
     finally:
         os.close(m)
         os.close(s)
+
+
+
+def test_no_early_refusal_writes_its_record_to_a_device(capsys):
+    """Codex unlock U1 review round 2 P2-1: every branch writes --out only to a regular file checked on its fd."""
+    import errno
+    import os
+    import tty
+
+    m, s = os.openpty()
+    tty.setraw(s)
+    os.set_blocking(m, False)
+    name = os.ttyname(s)
+    try:
+        assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/x", "--out", name]) == 2
+        assert tool.main(["--run", "--replay", "x.jsonl", "--out", name]) == 2
+        try:
+            assert os.read(m, 65536) == b""
+        except BlockingIOError:
+            pass
+        except OSError as err:
+            assert err.errno == errno.EIO
+    finally:
+        os.close(m)
+        os.close(s)
+    capsys.readouterr()

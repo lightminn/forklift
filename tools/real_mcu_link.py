@@ -37,7 +37,7 @@ class LinkLost(Exception):
     pass
 
 
-def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
+def open_raw(path: str, baud: int | None = None, *, before_config=None, strict: bool = False) -> int:
     """Open the link raw. The USB CDC firmware drops every STATE while the host's DTR is low (firmware board design
     5): Linux cdc_acm raises DTR on open, and nothing here lowers it -- no zero speed (it hangs the line up) and no
     clearing of the modem bits; DTR (and RTS) are asked high once more in case a previous user left them low. A
@@ -52,14 +52,16 @@ def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
             os.close(fd)
             raise
     try:
-        _configure(fd, baud)
+        _configure(fd, baud, strict)
     except BaseException:
         os.close(fd)  # nothing configured is left open (Codex unlock U1 review P2)
         raise
     return fd
 
 
-def _configure(fd: int, baud: int | None) -> None:
+def _configure(fd: int, baud: int | None, strict: bool = False) -> None:
+    """Raw mode, the speed, VMIN/VTIME 0, DTR/RTS high. ``strict`` (the operating REAL link): a tty whose raw setting
+    fails is refused instead of left as it was (an echo left on would send received bytes back)."""
     try:
         attrs = termios.tcgetattr(fd)
         attrs[0] = attrs[1] = attrs[3] = 0  # iflag, oflag, lflag: raw
@@ -69,7 +71,9 @@ def _configure(fd: int, baud: int | None) -> None:
         attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 0, 0
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
     except termios.error:
-        pass  # not every endpoint is a tty with settable attributes (a pty master is fine raw already)
+        if strict:
+            raise OSError("raw tty setting failed") from None
+        # not every endpoint is a tty with settable attributes (a pty master is fine raw already)
     try:
         bits = (termios.TIOCM_DTR | termios.TIOCM_RTS).to_bytes(4, sys.byteorder)
         fcntl.ioctl(fd, termios.TIOCMBIS, bits)

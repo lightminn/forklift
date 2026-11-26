@@ -42,7 +42,8 @@ ITEMS = {
     "fault_detection": ("C3", ("board_serial", "product")),
     "port_review": ("C4", ()),
     "scan_load": ("C5", ("lidar_sha256", "scan_image")),
-    "scan_coverage": ("C5", ("lidar_sha256", "start_rear", "check_pallet_pose", "corridor_half_width_m")),
+    "scan_coverage": ("C5", ("lidar_sha256", "start_rear", "check_pallet_pose", "corridor_half_width_m", "map_id",
+                             "inserted_offset_m")),
     "s10_speed": ("C9", ("approved_max_speed_mps", "tested_speed_mps", "approved_cases")),
     "start_taped": ("C10", ("start_rear",)),
     "lift": ("C11", ("board_serial", "lift_target_m", "lift_rate_mps", "test_pallet", "lift_mechanism",
@@ -64,6 +65,7 @@ REQUIRED_PROVENANCE = {
     "budget": ("latency_budget", "overdue_end"),
     "watch": ("current", "wheel"),
 }
+GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError)
 HASHED = ("s10a", "settings", "vehicle", "watch", "layer", "budget", "lidar", "imu")
 START_TOL_M = 0.001  # the taped start written in the record is the S10-A one (a copy, not a tolerance)
 
@@ -84,6 +86,7 @@ class Facts:
     stop_files: dict  # name -> sha256 (STOP_FILES)
     provenance: dict  # name -> [(key path, provenance value)] for PROVENANCE_FILES
     vehicle_calibration_id: str | None
+    inserted_offset_m: float | None = None  # the corridor's end: the insertion end's rear axle behind the pallet centre
     file_hashes: dict = field(default_factory=dict)  # name -> sha256 (HASHED), from the bytes parsed
     changed: list = field(default_factory=list)  # files that changed while gathered
     board: dict = field(default_factory=dict)  # usb_serial, usb_product, drive_refusal (None: none), first STATE seen
@@ -136,8 +139,10 @@ def load_record(path=RECORD_YAML) -> tuple:
     if "origin" in lift and not isinstance(lift["origin"], dict):
         return None, "origin_shape:lift"
     exc = raw.get("config_exceptions") or []
-    if not isinstance(exc, list) or any(not isinstance(e, dict) or set(e) != {"file", "key", "decision_id"}
-                                        for e in exc):
+    if not isinstance(exc, list) or any(
+            not isinstance(e, dict) or set(e) != {"file", "key", "decision_id"} or e["file"] not in PROVENANCE_FILES
+            or not isinstance(e["key"], str) or not isinstance(e["decision_id"], str) or not e["decision_id"]
+            for e in exc):
         return None, "config_exceptions"
     return raw, None
 
@@ -145,7 +150,7 @@ def load_record(path=RECORD_YAML) -> tuple:
 def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a_path, layer_path, budget_path,
            vehicle_path, watch_path, repo=REPO, board=None) -> Facts:
     """The facts for ``operating_preconditions`` (the paths are the run's; ``board`` the first STATE's facts). Raises
-    on an unreadable settings file (OSError, ValueError, yaml.YAMLError): the caller turns it into a reason."""
+    on an unreadable settings file (``GATHER_ERRORS``): the caller turns it into a reason."""
     from forklift_core.live.real_autonomy import load_s10a
     from forklift_core.plant.real_vehicle import load_real_vehicle
     from forklift_core.sensors.lidar_cfg import load_lidar_config
@@ -167,23 +172,36 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     s10a = bracketed("s10a", load_s10a)
     try:
         calib = bracketed("vehicle", load_real_vehicle).calibration_id
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         calib = None
     try:
         bracketed("lidar", load_lidar_config)
         lidar_error = None
-    except (OSError, ValueError, KeyError, TypeError) as err:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
         lidar_error = f"{type(err).__name__}"
-    layer = parsed["layer"] or {}
+    inserted = None
+    try:
+        from forklift_core.live.real_run import mission_geometry
+        from forklift_core.plant.real_vehicle import chassis_model_path
+
+        if s10a.pallet_depth_m is not None and s10a.pallet_width_m is not None:
+            urdf = chassis_model_path(vehicle_path).parent / "forklift.urdf"
+            inserted = float(mission_geometry(urdf, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        inserted = None
+    layer = parsed["layer"] if isinstance(parsed["layer"], dict) else {}
     odo = layer.get("odometry_age")
     odo_path = (Path(repo) / odo) if odo else None
     stop = {name: hashes[name] for name in ("layer", "budget", "vehicle", "watch")}
     stop["odometry_age"] = _sha(odo_path) if odo_path is not None and odo_path.is_file() else None
-    prov = {name: _provenances(parsed[name] or {}) for name in PROVENANCE_FILES}
-    return Facts(record=record, record_error=record_error, repo=Path(repo), lidar=parsed["lidar"] or {},
-                 lidar_sha256=hashes["lidar"], lidar_error=lidar_error, imu=parsed["imu"] or {},
-                 settings=parsed["settings"] or {}, s10a=s10a, stop_files=stop, provenance=prov,
-                 vehicle_calibration_id=calib, file_hashes=hashes, changed=changed, board=dict(board or {}))
+    prov = {name: _provenances(parsed[name] if isinstance(parsed[name], dict) else {}) for name in PROVENANCE_FILES}
+    return Facts(record=record, record_error=record_error, repo=Path(repo),
+                 lidar=parsed["lidar"] if isinstance(parsed["lidar"], dict) else {},
+                 lidar_sha256=hashes["lidar"], lidar_error=lidar_error,
+                 imu=parsed["imu"] if isinstance(parsed["imu"], dict) else {},
+                 settings=parsed["settings"] if isinstance(parsed["settings"], dict) else {}, s10a=s10a,
+                 stop_files=stop, provenance=prov, vehicle_calibration_id=calib, inserted_offset_m=inserted,
+                 file_hashes=hashes, changed=changed, board=dict(board or {}))
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
@@ -223,7 +241,7 @@ def _is_hex(v, n) -> bool:
 def _bind_bad(f: Facts, k: str, v) -> bool:
     """Whether one bind does not match what it must be now."""
     b = f.board
-    lidar_t = f.lidar.get("timing") or {}
+    lidar_t = f.lidar.get("timing") if isinstance(f.lidar.get("timing"), dict) else {}
     if k == "board_serial":
         return not v or v != b.get("usb_serial")
     if k == "product":
@@ -251,17 +269,36 @@ def _bind_bad(f: Facts, k: str, v) -> bool:
         return not _pose_eq(v, f.s10a.check_pallet_pose, START_TOL_M)
     if k == "corridor_half_width_m":
         return not _num_eq(v, CORRIDOR_HALF_M)
+    if k == "map_id":
+        return not v or v != f.s10a.map_id
+    if k == "inserted_offset_m":
+        return f.inserted_offset_m is None or not _num_eq(v, f.inserted_offset_m, 0.001)
     if k == "firmware_vehicle_calibration_id":
         return not v or v != f.vehicle_calibration_id
     if k == "readback_sha256":
         return not _is_hex(v, 64)
     if k == "commit":
-        # the IWDG evidence's commit is the final image's: its abbreviation appears in the product string (git describe)
-        return not (isinstance(v, str) and len(v) >= 7 and all(ch in "0123456789abcdef" for ch in v)
-                    and f"g{v[:7]}" in str(b.get("usb_product") or ""))
+        # the IWDG evidence's commit is the final image's: the product string's git describe abbreviation, whole
+        abbrev = image_commit(b.get("usb_product"))
+        return not (abbrev and isinstance(v, str) and len(v) >= len(abbrev)
+                    and all(ch in "0123456789abcdef" for ch in v) and v.startswith(abbrev))
     if k == "approved_cases":
         return v != APPROVED_CASES
     return True  # an unknown bind never passes
+
+
+def image_commit(product) -> str | None:
+    """The commit abbreviation in a USB product string ``forklift-mcu <kind> <outputs> <git describe>...`` (the
+    firmware's ``git describe --always --dirty --abbrev=12``: a bare abbreviation or ``<tag>-<n>-g<abbrev>``); None
+    when absent, dirty or not hex."""
+    parts = str(product or "").split()
+    if len(parts) < 4 or parts[0] != "forklift-mcu":
+        return None
+    d = parts[3]
+    if d.endswith("-dirty"):
+        return None
+    tail = d.rsplit("-g", 1)[1] if "-g" in d else d
+    return tail if len(tail) >= 7 and all(c in "0123456789abcdef" for c in tail) else None
 
 
 def _item_reasons(f: Facts, name: str) -> list:
@@ -308,8 +345,8 @@ def _c1_board(f: Facts) -> list:
 def _c5_scan(f: Facts) -> list:
     from forklift_core.sensors.lidar_cfg import APPLIES_KEYS, BASES
 
-    t = f.lidar.get("timing") or {}
-    m = f.lidar.get("mount") or {}
+    t = f.lidar.get("timing") if isinstance(f.lidar.get("timing"), dict) else {}
+    m = f.lidar.get("mount") if isinstance(f.lidar.get("mount"), dict) else {}
     out = []
     if f.lidar_error is not None:
         out.append(f"precondition:C5:lidar:invalid:{f.lidar_error}")
@@ -455,5 +492,5 @@ def operating_preconditions(f: Facts) -> list:
     return out
 
 
-__all__ = ["Facts", "HASHED", "ITEMS", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather",
+__all__ = ["Facts", "GATHER_ERRORS", "HASHED", "ITEMS", "image_commit", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather",
            "imu_qualified", "load_record", "operating_preconditions"]
