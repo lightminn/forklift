@@ -292,6 +292,9 @@ def test_a_newer_generation_the_layer_cannot_take_still_drops_the_older(frames, 
     out = src.scans(burst[-1][0])
     assert out == [] and src.counts["before_generation_dropped"] == 2
     assert [e for e in slam.log[told:] if e[0] == "offer"] == []
+    # SLAM is still told the newer generation (the older one's pending replies are void -- Codex U2a round 4 P3)
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    assert gens and gens[-1][1] in switched and all(g[1] in switched for g in gens)
 
 
 def test_a_socket_error_ends_the_run():

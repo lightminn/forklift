@@ -372,3 +372,18 @@ def test_the_removal_notice_stays_while_the_depth_stream_has_not_stopped():
 
     rs.context.cb(Info())
     assert lost == ["device_removed"]
+
+
+def test_a_depth_only_source_stopped_cleanly_reports_a_removal_to_no_one():
+    """Codex U2a round 4 P3: motion off -- the depth stream's own stop clears the notice."""
+    src, stereo, rs = make()
+    lost = []
+    src.start(on_depth=lambda *a: None, on_lost=lost.append)
+    src.stop()
+
+    class Info:
+        def was_removed(self, dev):
+            return dev is rs.dev
+
+    rs.context.cb(Info())
+    assert lost == []
