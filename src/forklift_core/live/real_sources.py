@@ -69,6 +69,8 @@ class RealScanSource:
         self._seen_gen: int | None = None  # the feed generation last looked at (a change since is a boundary)
         self._any_taken = False  # a scan was taken: before it there is no evidence a boundary could void
         self._last_key = None  # the last taken scan's (feed, producer) generation
+        self._clock_break = False  # a clock jump of the current producer opened its boundary: its re-establishment
+        # ("clock") is the same break, not a second boundary
         self.last_delivered_s: float | None = None
 
     # --- the loop's calls ---------------------------------------------------------------------------------------------
@@ -129,11 +131,14 @@ class RealScanSource:
         self._events.append(("boundary", self.sensor))
 
     def _watch_generation(self, items: list) -> None:
-        """A feed generation raised since the last look is a boundary (whatever raised it)."""
+        """A feed generation raised since the last look is a boundary (whatever raised it), except the clock's
+        re-establishment after a jump whose boundary was already opened at the jump."""
         g = self.feed.generation
         if self._seen_gen is not None and g != self._seen_gen:
             why = self.feed.generation_why[-1] if self.feed.generation_why else "generation"
-            self._boundary(items, f"feed_generation:{why}")
+            if not (self._clock_break and why == "clock"):
+                self._boundary(items, f"feed_generation:{why}")
+            self._clock_break = False
         self._seen_gen = g
 
     def _end(self, why: str) -> None:
@@ -165,6 +170,9 @@ class RealScanSource:
             except OSError:
                 self.counts["socket_errors"] += 1
                 self.feed.new_generation("socket_error")
+                self._seen_gen = self.feed.generation
+                # the boundary first (Codex U3a round 2 P2): the loop throws the evidence away before this tick's install
+                self._boundary(items, "socket_error")
                 self._end("scan_socket_error")
                 return
             if not data:
@@ -192,8 +200,15 @@ class RealScanSource:
             if scan is None:
                 self.counts[f"feed_{why}"] += 1
                 self.last_refusal = f"feed:{why}"
-                if why == "clock_jump":
-                    self._boundary(items, "clock_jump")  # the break itself: no evidence on the old clock pair goes on
+                if why == "clock_jump" and self.feed.establishing:
+                    # the current producer's own clock pair jumped (a candidate's refusal leaves its clock established,
+                    # Codex U3a round 2 P2): the break itself -- a boundary now, and a feed generation SLAM is told, so
+                    # what waits or is in flight there is cut; the re-establishment adds none
+                    self._boundary(items, "clock_jump")
+                    self.feed.new_generation("clock_jump")
+                    self._seen_gen = self.feed.generation
+                    self._clock_break = True
+                    self._tell((self.feed.generation, self._producer))
                 continue
             key = (scan.feed_gen, scan.producer_gen)
             if self._last_key is not None and key != self._last_key:

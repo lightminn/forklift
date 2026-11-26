@@ -716,16 +716,78 @@ def test_the_clock_established_again_in_one_producer_generation_is_a_boundary(fr
     assert src.last_boundary == "feed_generation:clock"
 
 
-def test_a_clock_jump_refusal_is_a_boundary_at_once(frames, monkeypatch):
+def _reframed(data, **head):
+    from forklift_core.sensors.scan_feed import decode_frame, encode_frame
+
+    h, ranges, inten = decode_frame(data)
+    h.update(head)
+    return encode_frame(h, ranges, inten)
+
+
+def test_the_current_producers_clock_jump_is_one_boundary_through_its_re_establishment(frames, monkeypatch):
+    """Codex U3a round 2 P2, on the real ScanFeed: A's clock pair jumps -- the boundary and SLAM's cut at the jump,
+    none more when the clock is established again."""
+    from forklift_core.sensors.scan_feed import JUMP_NS
+
     tx, rx = pair()
     clock, slam = Clock(), Slam()
     src = source(rx, clock, slam)
     i = _warm(src, tx, clock, frames)
-    monkeypatch.setattr(src.feed, "judge", lambda data, recv: (None, "clock_jump"))
-    tx.send(frames[i][1])
+    events = []
+    told = len(slam.log)
+    gen_before = src.feed.generation
+    delivered_before = src.counts["delivered"]
+    for recv, data in frames[i:i + 20]:
+        h = __import__("forklift_core.sensors.scan_feed", fromlist=["decode_frame"]).decode_frame(data)[0]
+        tx.send(_reframed(data, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+        clock.ns = recv
+        events += src.scan_source_events(recv)
+        src.scans(recv)
+    assert events.count(("boundary", "lidar")) == 1 and src.last_boundary == "clock_jump"
+    assert src.counts["delivered"] > delivered_before and not src.feed.establishing  # re-established, no 2nd boundary
+    assert src.feed.generation > gen_before and src.counts["feed_clock_jump"] == 1
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    assert gens and gens[0][0] == gen_before + 1  # SLAM told at the jump itself
+
+
+def test_a_stray_candidates_clock_refusal_is_no_boundary(frames, monkeypatch):
+    """Codex U3a round 2 P2: a frame of another producer whose pair jumped is refused on the candidate's own clock --
+    the current producer's evidence stands."""
+    from forklift_core.sensors.scan_feed import JUMP_NS, decode_frame
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    tx.send(_reframed(data, gen=int(h.get("gen") or 1) + 7, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [] and src.counts["boundaries"] == 0
+    tx.send(frames[i + 1][1])
+    clock.ns = frames[i + 1][0]
+    assert src.scan_source_events(clock.ns) == [] and len(src.scans(clock.ns)) == 1
+
+
+def test_a_socket_error_after_scans_is_a_boundary_before_the_loss(frames):
+    """Codex U3a round 2 P2: the boundary comes before the loss, so the loop throws the evidence away before its
+    install."""
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+
+    class Broken:
+        def recv(self, n):
+            raise ConnectionResetError("gone")
+
+        def close(self):
+            pass
+
+    src.sock = Broken()
     clock.ns = frames[i][0]
-    assert src.scan_source_events(clock.ns) == [("boundary", "lidar")]
-    assert src.last_boundary == "clock_jump" and src.last_refusal == "feed:clock_jump"
+    assert src.scan_source_events(clock.ns) == [("boundary", "lidar"), ("lost", "lidar")]
+    assert src.fatal == "scan_socket_error"
 
 
 def test_a_boundary_before_any_scan_was_taken_is_none(frames, monkeypatch):

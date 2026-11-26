@@ -188,3 +188,58 @@ def test_a_late_reply_of_the_old_generation_never_refreshes_the_evidence():
     r.slam.extra.append(r.slam.reply(loop._t(r.now)))  # noqa: SLF001
     r.tick()
     assert loop._fresh_ns is not None  # noqa: SLF001
+
+
+def _rearmed_after_a_boundary(*, slam_replies: bool, layer_installs: bool):
+    """Codex U3a rounds 1-2 P2: an operating truck latched on a boundary, rearmed by the operator, then given only the
+    new evidence named -- the real ARM path decides."""
+    from test_real_loop_console import ask
+
+    r = Rig(frames=True, real_requests=True, reloc=True, real_layer=True, operating=True)
+    r.start()
+    r.console_out.clear()
+    r.tick(40)
+    r.loop.scan_boundary(r.now, "lidar")
+    r.slam.auto = slam_replies
+    r.layer.worker.held = not layer_installs
+    r.tick(20)
+    assert r.permit.state == ra.LATCHED
+    reply, _ = ask(r, "rearm")
+    r.tick(5)
+    assert reply["t"] == "ack", reply
+    return r
+
+
+def _arms_after_submit(r, ticks=400):
+    """(armed, the refusals seen): the operator's start check and the submit as the console sends them, whatever their
+    answers, then the ticks -- an ARM written is the only thing that counts as armed."""
+    from forklift_core.mcu_link.messages import Arm
+
+    from real_loop_rig import PALLET
+    from test_real_loop_console import ask
+
+    since = len(r.transport.sent)
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    rev = reply.get("targets_revision")
+    r.tick(30)  # stands
+    start, _ = ask(r, "operator_start")
+    sub, _ = ask(r, "mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=rev)
+    refusals = [m.get("reason") for m in (start, sub) if m.get("t") == "reject"]
+    for _ in range(ticks):
+        r.tick()
+        if any(isinstance(m, Arm) for _, k, _, m in r.transport.sent[since:]):
+            return True, refusals
+    return False, refusals
+
+
+@pytest.mark.parametrize("slam_replies, layer_installs, arms", [(False, True, False), (True, False, False),
+                                                                (True, True, True)])
+def test_a_rearm_after_a_boundary_needs_both_new_pieces_of_evidence(slam_replies, layer_installs, arms):
+    r = _rearmed_after_a_boundary(slam_replies=slam_replies, layer_installs=layer_installs)
+    armed, refusals = _arms_after_submit(r)
+    assert armed is arms, (refusals, r.loop.last_refusal, r.loop.session.results[-1:])
+    if not arms:
+        # readiness names the missing piece itself: SLAM's freshness, or the layer's new result
+        ready = r.loop._ready(r.now, "drive") or ""  # noqa: SLF001
+        assert ready.startswith("slam:") if not slam_replies else ready.startswith(("layer:", "wait:")), (ready, refusals)
