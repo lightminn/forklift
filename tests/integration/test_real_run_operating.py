@@ -483,6 +483,7 @@ def test_the_operating_run_drives_to_the_lift_stops_and_disarms(mcu_model, tmp_p
         finally:
             with contextlib.suppress(Exception):
                 c.close()
+            run.bridge.closing()
             code = run.finish(signal.SIGINT, timeout=60)
         rows = run.rows()
         end = _events(rows, "end")[-1]
@@ -518,6 +519,7 @@ def test_a_submit_without_the_pallet_confirmation_never_moves_the_board(mcu_mode
         finally:
             with contextlib.suppress(Exception):
                 c.close()
+            run.bridge.closing()
             code = run.finish(signal.SIGINT, timeout=60)
         assert code == 0, _explain(run)
         assert _motion_bytes(run.writes()) == 0, [w for w in run.writes() if w["kind"] in ("ARM", "DRIVE")][:5]
@@ -559,14 +561,123 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
         finally:
             with contextlib.suppress(Exception):
                 c.close()
+            run.bridge.closing()
             code = run.finish(signal.SIGINT, timeout=60)
         rows = run.rows()
-        latch = next(p for p in _events(rows, "permit") if p.get("event") == "latched" and p.get("reason") != "signal")
-        assert latch["reason"] not in (None, "signal"), latch
+        perm = _events(rows, "permit")
+        latch = next((p for p in perm if p.get("event") == "latched" and p["ns"] >= run.scan.cut_ns
+                      and p.get("reason") != "signal"), None)
+        assert latch is not None, [p for p in perm if p["ns"] >= run.scan.cut_ns]
         # the permit's "disarmed": a DISARMED STATE answered the latch's DISARM (DISARMING -> LATCHED), before the signal
-        disarmed = [p for p in _events(rows, "permit") if p.get("event") == "disarmed" and p["ns"] >= latch["ns"]]
-        assert disarmed, [p for p in _events(rows, "permit")][-6:]
+        disarmed = [p for p in perm if p.get("event") == "disarmed" and p["ns"] >= latch["ns"]]
+        assert disarmed, [p for p in perm if p["ns"] >= run.scan.cut_ns]
         assert disarmed[0]["ns"] < _events(rows, "end")[-1]["closing_started_ns"]
         assert _motion_bytes(run.writes(), since_ns=latch["ns"]) == 0, [
             w for w in run.writes() if w["kind"] in ("ARM", "DRIVE") and w["ns"] >= latch["ns"]][:5]
         assert code in (0, 1), _explain(run)
+
+
+# --- case 2: the command line on the repository's own settings -------------------------------------------------------
+def test_the_command_line_takes_the_real_preparation_and_refuses_an_unregistered_site(tmp_path):
+    """Plan 6.1 case 2 (Codex round 2 P3): every required argument given, the repository's own configuration, a site
+    record the registry does not hold -> the preparation refuses (precondition:site_bundle:no_row) before the device
+    is ever opened. It shows the CLI runs the operating preparation itself."""
+    site_record = tmp_path / "site_record.yaml"
+    site_record.write_text("site: nowhere\n")
+    device = tmp_path / "no-device"
+    args = [sys.executable, str(REPO / "tools/real_autonomy.py"), "--run", "--client", "real", "--device", str(device),
+            "--scan-socket", str(tmp_path / "scan.sock"), "--slam-bridge", str(tmp_path / "slam.sock"),
+            "--site-record", str(site_record), "--bundle-root", str(tmp_path), "--duration-s", "30",
+            "--out-dir", str(tmp_path / "run")]
+    p = subprocess.run(args, capture_output=True, text=True, timeout=120,
+                       env={**os.environ, "PYTHONPATH": str(REPO / "src")})
+    assert p.returncode == 2, p.stdout + p.stderr
+    text = p.stdout
+    doc = json.loads(text[text.rfind('{\n  "run"'):])
+    assert doc["end"]["refused"] == ["precondition:site_bundle:no_row"], doc
+    assert doc["end"]["opened"] == [] and not device.exists() and not (tmp_path / "scan.sock").exists()
+
+
+# --- case 6: what the tool itself owns -----------------------------------------------------------------------------
+def _try_lock(path) -> bool:
+    """A competitor's attempt on the device: open it and take the executor lock (both must succeed)."""
+    import fcntl
+
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _driving(c, run):
+    reg = _ready_to_submit(c)
+    assert _confirm_pallet(c, reg)["t"] == "ack"
+    assert c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+                 targets_revision=reg["targets_revision"])["t"] == "ack"
+    end_t = time.monotonic() + 90
+    while not _written_moving(run.rows()):
+        assert time.monotonic() < end_t, "no moving DRIVE written"
+        time.sleep(0.2)
+
+
+def test_a_signal_while_driving_holds_the_device_until_the_disarm_is_confirmed(mcu_model, tmp_path):
+    """Plan 6.1 case 6 (Codex round 2 P2-3): SIGTERM while moving DRIVEs are written -- until the closing DISARM is
+    confirmed no other process can take the device's lock; once the run has let go, one can."""
+    site = Site(tmp_path / "site")
+    with operating(mcu_model, tmp_path, site, duration_s=150) as run:
+        assert run.wait_console() is not None, _explain(run)
+        c = OperatingConsole(run.port)
+        tries = []
+        try:
+            _driving(c, run)
+            run.bridge.closing()
+            run.proc.send_signal(signal.SIGTERM)
+            while run.proc.poll() is None:
+                tries.append((time.monotonic_ns(), _try_lock(run.slave_name)))
+                time.sleep(0.02)
+        finally:
+            with contextlib.suppress(Exception):
+                c.close()
+            run.bridge.closing()
+            code = run.finish(timeout=60)
+        after = _try_lock(run.slave_name)
+        rows = run.rows()
+        end = _events(rows, "end")[-1]
+        assert end["closing"] == "confirmed" and end["reason"] == "signal", end
+        assert code == 0, _explain(run)
+        confirmed = end["closing_confirmed_ns"]
+        early = [ok for ns, ok in tries if ns < confirmed]
+        assert early and not any(early), tries[:5]  # never the competitor's before the DISARM was confirmed
+        assert after is True  # the run let the device go
+
+
+def test_a_lost_device_while_driving_revokes_and_is_never_reopened(mcu_model, tmp_path):
+    """Plan 6.1 case 6: the board's link goes away while moving (the model killed: the pty's other end closes) -- the
+    run ends with link_lost, the permission revoked, no reopening, and a non-zero exit."""
+    site = Site(tmp_path / "site")
+    with operating(mcu_model, tmp_path, site, duration_s=150) as run:
+        assert run.wait_console() is not None, _explain(run)
+        c = OperatingConsole(run.port)
+        try:
+            _driving(c, run)
+            run.bridge.closing()
+            run.model.kill()
+            run.model.wait(10)
+            code = run.finish(timeout=60)
+        finally:
+            with contextlib.suppress(Exception):
+                c.close()
+        rows = run.rows()
+        end = _events(rows, "end")[-1]
+        assert end["closing"] == "link_lost" and end.get("device_lost"), end
+        revoked = [r for r in rows if r.get("t") == "real_operating" and r.get("granted") is False]
+        assert revoked and str(revoked[0]["reason"]).startswith("device_lost"), revoked
+        assert code != 0, _explain(run)
+        assert end["opened"] == [run.slave_name]  # opened once
