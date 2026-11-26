@@ -16,6 +16,12 @@
   -- a difference is ``replay_mismatch``. The IMU is judged with the source config the record names
   (``header.imu.config``); a record without one (before 7r) is judged with the given config and its differences are
   counted as ``imu_config_unrecorded``, not refused;
+- its depth (7e-1, plan 4.2), when it has any: every side file named by a ``depth_file`` row is there with that
+  sha256 (its stat pinned for the readers); every ``depth`` row's array is in its file under its key, ``uint16``, of
+  the row's shape (the intrinsics' size), with the row's frame sha256; its units finite and positive and the
+  profile's; its ``calib_id`` recomputed from the row's own intrinsics (and the profile's); and the depth source
+  re-judging the rows in file order with the header's config gives back every verdict, interval and generation
+  (``replay_depth_mismatch`` otherwise);
 - the selected LiDAR config can run the SLAM start check on it: in ``[anchor + BRIDGE_STARTUP_MAX_S, anchor +
   START_WINDOW_END_S]`` at least ``START_SCANS`` scans of one producer and feed generation go to the layer and to the
   operating SLAM (``replay_no_operating_scans``). A floor, not a proof: the run's own start check decides.
@@ -33,6 +39,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import threading
 import zlib
 from dataclasses import dataclass, field
@@ -60,7 +67,14 @@ READS = {
     "imu_gen": {"t", "why", "gen", "host_ns"},
     "slam_header": {"t", "bundle", "map_id", "start_pose", "rear_offset_m", "base_laser"},
     "end": {"t", "result", "complete"},
+    # 7e-1: the depth rows (only when the record has depth)
+    "depth": {"t", "host_ns", "frame_number", "timestamp", "domain", "units", "intrinsics", "calib_id", "lo", "hi",
+              "gen", "verdict", "npz", "key", "sha256", "shape", "dtype"},
+    "depth_gen": {"t", "why", "gen", "host_ns"},
+    "depth_file": {"t", "name", "frames", "sha256"},
+    "depth_profile": {"t", "intrinsics", "calib_id", "depth_scale"},
 }
+DEPTH_KINDS = ("depth", "depth_gen", "depth_file", "depth_profile")
 
 
 class ReplayRefused(ValueError):
@@ -86,6 +100,10 @@ class ReplayRecord:
     counts: collections.Counter = field(default_factory=collections.Counter)
     imu_config_recorded: bool = False
     stat: tuple = ()  # (device, inode, size, mtime_ns) of the bytes verified: the readers refuse another file
+    # 7e-1: [(record ns, file offset, crc32)] in file order: depth rows and depth losses; the side files verified,
+    # {name: (sha256, (device, inode, size, mtime_ns))} -- a reader refuses a file changed since (plan 4.2)
+    depth: list = field(default_factory=list)
+    depth_files: dict = field(default_factory=dict)
 
 
 def _finite(v) -> bool:
@@ -179,6 +197,157 @@ class _ImuVerifier:
             self._bad(("imu_gen_unproduced", self.expected_gen[0].get("why")))
 
 
+def _depth_cfg_from_header(head):
+    from forklift_core.sensors.depth_cfg import DepthConfig
+
+    c = dict(head["config"])
+    c["applies_to"] = tuple(tuple(x) for x in (c.get("applies_to") or ()))
+    return DepthConfig(**c)
+
+
+_SIDE_NAME = re.compile(r"depth_\d{4,}\.npz")  # DepthRecorder's names: inside the record's folder, nothing else
+
+
+class _DepthVerifier:
+    """The record's depth rows checked against their side files and re-judged in file order (module text)."""
+
+    def __init__(self, head) -> None:
+        from forklift_core.sensors.depth_source import DepthSource
+
+        self.cfg = _depth_cfg_from_header(head)
+        self.folder_name = head.get("folder")
+        self.src = DepthSource(self.cfg)
+        self.seq: list = []  # ("frame"|"gen", row) recorded, in file order
+        self.files: dict = {}  # name -> depth_file row
+        self.by_file: dict = collections.defaultdict(list)
+        self.duplicate_files: set = set()
+        self.profile = None
+
+    def row(self, r: dict) -> None:
+        t = r.get("t")
+        if t == "depth":
+            self.seq.append(("frame", r))
+            self.by_file[str(r["npz"])].append(r)
+        elif t == "depth_gen":
+            self.seq.append(("gen", r))
+        elif t == "depth_file":
+            name = str(r["name"])
+            if name in self.files:
+                self.duplicate_files.add(name)
+            self.files[name] = r
+        elif t == "depth_profile":
+            self.profile = r
+
+    def finish(self, record_path: Path, end_depth) -> tuple:
+        from forklift_core.sensors.depth_cfg import calib_id, frame_sha256
+        from forklift_core.sensors.depth_record import read_side_file, side_folder
+
+        def bad(what):
+            raise ReplayRefused("replay_depth_mismatch", what)
+
+        # the end's summary and the file list, whether or not the record has frames (Codex 7e-1 round 2 P2-3)
+        if not isinstance(end_depth, dict):
+            bad("a depth header and no depth summary in the end row")
+        ed = end_depth
+        for key in ("overflow", "bad_frames", "callback_errors"):
+            if int(ed.get(key) or 0) > 0:
+                bad(f"raw depth frames lost before they were recorded ({key} {ed.get(key)})")
+        if ed.get("record_failed"):
+            bad(f"a side file not written whole: {ed.get('record_failed')}")
+        if self.duplicate_files:
+            bad(f"side files declared twice: {sorted(self.duplicate_files)}")
+        bad_names = [n for n in self.files if not _SIDE_NAME.fullmatch(n)]
+        if bad_names:
+            bad(f"side file names outside the record's folder form: {bad_names}")
+        if sorted(self.files) != sorted(str(n) for n in (ed.get("files") or ())):
+            bad("the depth_file rows are not the end's file list")
+        if int(ed.get("frames") or 0) != sum(1 for k, _r in self.seq if k == "frame"):
+            bad("the depth rows are not the end's frame count")
+        if not self.seq:
+            if self.files:
+                bad("side files declared and no depth row")  # nothing to check them against (round 3 P2-3)
+            return {}, collections.Counter()
+        if self.profile is None:
+            bad("no depth_profile row")
+        prof_id = calib_id(self.profile["intrinsics"])
+        if prof_id != self.profile["calib_id"]:
+            bad("the profile's calib_id is not its intrinsics'")
+        units = self.profile.get("depth_scale")
+        if not _finite(units) or units <= 0:
+            bad(f"the profile's depth_scale {units!r} is not a finite positive number")
+        folder = side_folder(record_path)
+        if self.folder_name is not None and folder.name != self.folder_name:
+            bad(f"side folder {folder.name} is not the header's {self.folder_name}")
+        unknown = set(self.by_file) - set(self.files)
+        if unknown:
+            bad(f"depth rows in files with no depth_file row: {sorted(unknown)}")
+        pins: dict = {}
+        counts: collections.Counter = collections.Counter()
+        for name, frow in self.files.items():
+            fp = folder / name
+            try:
+                arrays, pin = read_side_file(fp, str(frow["sha256"]))  # one open: its fstat is the pin
+            except (OSError, ValueError) as exc:
+                bad(f"{name}: {exc}")
+            rows = self.by_file.get(name, [])
+            keys = [str(r["key"]) for r in rows]
+            if len(rows) != int(frow["frames"]) or len(set(keys)) != len(keys) or set(keys) != set(arrays):
+                bad(f"{name}: arrays {sorted(arrays)[:3]}... and rows' keys are not one to one "
+                    f"({len(rows)} rows, {frow['frames']} frames recorded)")
+            for r in rows:
+                a = arrays.get(str(r["key"]))
+                intr = r["intrinsics"]
+                shape = [int(intr["height"]), int(intr["width"])]
+                if a is None or a.dtype.name != "uint16" or r.get("dtype") != "uint16" or list(a.shape) != shape \
+                        or list(r["shape"]) != shape:
+                    bad(f"{name}/{r['key']}: not a {shape} uint16 frame")
+                if frame_sha256(a) != r["sha256"]:
+                    bad(f"{name}/{r['key']}: frame sha256 differs")
+                u = r["units"]
+                if not _finite(u) or u <= 0 or u != units:
+                    bad(f"{name}/{r['key']}: units {u}")
+                if calib_id(intr) != r["calib_id"] or r["calib_id"] != prof_id:
+                    bad(f"{name}/{r['key']}: calib_id is not its intrinsics' or the profile's")
+                counts["depth_frames_verified"] += 1
+            pins[name] = (str(frow["sha256"]), pin)
+        # re-judged in file order with the header's config (losses at their own time)
+        got: list = []
+        for kind, r in self.seq:
+            if kind == "frame":
+                self.src.push(int(r["host_ns"]), r["frame_number"], r["timestamp"], r["domain"], r.get("meta"),
+                              r["units"], r["intrinsics"], None)
+                got += self.src.take(int(r["host_ns"]))
+            elif str(r["why"]).startswith("lost:"):
+                self.src.lost(str(r["why"])[len("lost:"):], at_ns=int(r["host_ns"]))
+                got += self.src.take(int(r["host_ns"]))
+        last = (end_depth or {}).get("last_take_ns")
+        if last is not None:
+            got += self.src.finish(int(last))
+        keys = ("host_ns", "frame_number", "lo", "hi", "gen", "verdict")
+        want = [(k, r if k == "gen" else {x: r[x] for x in keys}) for k, r in self.seq]
+        have = [(k, r if k == "gen" else {x: r[x] for x in keys}) for k, r in got]
+        if have != want:
+            first = next((i for i, (a, b) in enumerate(zip(have, want)) if a != b), min(len(have), len(want)))
+            bad(f"re-judged depth differs at depth item {first}")
+        counts["depth_ok"] = sum(1 for k, r in self.seq if k == "frame" and r["verdict"] == "ok")
+        return pins, counts
+
+
+def check_depth_pins(record: "ReplayRecord") -> None:
+    """Every verified side file still the bytes verified (``ReplayRefused`` otherwise) -- a reader's check before
+    it reads (plan 4.2)."""
+    from forklift_core.sensors.depth_record import side_folder
+
+    folder = side_folder(record.path)
+    for name, (_sha, pin) in record.depth_files.items():
+        try:
+            st = os.stat(folder / name)
+        except OSError as exc:
+            raise ReplayRefused("replay_depth_mismatch", f"{name}: {exc}") from exc
+        if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != tuple(pin):
+            raise ReplayRefused("replay_depth_mismatch", f"{name} changed since it was verified")
+
+
 def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, allow_synthetic: bool = False,
                        min_s: float = REPLAY_MIN_S) -> ReplayRecord:
     """The record checked, verified and indexed, or ``ReplayRefused`` (see the module text). ``lidar_cfg``: the
@@ -207,6 +376,8 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
     operating: list = []  # (record ns, (feed_gen, producer_gen)) of scans the layer and the operating SLAM take
     imu_rows = 0
     imu_ver = None
+    depth: list = []
+    depth_ver = None
     last_ns = None
     with open(p, "rb") as f:
         offset = 0
@@ -233,6 +404,8 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                     cfg = _imu_cfg_from_header(header.get("imu"))
                     imu_ver = _ImuVerifier(cfg if cfg is not None else imu_cfg) if (cfg or imu_cfg) else None
                     counts["imu_config_recorded"] = int(cfg is not None)
+                    if header.get("depth"):
+                        depth_ver = _DepthVerifier(header["depth"])
                     continue
                 if t == "slam_header":
                     slam_header = r
@@ -275,6 +448,14 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                     imu_rows += t == "imu"
                     if imu_ver is not None:
                         imu_ver.row(r)
+                elif t in DEPTH_KINDS:
+                    if depth_ver is None:
+                        raise ReplayRefused("replay_depth_mismatch", "depth rows with no depth header")
+                    if t == "depth" or (t == "depth_gen" and str(r.get("why") or "").startswith("lost:")):
+                        # indexed for 7e-2's reader; not the record's length: the replay does not consume depth yet
+                        # (Codex 7e-1 round 1 P2-7)
+                        depth.append((int(r["host_ns"]), line_at, zlib.crc32(raw)))
+                    depth_ver.row(r)
             except ReplayRefused as exc:
                 deferred = exc
             except (KeyError, TypeError, ValueError, AttributeError):
@@ -314,6 +495,10 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
             if counts["imu_config_recorded"]:
                 raise ReplayRefused("replay_mismatch", f"imu {imu_ver.first_mismatch}")
             counts["imu_config_unrecorded"] = imu_ver.mismatches
+    depth_pins: dict = {}
+    if depth_ver is not None:
+        depth_pins, dcounts = depth_ver.finish(p, end.get("depth"))
+        counts.update(dcounts)
     lo, hi = anchor + int(BRIDGE_STARTUP_MAX_S * 1e9), anchor + int(START_WINDOW_END_S * 1e9)
     per_gen = collections.Counter(g for ns, g in operating if lo <= ns <= hi)
     if not per_gen or max(per_gen.values()) < START_SCANS:
@@ -323,7 +508,8 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
     counts["scans_operating"] = len(operating)
     return ReplayRecord(path=p, sha256=want_sha, header=header, slam_header=slam_header, end=end,
                         anchor_ns=anchor, last_ns=last_ns, lidar=lidar, imu=imu, synthetic=synthetic, counts=counts,
-                        imu_config_recorded=bool(counts["imu_config_recorded"]), stat=pin)
+                        imu_config_recorded=bool(counts["imu_config_recorded"]), stat=pin, depth=depth,
+                        depth_files=depth_pins)
 
 
 class StreamReader:
@@ -433,5 +619,5 @@ class StreamReader:
             self._thread.join(timeout=2.0)
 
 
-__all__ = ["BRIDGE_STARTUP_MAX_S", "READS", "REPLAY_MIN_S", "START_SCANS", "START_WINDOW_END_S", "ReplayRecord",
+__all__ = ["BRIDGE_STARTUP_MAX_S", "DEPTH_KINDS", "READS", "check_depth_pins", "REPLAY_MIN_S", "START_SCANS", "START_WINDOW_END_S", "ReplayRecord",
            "ReplayRefused", "StreamReader", "load_replay_record"]

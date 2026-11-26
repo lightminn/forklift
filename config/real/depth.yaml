@@ -1,0 +1,58 @@
+# The real D435i depth stream as the D5 pocket check's source (PR 7 7e, docs/plans/2026-11-26-7e-depth-pocket-check.md).
+# Read by sensors/depth_cfg.py and the observe run's --depth. Every timing and mount value is provisional until the
+# bench (plan 10: B1 delay, B6 mount): measured: false keeps the source diagnostic (no operating depth source can be
+# built, so D5 runs only under the d5_pocket bypass).
+schema: depth_source/1
+stream:
+  # Z16 at the team noise capture's resolution (config/depth_noise_d435i_team.yaml source_fx 388.8 = 640 wide,
+  # tools/capture_d435i_noise.py default 640x480); the profile actually opened is recorded. No fallback: a device
+  # that does not offer it is refused (the noise model and the check's camera are this resolution)
+  width: 640
+  height: 480
+  fps: 15
+sensor:
+  # written on the stereo module before its start and read back after; a difference refuses the start (plan 1).
+  # null: left at the device's value (still read back and recorded). No SDK post-processing filter is applied.
+  # Written in this order: the preset first (it resets the others). Fixed values so a capture never depends on what
+  # an earlier program left on the device (Codex 7e-1 round 1 P2-6)
+  visual_preset: 1         # the D400 "Default" preset
+  global_time_enabled: 0   # the device's own clock domain, not the SDK's host-mapped global time
+  emitter_enabled: 1
+  laser_power: 150         # the D435's default
+  enable_auto_exposure: 1
+  # the exposure ceiling (us), set from B1 if the budget needs it (plan 2): the D400 applies it only with auto
+  # exposure and the toggle both on -- a ceiling without them is refused by the loader
+  auto_exposure_limit_toggle: null
+  auto_exposure_limit: null
+timing:
+  # a frame was taken in [host receipt - delay_bound_s, host receipt]: null until the bench (B1) and a decision on
+  # its basis (measured, or an engineering bound with its decision and document -- as lidar.yaml). With null the
+  # frames are diagnostic only
+  delay_bound_s: null
+  measured: false
+  provisional_delay_bound_s: 0.05  # observe-run diagnostics only: the intervals recorded until a bound is entered
+  basis: null
+  decision_id: null
+  basis_doc: null
+  # with a bound: exactly serial, firmware, usb, backend, profile (WxH@fps), settings_sha256 -- the capture the bound
+  # was taken on; another capture stays diagnostic whatever the bound (plan 2)
+  applies_to: null
+generation:
+  # a new depth generation on: no frame for receive_gap_s (4.5 periods at 15 Hz), the device time going back or
+  # repeating out of order, the time domain changing, the cumulative delay check broken (all frame pairs of one
+  # device clock: spread <= bound + 1 ms + 100 ppm of their device time apart -- as the IMU source), a queue overflow,
+  # the device lost. Every one but the receive gap stops the source until the run starts again (the device is not
+  # reopened in a run)
+  receive_gap_s: 0.3
+queue_max: 8               # frames waiting for the observe cycle; more is an overflow (in the observe run: raw frames
+                           # lost before they were recorded, so the record is incomplete)
+record:
+  chunk_frames: 30         # frames per side file (2 s at 15 Hz, about 18 MB uncompressed)
+  space_margin: 1.2        # free space needed: width x height x 2 B x fps x seconds x this
+mount:
+  # base_link <- optical at lift 0 (plan 3, 5): unmeasured (B6, S7). The real path refuses an operating source
+  # without it
+  base_from_optical: null
+  rides_lift: null
+  measured: false
+distortion_max_px: 0.5     # the largest pixel shift the recorded distortion may cause; more refuses the check (4.3)

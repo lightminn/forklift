@@ -439,7 +439,8 @@ def test_the_synthetic_writer_carries_what_the_replay_reads(good):
         if want is not None:
             assert want <= set(r), (r["t"], want - set(r))
             seen.add(r["t"])
-    assert seen >= set(rr.READS) - {"scan_event", "imu_gen"}  # those two only when the record has them
+    # scan_event and imu_gen only when the record has them; the depth kinds only in a record with depth (below)
+    assert seen >= set(rr.READS) - {"scan_event", "imu_gen"} - set(rr.DEPTH_KINDS)
 
 
 # --- Codex 7r-1 round 1 ------------------------------------------------------------------------------------------
