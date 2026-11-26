@@ -704,6 +704,39 @@ def test_the_header_check_and_the_identity_name_one_commit(record_repo, tmp_path
     assert res.returncode == 0, res.stdout + res.stderr
 
 
+def test_a_stray_build_info_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
+    """Codex U3d round 4 P2-1: the identity compiled is the generated build_info.h (the one the header check read)."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "firmware" / "boards" / "weact_h743" / "src" / "build_info.h").write_text(
+        '#error "a stray build_info.h was compiled"\n')  # untracked: git describe stays clean
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    head = _git(r2, "rev-parse", "--short=12", "HEAD").strip()
+    assert f"forklift-mcu normal OPEN {head} ".encode() in (build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+
+
+def test_the_operating_header_is_generated_from_the_committed_blobs(record_repo, tmp_path):
+    """Codex U3d round 4 P2-2: the generator reads a staged copy of the HEAD blobs, never the work tree."""
+    repo, header = record_repo
+    log = tmp_path / "argv.log"
+    wrapper = tmp_path / "py.sh"
+    wrapper.write_text(f'#!/bin/sh\necho "$@" >> {log}\nexec {sys.executable} "$@"\n')
+    wrapper.chmod(0o755)
+    out = tmp_path / "v.h"
+    gen = subprocess.run(
+        ["cmake", f"-DREPO={repo}", f"-DPYTHON={wrapper}", f"-DYAML={repo / 'config/real/vehicle.yaml'}",
+         f"-DOUT={out}", "-DCOMMITTED=1", "-P", str(repo / "firmware" / "cmake" / "gen_vehicle_header.cmake")],
+        capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
+    generating = [ln for ln in log.read_text().splitlines() if "--out" in ln]
+    assert len(generating) == 1 and f"{out}.stage/config/real/vehicle.yaml" in generating[0], generating
+    assert out.read_text() == header.read_text() and not Path(f"{out}.stage").exists()
+
+
 def test_a_stray_vehicle_header_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
     """Codex U3d round 2 P2-2: the board source includes the generated header by its absolute path."""
     repo, header = record_repo

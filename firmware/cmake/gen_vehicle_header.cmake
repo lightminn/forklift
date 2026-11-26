@@ -91,14 +91,37 @@ macro(check_inputs)
     endif()
 endmacro()
 check_inputs()
+# The operating build generates from the committed blobs themselves (the HEAD the identity names), staged with
+# their repository-relative layout so the config's relative chassis path still resolves -- never from work-tree
+# bytes that could change between the checks (Codex U3d round 4 P2-2).
+set(gen_yaml "${YAML}")
+if(COMMITTED)
+    set(stage "${OUT}.stage")
+    file(REMOVE_RECURSE "${stage}")
+    foreach(path "${YAML}" "${written}")
+        file(RELATIVE_PATH rel "${top}" "${path}")
+        get_filename_component(dir "${stage}/${rel}" DIRECTORY)
+        file(MAKE_DIRECTORY "${dir}")
+        execute_process(COMMAND git cat-file blob "HEAD:${rel}" WORKING_DIRECTORY ${top}
+                        OUTPUT_FILE "${stage}/${rel}" RESULT_VARIABLE rc ERROR_QUIET)
+        if(NOT rc EQUAL 0)
+            refuse("'${rel}' could not be read from HEAD")
+        endif()
+    endforeach()
+    file(RELATIVE_PATH rel_yaml "${top}" "${YAML}")
+    set(gen_yaml "${stage}/${rel_yaml}")
+endif()
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${REPO}/src
-            ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${YAML} --out ${OUT}.new
+            ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${gen_yaml} --out ${OUT}.new
     RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)
     message(FATAL_ERROR "could not generate ${OUT} from ${YAML}")
 endif()
-check_inputs()  # again after the generation: the bytes it read are still the committed ones
+check_inputs()  # again after the generation: HEAD is still the identity's and the work tree still its blobs
+if(COMMITTED)
+    file(REMOVE_RECURSE "${stage}")
+endif()
 file(READ "${OUT}.new" new)
 if(EXISTS "${OUT}")
     file(READ "${OUT}" old)

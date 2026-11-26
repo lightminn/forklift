@@ -7,7 +7,11 @@
 #include "board/board_hal.h"
 #include "board/drv_spi.h"
 #include "board/link.h"
+#ifdef FW_BUILD_INFO_PATH
+#include FW_BUILD_INFO_PATH /* the generated identity by its absolute path (operating plan 2026-11-26 U3d) */
+#else
 #include "build_info.h"
+#endif
 #include "fw/app.h"
 #include "stm32h7xx.h"
 
