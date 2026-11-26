@@ -263,6 +263,8 @@ class RunPaths:
     lidar_config: Path = REPO / "config/real/lidar.yaml"
     imu_config: Path = REPO / "config/real/imu.yaml"
     allow_synthetic: bool = False
+    # the operating unlock (docs/plans/2026-11-26-real-operating-assembly.md 2.4): S10's human-confirmed record
+    preconditions: Path = REPO / "config/real/s10_preconditions.yaml"
 
 
 @dataclass
@@ -660,7 +662,9 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     out = []
     client = sources.client
     if client is Client.REAL:
-        out.append("client_real:pr7_preconditions")  # 10.5: LiDAR interval, SLAM processed, generations, budget
+        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal -- with
+        # precondition:unlock_incomplete until the unlock's last PR, so it is refused whatever the record says
+        out += real_preconditions(prep, sources.host, sources.transport)
     elif client is not Client.HIL:
         out.append(f"client_unsupported:{client}")
     host_client = getattr(sources.host, "client", None)
@@ -693,6 +697,35 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
                                       or not callable(getattr(sources.depth, "pocket_check", None))):
         out.append("depth_without_pocket_hooks")
     return out
+
+
+def board_facts(host, transport) -> dict:
+    """The first STATE's facts for the operating preconditions: the opened fd's USB product string and serial, whether
+    a STATE came, and the host's own build refusal for the real client (``drive_refusal``)."""
+    state = getattr(host, "state", None)
+    refusal = None
+    if state is not None:
+        try:
+            refusal = host.build_refusal(state)
+        except Exception as err:  # noqa: BLE001 -- recorded as the refusal
+            refusal = f"build_refusal:{type(err).__name__}"
+    return {"usb_product": getattr(transport, "usb_product", None), "usb_serial": getattr(transport, "usb_serial", None),
+            "state_seen": state is not None, "drive_refusal": refusal,
+            "boot_id": None if state is None else int(state.boot_id)}
+
+
+def real_preconditions(prep, host, transport) -> list:
+    """``real_preconditions.operating_preconditions`` on this run's paths and the board's facts (plan 2.4)."""
+    from forklift_core.live import real_preconditions as rp
+
+    p = prep.paths
+    try:
+        facts = rp.gather(record_path=p.preconditions, lidar_path=p.lidar_config, imu_path=p.imu_config,
+                          settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
+                          vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+    return rp.operating_preconditions(facts)
 
 
 def _layer_sensors(layer_cfg: dict) -> dict:

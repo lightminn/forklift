@@ -1,0 +1,27 @@
+# S10's human-confirmed preconditions for the operating REAL assembly
+# (docs/plans/2026-11-26-real-operating-assembly.md 2.4, 2.10, 3). Read by src/forklift_core/live/real_preconditions.py.
+#
+# Every item is null until its bring-up step is done and written here with:
+#   status: pass | approved_limited      (approved_limited needs decision_id, a lead decision)
+#   evidence: <repo-relative path>       (the validation document; must exist)
+#   date: <YYYY-MM-DD>
+#   binds: {...}                         (what it was measured on; a later change voids it -- see the plan 2.4)
+# The settings themselves (lidar.yaml bound and mount, provenance in vehicle.yaml / obstacle_layer.yaml /
+# safety_watch.yaml) are read directly and are not copied here. An unmeasured provenance entry passes only with a
+# lead exception in config_exceptions: [{file: vehicle|budget|watch, key: <dotted key>, decision_id: <id>}].
+# While null, the operating REAL assembly is refused (and, until the unlock's last PR, refused anyway).
+schema: s10_preconditions/1
+items:
+  s5_safety: null          # C2: final-image stops (link cut after the longest-valid DRIVE, DISARM, Jetson stop, power)
+  iwdg_evidence: null      # C2: the same commit's locked fw-stall watchdog + the stand's reset -> output cut
+  fault_detection: null    # C3: encoder fault detection and the input-age stop on the final image
+  port_review: null        # C4: the seven items resolved, or approved_limited with the lead's limits
+  scan_load: null          # C5: the 7a-3 bound re-checked under the operating load
+  scan_coverage: null      # C5: the beam height and the S7 occlusion mask over the S10 corridor
+  s10_speed: null          # C9: approved_max_speed_mps (lead), tested_speed_mps
+  start_taped: null        # C10: the taped start, measured (the S10-A start_rear)
+  lift: null               # C11: origin/scale and the power-off hold at the target height (format: plan 2.10)
+  firmware_build: null     # C12: product string, the header's calibration id, readback sha256, board lift limit
+  stop_model: null         # C13: the S5 stop model the layer uses (obstacle_layer_real.yaml latency/decel)
+  jetson_load: null        # C14: one host, 50 Hz tick, STATE 50 ms, the 25 ms gate (>= 500 gate samples, provisional)
+config_exceptions: []

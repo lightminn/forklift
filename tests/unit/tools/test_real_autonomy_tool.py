@@ -137,3 +137,65 @@ def test_a_hil_run_refuses_a_device_and_reserved_model_arguments_before_opening_
     assert "hil_inject_invalid:x:1" in json.loads(capsys.readouterr().out)["refused"]
     assert tool.main(["--run", "--hil", "--duration-s", "5"]) == 2
     assert "hil_model_missing" in json.loads(capsys.readouterr().out)["refused"]
+
+
+def test_the_real_client_refuses_a_missing_device_a_pty_and_hil_before_opening(capsys):
+    """The operating unlock U1 (plan 2.1): --run --client real needs a device that is not a pty, never with --hil."""
+    import os
+
+    assert tool.main(["--run", "--client", "real"]) == 2
+    assert json.loads(capsys.readouterr().out)["refused"] == ["real_needs_device"]
+    m, s = os.openpty()
+    try:
+        assert tool.main(["--run", "--client", "real", "--device", os.ttyname(s)]) == 2
+        rec = json.loads(capsys.readouterr().out)
+        assert rec["refused"] == ["real_device_is_pty"] and rec["opened"] == []
+    finally:
+        os.close(m)
+        os.close(s)
+    assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/ttyACM0"]) == 2
+    assert json.loads(capsys.readouterr().out)["refused"] == ["real_with_hil"]
+
+
+def test_the_real_precheck_reads_the_first_state_judges_and_writes_nothing(monkeypatch, capsys):
+    """U1 (plan 2.4): the board opened (here a pty standing in), its first STATE read, the preconditions printed with
+    the unlock lock first, exit 2 -- and not one byte written to the board, the transport never granted."""
+    import os
+    import sys
+    import tty
+
+    sys.path.insert(0, str(tool.REPO / "tools"))
+    import real_loop_transport as rlt
+
+    from forklift_core.mcu_link.messages import McuState, Mode, RejectReason, StateFlag, encode
+
+    m, s = os.openpty()
+    tty.setraw(s)
+    os.set_blocking(m, False)
+    os.set_blocking(s, False)
+    st = McuState(1000, 9, 0, 0, Mode.DISARMED, RejectReason.NONE, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, (0,) * 4, (0,) * 4,
+                  (0,) * 4, 0, 0, StateFlag(0))
+    os.write(m, encode(st, 0))
+    made = []
+
+    def fake_open(path, **kw):
+        t = rlt.RealTtyTransport(s, usb_product="forklift-mcu normal open v1", usb_serial="ABC")
+        made.append(t)
+        return t
+
+    monkeypatch.setattr(rlt.RealTtyTransport, "open", staticmethod(fake_open))
+    monkeypatch.setattr(tool, "_is_pty", lambda d: False)
+    assert tool.main(["--run", "--client", "real", "--device", "/dev/forklift-mcu"]) == 2
+    rec = json.loads(capsys.readouterr().out)
+    assert rec["refused"][0] == "precondition:unlock_incomplete"
+    assert rec["board"]["state_seen"] is True and rec["board"]["usb_serial"] == "ABC"
+    assert made and made[0].real_operating is False
+    import errno
+
+    try:
+        assert os.read(m, 4096) == b""  # nothing written: not even the poison
+    except BlockingIOError:
+        pass
+    except OSError as err:
+        assert err.errno == errno.EIO  # the slave closed with nothing pending (written bytes would be read first)
+    os.close(m)

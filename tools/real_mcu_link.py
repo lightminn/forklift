@@ -70,6 +70,10 @@ def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
 
 
 def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:
+    return usb_attr_for_rdev(rdev, "product", sys_root=sys_root)
+
+
+def usb_attr_for_rdev(rdev: int, attr: str, *, sys_root="/sys") -> str | None:
     """The USB product string of the device a character node belongs to: from ``/sys/dev/char/<major>:<minor>`` up
     the device tree to the nearest USB device (the directory with ``idVendor``) and its own ``product`` -- never a
     hub's above it (Linux omits ``product`` when the device has no string, Codex P2). None for a node with no USB
@@ -86,10 +90,22 @@ def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:
             break
         if (d / "idVendor").is_file():  # the nearest USB device: its own string or none
             try:
-                return (d / "product").read_text(encoding="ascii", errors="replace").strip()
+                return (d / attr).read_text(encoding="ascii", errors="replace").strip()
             except OSError:
                 return None
     return None
+
+
+def usb_serial_of_fd(fd: int) -> str | None:
+    """The USB serial number (the board's 96-bit UID on the WeAct H743 firmware) of the device ``fd`` is open on --
+    as ``usb_product_of_fd``, from the opened node itself (operating unlock plan 2.4: the record binds the board)."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return None
+    if not stat.S_ISCHR(st.st_mode):
+        return None
+    return usb_attr_for_rdev(st.st_rdev, "serial")
 
 
 def usb_product_of_fd(fd: int) -> str | None:

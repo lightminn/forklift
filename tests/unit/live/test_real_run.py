@@ -207,7 +207,7 @@ def test_closing_without_the_disarm_reaching_the_model_is_unconfirmed(base_prep)
 
 
 @pytest.mark.parametrize("change,reason", [
-    (lambda s: setattr(s, "client", Client.REAL), "client_real:pr7_preconditions"),
+    (lambda s: setattr(s, "client", Client.REAL), "precondition:unlock_incomplete"),
     (lambda s: setattr(s.transport, "hil_plant", False), "hil_check_not_held"),
     (lambda s: setattr(s.transport, "fake_mcu", True), "transport_fake_mcu"),
     (lambda s: setattr(s.slam, "map_id", "other"), "slam_map_mismatch:other"),

@@ -303,6 +303,83 @@ class LoopTtyTransport:
         raise DeviceLost(self.lost["reason"])
 
 
+class RealTtyTransport(LoopTtyTransport):
+    """The operating REAL link (docs/plans/2026-11-26-real-operating-assembly.md 2.1): the loop contract of
+    ``LoopTtyTransport`` on the real board's USB CDC tty, opened with the executor lock taken on that very fd before
+    anything is set on the port, and the board's USB product string and serial read from that fd (the e-stop waiver,
+    the precondition record's binds). Never a HIL check: ``hil_plant`` stays False.
+
+    ``real_operating`` (the device block's third way, ``real_loop.motion_allowed``) is true only after ``grant`` --
+    given by the run once the operating preconditions held at assembly -- and until the first of: a revocation, a
+    lost device (never reopened), a STATE of another boot than the one granted on, or a STATE showing a HIL or
+    commissioning build. Every other send check (the host's ``drive_refusal``, freshness, the gate) stays."""
+
+    def __init__(self, fd: int, *, usb_product: str | None, usb_serial: str | None, **kw) -> None:
+        super().__init__(fd, **kw)
+        self.usb_product, self.usb_serial = usb_product, usb_serial
+        self._token = None
+        self._grant_boot: int | None = None
+        self._last_boot: int | None = None
+        self.revoked: str | None = None
+
+    @classmethod
+    def open(cls, path: str, *, opener=None, lock=None, product_reader=None, serial_reader=None, **kw):
+        """Open ``path`` raw with the executor lock on the fd first (``DeviceBusy`` if held; the fd closed on any
+        failure), then read the USB identity from the same fd."""
+        import real_mcu_link as rml
+
+        from forklift_core.live.executor_lock import lock_fd
+
+        opener = rml.open_raw if opener is None else opener
+        lock = (lambda fd: lock_fd(fd, path)) if lock is None else lock
+        fd = opener(path, before_config=lock)
+        try:
+            product = (rml.usb_product_of_fd if product_reader is None else product_reader)(fd)
+            serial = (rml.usb_serial_of_fd if serial_reader is None else serial_reader)(fd)
+            return cls(fd, usb_product=product, usb_serial=serial, **kw)
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @property
+    def real_operating(self) -> bool:
+        return self._token is not None and self.lost is None and self.revoked is None
+
+    def grant(self, token, boot_id: int | None) -> bool:
+        """The run's permission once the preconditions held (on the boot the first STATE showed). False: refused
+        (already revoked, lost, or no boot)."""
+        if self.revoked is not None or self.lost is not None or boot_id in (None, 0):
+            return False
+        self._token, self._grant_boot = token, int(boot_id)
+        self._event({"t": "real_operating", "granted": True, "boot": int(boot_id), "ns": int(self.clock())})
+        return True
+
+    def revoke(self, reason: str) -> None:
+        if self.revoked is None:
+            self.revoked = str(reason)
+            self._token = None
+            self._event({"t": "real_operating", "granted": False, "reason": self.revoked, "ns": int(self.clock())})
+
+    def _check_hil(self, s: McuState) -> None:
+        """Not a HIL check (``hil_plant`` stays False): a STATE of a HIL or commissioning build, or of another boot
+        than the granted one, revokes the permission."""
+        if s.boot_id == 0:
+            return
+        self._last_boot = int(s.boot_id)
+        if s.flags & (StateFlag.HIL_PLANT | StateFlag.COMMISSION_BUILD):
+            self.revoke("board_build_changed")
+        if self._grant_boot is not None and int(s.boot_id) != self._grant_boot:
+            self.revoke("boot_changed")
+
+    @property
+    def last_boot(self) -> int | None:
+        return self._last_boot
+
+    def _lose(self, path: str) -> None:
+        self.revoke(f"device_lost:{path}")
+        super()._lose(path)
+
+
 # --- the runner's own pty and model ---------------------------------------------------------------------------------
 def _other_openers(rdev: int, own_fd: int) -> tuple[list[int], list[int]]:
     """``(holders, uninspected)``: pids (other than this process's own fd) holding an fd on the device ``rdev``, and

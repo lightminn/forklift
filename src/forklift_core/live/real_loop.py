@@ -78,8 +78,12 @@ def motion_allowed(transport) -> bool:
     S10's stop frame) go out only on a transport that declares itself the internal fake MCU (``fake_mcu is True``);
     any other transport -- an operating serial link included -- passes the DISARM only. The real MCU's AUTO opens
     with PR 5 and S10's preconditions. 6a (design 1): or a transport that verified an output-locked HIL board
-    (``hil_plant is True``, the loop TTY transport's own check of every STATE of the current boot)."""
-    return getattr(transport, "fake_mcu", False) is True or getattr(transport, "hil_plant", False) is True
+    (``hil_plant is True``, the loop TTY transport's own check of every STATE of the current boot). The operating
+    unlock (docs/plans/2026-11-26-real-operating-assembly.md 2.1): or the real link's own permission
+    (``real_operating is True``: granted after the operating preconditions held, revoked on a loss, a boot or build
+    change) -- every other send check stays."""
+    return (getattr(transport, "fake_mcu", False) is True or getattr(transport, "hil_plant", False) is True
+            or getattr(transport, "real_operating", False) is True)
 
 
 @dataclass
