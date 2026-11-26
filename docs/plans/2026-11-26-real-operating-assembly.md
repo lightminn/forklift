@@ -133,7 +133,8 @@
 - 실행기는 `base_from_laser(lidar.mount, rear_offset_m)` 를 `hello` 에 실어 보낸다. 브리지는 자기 `laser_xyz_yaw` 와 다르면(1 mm·0.1° 초과) `fault` 로 거부한다.
 - 같으면 브리지의 `ready` 가 대조한 값의 해시(`laser_checked`)를 돌려준다. REAL 의 SLAM 원천은 그 해시가 자기 값과 같은 `ready` 뒤의 응답만 받는다. 새 칸을 모르는 구버전 브리지는 `laser_checked` 가 없으니, 그 세션의 `processed` 를 하나도 받지 않는다(Codex 2 회차 P1-1).
   - 브리지 코드(`real_bridge_core`)와 `hello`·`ready` 계약을 바꾼다. 브리지 시험이 함께 간다. 새 실행기 + 구버전 브리지 조합 거부와, HIL·관측 도구 조합의 회귀를 본다.
-  - 런처는 같은 `lidar.yaml` 에서 그 파라미터를 계산해 띄운다.
+  - 런처는 같은 `lidar.yaml` 에서 그 파라미터를 계산해 띄운다(`tools/real_bridge_laser.py`, 실행기와 같은 `real_run.bridge_laser_xyz_yaw`).
+  - 구현(U2b): `hello.base_from_laser` 와 `state.laser_checked`(hello 값 그대로의 sha256)는 선택 칸이다. 칸 없는 hello(HIL·관측)는 대조도 `laser_checked` 도 없고, 그 실행기도 요구하지 않는다. 운영 실행기는 시작과 씨앗의 모든 `ready` 에 자기 값의 digest 를 요구하고, 없거나 다르면 실행을 끝낸다(`slam_laser_unchecked`).
 
 ### 2.4 선행 조건 판정 `operating_preconditions`
 
@@ -229,6 +230,7 @@
   - `map_id`
 - 행의 시작 자세(`base_link`)를 후륜축으로 바꿔 S10-A `start_rear` 와 비교한다(0.10 m·5°). 번들 폴더는 행의 `SLAM_BUNDLE_ROOT / folder` 하나다(따로 받는 인자 없음).
 - 하나라도 다르면 `precondition:site_bundle:<무엇>` 이고 **우회 불가**다. 고치는 길은 다시 조사·등록하는 것이다.
+- 구현(U2b, `live/real_site.py`): `encoder_model` 상수는 `live/real_site.REAL_ENCODER_MODEL`(`"real_wheel_odometry/1"`)이다(시뮬레이션 미션 코어가 import 하는 `real_vehicle` 은 건드리지 않음). 운영 실행의 경로는 `RunPaths.site_record`·`registry`·`bundle_root` 이고, 손으로 준 `map_bundle` 은 거부한다(`map_bundle_by_hand`). 행의 `folder` 는 경로 구분자 없는 이름 하나, 보고서는 `bundle_root` 안에서만 읽는다. 대조에 쓴 site record·registry·보고서의 해시는 `prep.hashes` 에 남는다.
 - **순서 주의**: 보고서가 `lidar.yaml`·`vehicle.yaml` 해시를 고정한다. 그래서 순서는 보정·장착 확정(S2·S7·S8·7a-3 기입) → 조사 주행 → `map_id`·시작점 기입 → 등록이다(4 절).
 
 ### 2.9 콘솔

@@ -14,11 +14,21 @@ the bridge sends ``reply`` (one per scan sent) and ``state`` (a start or seed's 
   stamps ROS messages with it, and the session's stamps strictly increase).
 - ``state{id, kind, reason}``: ``kind`` one of ``seeding``, ``ready_for_scans``, ``ready``, ``not_localized``, ``void``,
   ``fault`` (the bridge cannot go on: the connection ends after it).
+
+One calibration for the layer and SLAM (docs/plans/2026-11-26-real-operating-assembly.md 2.3, unlock U2b): an
+operating executor's ``hello`` carries ``base_from_laser`` -- base_link <- laser (x, y, z, yaw) from the run's
+``lidar.yaml`` mount -- and the bridge compares it with its own ``laser_xyz_yaw`` (``laser_matches``: within
+``LASER_TOL_M`` and ``LASER_TOL_RAD``; otherwise ``fault``). A bridge that compared it puts ``laser_checked`` --
+``laser_digest`` of the hello's value as received -- on every ``ready`` of that session. A hello without the field
+(the HIL and observe runs) asks for no comparison and gets no ``laser_checked``; an operating executor takes no
+``ready`` without its own digest (an older bridge that does not know the field is refused).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +37,8 @@ from forklift_core.localization import slam_link
 
 STATE_KINDS = ("seeding", "ready_for_scans", "ready", "not_localized", "void", "fault")
 END_KINDS = ("ready", "not_localized", "void", "fault")
+LASER_TOL_M = 0.001  # per axis (plan 2.3: 1 mm)
+LASER_TOL_RAD = math.radians(0.1)  # plan 2.3: 0.1 deg
 
 
 @dataclass(frozen=True)
@@ -36,6 +48,7 @@ class Hello:
     start_id: int
     start_pose: tuple
     deadline_ns: int
+    base_from_laser: tuple | None = None  # base_link <- laser (x, y, z, yaw): asks the bridge to compare (U2b)
 
 
 @dataclass(frozen=True)
@@ -59,10 +72,27 @@ class State:
     id: int
     kind: str
     reason: str | None = None
+    laser_checked: str | None = None  # on a ready: the digest of the hello's base_from_laser the bridge compared
 
     def __post_init__(self) -> None:
         if self.kind not in STATE_KINDS:
             raise ValueError(f"unknown state kind {self.kind!r}")
+        if self.laser_checked is not None and not (isinstance(self.laser_checked, str) and len(self.laser_checked) == 64
+                                                   and all(c in "0123456789abcdef" for c in self.laser_checked)):
+            raise ValueError("laser_checked: a sha256 hex digest expected")
+
+
+def laser_digest(base_from_laser) -> str:
+    """The digest a bridge returns for the ``base_from_laser`` it compared (the values as the frame carries them)."""
+    return hashlib.sha256(json.dumps([float(v) for v in _pose(base_from_laser, 4)]).encode()).hexdigest()
+
+
+def laser_matches(sent, own) -> bool:
+    """``sent`` (the hello's) and ``own`` (the bridge's ``laser_xyz_yaw``) within ``LASER_TOL_M`` per axis and
+    ``LASER_TOL_RAD`` in yaw."""
+    a, b = _pose(sent, 4), _pose(own, 4)
+    return (all(abs(a[i] - b[i]) <= LASER_TOL_M for i in range(3))
+            and abs(math.remainder(a[3] - b[3], math.tau)) <= LASER_TOL_RAD)
 
 
 @dataclass(frozen=True)
@@ -87,9 +117,11 @@ def _int(v, name: str) -> int:
 
 
 def encode_hello(h: Hello) -> bytes:
-    return slam_link._frame({"type": "hello", "session_epoch": int(h.session_epoch), "map_id": str(h.map_id),  # noqa: SLF001
-                             "start_id": int(h.start_id), "start_pose": list(_pose(h.start_pose)),
-                             "deadline_ns": int(h.deadline_ns)})
+    head = {"type": "hello", "session_epoch": int(h.session_epoch), "map_id": str(h.map_id),
+            "start_id": int(h.start_id), "start_pose": list(_pose(h.start_pose)), "deadline_ns": int(h.deadline_ns)}
+    if h.base_from_laser is not None:
+        head["base_from_laser"] = list(_pose(h.base_from_laser, 4))
+    return slam_link._frame(head)  # noqa: SLF001
 
 
 def encode_seed(s: Seed) -> bytes:
@@ -104,7 +136,8 @@ def encode_cancel(c: Cancel) -> bytes:
 
 def encode_state(s: State) -> bytes:
     return slam_link._frame({"type": "state", "id": int(s.id), "kind": s.kind,  # noqa: SLF001
-                             **({"reason": str(s.reason)} if s.reason is not None else {})})
+                             **({"reason": str(s.reason)} if s.reason is not None else {}),
+                             **({"laser_checked": s.laser_checked} if s.laser_checked is not None else {})})
 
 
 def encode_scan(scan: slam_link.Scan, stamp_ns: int) -> bytes:
@@ -129,9 +162,11 @@ def decode(body: bytes):
     kind = header.get("type")
     try:
         if kind == "hello":
+            laser = header.get("base_from_laser")
             return Hello(_int(header["session_epoch"], "session_epoch"), str(header["map_id"]),
                          _int(header["start_id"], "start_id"), _pose(header["start_pose"]),
-                         _int(header["deadline_ns"], "deadline_ns"))
+                         _int(header["deadline_ns"], "deadline_ns"),
+                         None if laser is None else _pose(laser, 4))
         if kind == "seed":
             return Seed(_int(header["seed_id"], "seed_id"), _int(header["epoch"], "epoch"),
                         _pose(header["start_pose"]), _pose(header["odom_snapshot"]), _int(header["boot"], "boot"),
@@ -139,7 +174,8 @@ def decode(body: bytes):
         if kind == "cancel":
             return Cancel(_int(header["seed_id"], "seed_id"), str(header["reason"]))
         if kind == "state":
-            return State(_int(header["id"], "id"), str(header["kind"]), header.get("reason"))
+            return State(_int(header["id"], "id"), str(header["kind"]), header.get("reason"),
+                         header.get("laser_checked"))
         if kind == "scan":
             scan = slam_link.decode_scan(body)
             return RealScan(scan, _int(header["stamp_ns"], "stamp_ns"))
@@ -152,5 +188,6 @@ def decode(body: bytes):
     raise ValueError(f"unknown frame type {kind!r}")
 
 
-__all__ = ["Cancel", "END_KINDS", "Hello", "RealScan", "STATE_KINDS", "Seed", "State", "decode", "encode_cancel",
-           "encode_hello", "encode_scan", "encode_seed", "encode_state"]
+__all__ = ["Cancel", "END_KINDS", "Hello", "LASER_TOL_M", "LASER_TOL_RAD", "RealScan", "STATE_KINDS", "Seed", "State",
+           "decode", "encode_cancel", "encode_hello", "encode_scan", "encode_seed", "encode_state", "laser_digest",
+           "laser_matches"]

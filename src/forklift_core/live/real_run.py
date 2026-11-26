@@ -265,6 +265,11 @@ class RunPaths:
     allow_synthetic: bool = False
     # the operating unlock (docs/plans/2026-11-26-real-operating-assembly.md 2.4): S10's human-confirmed record
     preconditions: Path = REPO / "config/real/s10_preconditions.yaml"
+    # the operating run's site bundle (plan 2.8, unlock U2b): the site record it is found by, the registry and the
+    # launcher's SLAM_BUNDLE_ROOT (the bundle is the row's folder under it; none is given by hand)
+    site_record: Path | None = None
+    registry: Path = REPO / "config/slam_map_bundles.yaml"
+    bundle_root: Path | None = None
 
 
 @dataclass
@@ -296,6 +301,7 @@ class RunPrep:
     kernels: dict = field(default_factory=dict)
     jobs: object = None
     replay: object = None  # replay_assembly.ReplayPlan (7r), None for every other run
+    site: object = None  # real_site.SiteBundle of the operating run (U2b), None for every other run
     lidar: object = None  # the operating run's LidarConfig, loaded once with the layer file (U2a; None on HIL/replay)
 
 
@@ -379,6 +385,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
     replay = None
+    site = None
+    if paths.replay is None and not paths.hil:
+        # the operating run (plan 2.8, unlock U2b): the bundle is the registry row's, found before the map is loaded
+        from forklift_core.live import real_site as rs_
+
+        if paths.map_bundle is not None:
+            raise AssemblyRefused([f"{rs_.PREFIX}:map_bundle_by_hand"])
+        try:
+            site = rs_.resolve_site(site_record=paths.site_record, registry=paths.registry,
+                                    bundle_root=paths.bundle_root, encoder_model=rs_.REAL_ENCODER_MODEL)
+        except rs_.SiteRefused as err:
+            raise AssemblyRefused([err.reason]) from err
     if paths.replay is not None:
         # 7r plan 4: the record and its bundle stand for the HIL scene (no hil: part, no zero start); the configs and
         # the record are checked before anything starts
@@ -392,6 +410,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         obstacles = read_hil_scene(paths.s10a)  # the synthetic LiDAR casts them whatever map plans (round 1 P2)
     if replay is not None:
         pass  # the map read above, from the record's bundle (or --map-bundle)
+    elif site is not None:
+        map_id, occupancy = read_map(site.bundle, cfg)
     elif paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:
@@ -432,6 +452,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         raise AssemblyRefused([f"config_unreadable:{type(err).__name__}:{err}"]) from err
     if replay is not None:
         cfg = rpa.replay_start(replay, cfg, map_id, rear_offset)  # the record's start for the loop, plan and hello
+    if site is not None:
+        # C6 (plan 2.8): the report against the files this run reads, before anything starts
+        from forklift_core.live import real_site as rs_
+        from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD
+
+        refused = rs_.check_site(site, encoder_model=rs_.REAL_ENCODER_MODEL, lidar_sha256=hashes_at_start.get("lidar"),
+                                 chassis_sha256=hashes_at_start.get("chassis_urdf"),
+                                 calibration_id=getattr(vehicle, "calibration_id", None), map_id=map_id,
+                                 start_rear=cfg.start_rear, rear_offset_m=rear_offset, tol_m=START_TOL_M,
+                                 tol_rad=START_TOL_RAD)
+        if refused:
+            raise AssemblyRefused(refused)
     # a wall-clock run (real-time plan D2-D3): the fastest obstacle and permission kernels, compiled before the loop
     from forklift_core import kernels
 
@@ -448,6 +480,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:
         raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
+    if site is not None:
+        hashes.update(site.hashes)  # the site record, the registry and the report as judged (U2b)
     if replay is not None:
         hashes.update(replay_record=replay.record.sha256,
                       **{f"{k}_config": v["sha256"] for k, v in replay.configs.items() if v is not None})
@@ -458,7 +492,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                    budget_s=budget_s, overdue_end_s=overdue_end_s, channels=RealChannels(), epoch=epoch,
                    welcome=run_welcome(epoch), start_ns=int(clock()), hashes=hashes, check_plan=plan.status,
                    kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)}, replay=replay,
-                   lidar=real_lidar)
+                   lidar=real_lidar, site=site)
     if jobs_factory is None:
         from forklift_core.planning.plan_worker import PlanWorker
 
@@ -666,6 +700,15 @@ def _real_imu(prep, device, closers, start_real_imu) -> tuple:
     return True, source
 
 
+def bridge_laser_xyz_yaw(lidar, rear_offset_m: float) -> tuple:
+    """base_link <- laser (x, y, z, yaw) from the run's ``LidarConfig`` mount (rear-axle frame) and the chassis's rear
+    axle offset: the value the operating hello carries and the SLAM bridge's ``laser_xyz_yaw`` is launched with
+    (plan 2.3, unlock U2b; ``tools/real_bridge_laser.py`` prints it for the launcher)."""
+    from forklift_core.localization.slam_real_scan import base_from_laser
+
+    return base_from_laser(lidar.mount, rear_offset_m)
+
+
 def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -> RunSources:
     """The real SLAM source for the operating run: as the HIL's (``_real_slam_sources``) but the REAL client, no HIL
     check, and no layer branch (the scan source offers its own scans)."""
@@ -693,7 +736,8 @@ def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -
             odom_history=lambda: box["loop"].odom_history,
             odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m),
             odom_gen=lambda: box["loop"].odom_gen, boot=boot, rear_offset_m=prep.rear_offset_m,
-            session_epoch=lambda: prep.epoch, hil_gate=None)
+            session_epoch=lambda: prep.epoch, hil_gate=None,
+            base_from_laser=bridge_laser_xyz_yaw(prep.lidar, prep.rear_offset_m))
     except BaseException:
         sock.close()
         raise

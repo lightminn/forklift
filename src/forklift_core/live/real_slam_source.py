@@ -54,6 +54,11 @@ at this source) and a forced request's attempt -- given only to a measured scan,
 its reply is dropped. A reply received more than ``LATE_S`` after its ``Flo`` is dropped (``slam_late``). A
 diagnostic scan (no measured interval) is sent and its reply recorded, never handed over.
 
+One calibration (docs/plans/2026-11-26-real-operating-assembly.md 2.3, unlock U2b): with ``base_from_laser`` (the
+operating REAL run's base_link <- laser from its ``lidar.yaml`` mount) the hello carries it, and a ``ready`` without
+that value's ``laser_checked`` ends the run (``slam_laser_unchecked``): an older bridge, or one that compared another
+value, never localizes this session. Without it (HIL, observe) nothing is asked or required.
+
 The HIL check (7r plan 3; ``hil_gate``: () -> (held, boot, losses), the HIL transport's own check and its count of
 losses -- a loss and a new boot within one read leave only the new boot showing; None outside HIL): judged
 at the front of every entry point. A boot change breaks the input (``hil_boot_changed``), ends a start check that has
@@ -222,10 +227,12 @@ class RealSlamSource:
 
     def __init__(self, link: RealSlamLink, *, mode: str, map_id: str, start_ns: int, start_pose, odom_history,
                  odom_base, odom_gen, boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns,
-                 events=None, hil_gate=None) -> None:
+                 events=None, hil_gate=None, base_from_laser=None) -> None:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
         self.mode = mode
+        self.base_from_laser = None if base_from_laser is None else tuple(float(v) for v in base_from_laser)
+        self._laser_digest = None if base_from_laser is None else rl.laser_digest(self.base_from_laser)
         self.link, self.map_id, self.start_ns = link, str(map_id), int(start_ns)
         self.start_pose = tuple(float(v) for v in start_pose)
         self.odom_history, self.odom_base, self.odom_gen, self.boot = odom_history, odom_base, odom_gen, boot
@@ -579,7 +586,8 @@ class RealSlamSource:
                 return  # the session's start goes at the first poll
             if t["kind"] == "start":
                 epoch = self.session_epoch() if callable(self.session_epoch) else self.session_epoch
-                frame = rl.encode_hello(rl.Hello(int(epoch), self.map_id, t["id"], t["pose"], t["deadline_ns"]))
+                frame = rl.encode_hello(rl.Hello(int(epoch), self.map_id, t["id"], t["pose"], t["deadline_ns"],
+                                                 self.base_from_laser))
             else:
                 frame = rl.encode_seed(rl.Seed(t["id"], t["epoch"], t["pose"], t["snapshot"], int(t["boot"]),
                                                t["deadline_ns"]))
@@ -816,6 +824,9 @@ class RealSlamSource:
             if why is not None:
                 self.counts["slam_end_after_cancel"] += 1
                 return self._decide_cancel(t, why, received)
+        if st.kind == "ready" and self._laser_digest is not None and st.laser_checked != self._laser_digest:
+            self._fatal(f"slam_laser_unchecked: ready of {st.id} carries {st.laser_checked!r}, not this run's "
+                        f"base_from_laser digest")  # an older bridge or another calibration (plan 2.3)
         t["state"] = st.kind  # ready / not_localized
         if t["kind"] == "seed":
             self.seeds[t["epoch"]] = (st.kind, st.reason)
