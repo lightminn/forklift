@@ -193,7 +193,8 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 def real_inputs(args) -> dict:
     """The operating run's configuration and record files (checked as regular files before the device opens)."""
     return {"s10a": args.s10a or REPO / "config/real/s10a.yaml", "settings": args.settings, "vehicle": args.vehicle,
-            "watch": args.watch, "lidar_config": args.lidar_config, "imu_config": args.imu_config,
+            "watch": args.watch, "layer": args.layer, "budget": args.budget, "lidar_config": args.lidar_config,
+            "imu_config": args.imu_config,
             "preconditions": args.preconditions, "site_record": args.site_record, "registry": args.registry}
 
 
@@ -287,6 +288,8 @@ def _remaining(deadline: float) -> float:
 
 
 def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory) -> int:
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))  # console.live, as tools/teleop_bridge.py
     from console.live.server import LiveServer, MediaStore  # noqa: F401 -- imported before the device opens
 
     from forklift_core.live.executor_lock import DeviceBusy
@@ -296,7 +299,8 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
 
     # step 3: the preparation (the operating paths: the site record, the registry, the bundle root)
     inputs = real_inputs(args)
-    paths = rr.RunPaths(s10a=inputs["s10a"], settings=args.settings, vehicle=args.vehicle, watch=args.watch, hil=False,
+    paths = rr.RunPaths(s10a=inputs["s10a"], settings=args.settings, vehicle=args.vehicle, watch=args.watch,
+                        layer=args.layer, budget=args.budget, hil=False,
                         lidar_config=args.lidar_config, imu_config=args.imu_config, preconditions=args.preconditions,
                         site_record=args.site_record, registry=args.registry, bundle_root=args.bundle_root)
     try:
@@ -373,10 +377,6 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
         end["reason"] = "grant_refused"
         return 2
     # step 9 (console): within what is left of the start, its late bind closed by the cancel flag
-    if str(REPO) not in sys.path:
-        sys.path.insert(0, str(REPO))
-    from console.live.server import LiveServer, MediaStore
-
     cancel = threading.Event()
     held.server = server = LiveServer(prep.channels, MediaStore(), prep.welcome, host=args.host, port=args.port,
                                       web_root=Path(args.web_root) if args.web_root else None, cancel=cancel,
@@ -900,7 +900,8 @@ def _cleanup(held, prep, record, end) -> bool:
     return ok
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line (shared by ``main`` and the end-to-end test's child, which calls ``run_real`` itself)."""
     ap = argparse.ArgumentParser(description=__doc__)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-assemble", action="store_true")
@@ -948,6 +949,10 @@ def main(argv=None) -> int:
     ap.add_argument("--settings", type=Path, default=REPO / "config/real/autonomy.yaml")
     ap.add_argument("--vehicle", type=Path, default=REPO / "config/real/vehicle.yaml")
     ap.add_argument("--watch", type=Path, default=REPO / "config/real/safety_watch.yaml")
+    ap.add_argument("--layer", type=Path, default=REPO / "config/real/obstacle_layer_real.yaml",
+                    help="--client real: the operating obstacle layer (its stop model is C13's)")
+    ap.add_argument("--budget", type=Path, default=REPO / "config/real/obstacle_layer.yaml",
+                    help="--client real: the layer latency budget file")
     ap.add_argument("--map-bundle", type=Path, default=None,
                     help="the surveyed map bundle (verified by its manifest; its map id must be s10a.yaml's)")
     ap.add_argument("--out", type=Path, default=None)
@@ -955,7 +960,11 @@ def main(argv=None) -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--web-root", default=str(REPO / "console/web"), help="the console's pages (as the teleop bridge)")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
     if args.run and args.client == "real" and not args.precheck:
         # the operating run's arguments are judged before any other branch, and its refusals are printed only: an
         # --out given to it never cuts a file (Codex U3e-1 round 3 P2-2)
