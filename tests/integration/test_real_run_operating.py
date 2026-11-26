@@ -568,10 +568,16 @@ def test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows(mcu_model, 
         latch = next((p for p in perm if p.get("event") == "latched" and p["ns"] >= run.scan.cut_ns
                       and p.get("reason") != "signal"), None)
         assert latch is not None, [p for p in perm if p["ns"] >= run.scan.cut_ns]
-        # the permit's "disarmed": a DISARMED STATE answered the latch's DISARM (DISARMING -> LATCHED), before the signal
-        disarmed = [p for p in perm if p.get("event") == "disarmed" and p["ns"] >= latch["ns"]]
-        assert disarmed, [p for p in perm if p["ns"] >= run.scan.cut_ns]
-        assert disarmed[0]["ns"] < _events(rows, "end")[-1]["closing_started_ns"]
+        # the latch's DISARM written, and a DISARMED STATE naming its seq received, before the run's own closing
+        from forklift_core.mcu_link.messages import Mode
+
+        closing = _events(rows, "end")[-1]["closing_started_ns"]
+        dis = [w for w in _events(rows, "frame_written") if w["kind"] == "DISARM" and latch["ns"] <= w["written_ns"]
+               < closing]
+        assert dis, [(p["event"], p.get("reason")) for p in perm if p["ns"] >= run.scan.cut_ns]
+        conf = [st for st in _events(rows, "state") if st["last_rx_seq"] == dis[0]["seq"]
+                and st["mode"] == int(Mode.DISARMED) and st["rx_ns"] > dis[0]["written_ns"]]
+        assert conf and conf[0]["rx_ns"] < closing, (dis[0], conf[:1], closing)
         assert _motion_bytes(run.writes(), since_ns=latch["ns"]) == 0, [
             w for w in run.writes() if w["kind"] in ("ARM", "DRIVE") and w["ns"] >= latch["ns"]][:5]
         assert code in (0, 1), _explain(run)
