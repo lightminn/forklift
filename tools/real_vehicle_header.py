@@ -88,6 +88,13 @@ def main(argv=None) -> int:
         import yaml
 
         data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", str(data["chassis_model"])):
+            # a name CMake would carry differently (a trailing space, a newline, ...): refused (Codex U3d r7 P2)
+            print(f"real_vehicle_header: chassis_model {data['chassis_model']!r} has characters outside "
+                  "[A-Za-z0-9._/-]", file=sys.stderr)
+            return 5
         if os.path.isabs(str(data["chassis_model"])):
             # the operating build generates from a staged copy: an absolute path would leave it (Codex U3d r5 P2-1)
             print(f"real_vehicle_header: chassis_model {data['chassis_model']} is absolute", file=sys.stderr)

@@ -110,3 +110,38 @@ def test_print_chassis_resolves_relative_quoted_and_absolute_paths(tmp_path, cap
         assert gen.main(["--config", str(cfg), "--print-chassis"]) == 0
         printed = Path(capsys.readouterr().out.strip())
         assert printed.is_absolute() and printed.exists() and printed.name == "parameters.yaml"
+
+
+
+# --- the operating build's staged inputs (operating plan 2026-11-26 U3d) -------------------------------------------
+def test_the_chassis_given_is_the_one_read(tmp_path):
+    """Codex U3d round 7 P3: --chassis replaces the config's chassis path -- a copy with another steering limit
+    gives that copy's values and calibration id, whatever the config names."""
+    import yaml
+
+    chassis_path = gen.chassis_model_path(VEHICLE_YAML)
+    other = yaml.safe_load(chassis_path.read_text(encoding="utf-8"))
+    text = chassis_path.read_text(encoding="utf-8")
+    changed = tmp_path / "other.yaml"
+    changed.write_text(text.replace("steering_limit_rad: 0.2617993878", "steering_limit_rad: 0.3"), encoding="utf-8")
+    assert changed.read_text() != text
+    default, given = tmp_path / "a.h", tmp_path / "b.h"
+    assert gen.main(["--config", str(VEHICLE_YAML), "--out", str(default)]) == 0
+    assert gen.main(["--config", str(VEHICLE_YAML), "--chassis", str(changed), "--out", str(given)]) == 0
+    want = real_vehicle_from_mapping(yaml.safe_load(VEHICLE_YAML.read_text(encoding="utf-8")),
+                                     yaml.safe_load(changed.read_text(encoding="utf-8")))
+    assert define(given.read_text(), "FW_VEHICLE_CALIBRATION_ID") == f'"{want.calibration_id}"'
+    assert given.read_text() != default.read_text() and other is not None
+
+
+@pytest.mark.parametrize("name, code", [("../../sim/models/dls08_measured/parameters.yaml ", 5),
+                                        ("../../sim/models/x\ny.yaml", 5), ("/abs/parameters.yaml", 4)])
+def test_a_chassis_name_cmake_would_carry_differently_is_refused(tmp_path, name, code, capsys):
+    """Codex U3d round 7 P2: the name as written must survive CMake's whitespace stripping unchanged."""
+    import yaml
+
+    data = yaml.safe_load(VEHICLE_YAML.read_text(encoding="utf-8"))
+    data["chassis_model"] = name
+    cfg = tmp_path / "vehicle.yaml"
+    cfg.write_text(yaml.safe_dump(data), encoding="utf-8")
+    assert gen.main(["--config", str(cfg), "--print-chassis-as-written"]) == code
