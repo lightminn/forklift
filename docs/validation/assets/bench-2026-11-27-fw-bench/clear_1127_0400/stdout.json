@@ -1,0 +1,1 @@
+{"result": "cleared", "seq": 9992, "before": {"mode": "FAULT", "reject_reason": "NOT_ARMED", "fault_flags": ["DRIVER_FAULT_M", "LIFT_SENSOR_INVALID", "STEER_OUT_OF_RANGE", "BENCH_OVERRIDES"], "drivers_ready": true}, "after": {"mode": "DISARMED", "reject_reason": "NONE", "fault_flags": ["LIFT_SENSOR_INVALID", "STEER_OUT_OF_RANGE", "BENCH_OVERRIDES"], "drivers_ready": true}}
