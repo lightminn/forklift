@@ -2333,7 +2333,7 @@ static void bench_m_needs_a_fresh_count(void)
     ticks(5);
     seq = 1;
     send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
-    set_steer(0.1);
+    set_steer(4.0); /* a jump far from raw 0 (a 0x0000 next is then not counted) */
     tick();
     CHECK(d.bench_kth_lost);
     in.abs_frame[0] = 0x0000;
@@ -2349,7 +2349,7 @@ static void bench_m_needs_a_fresh_count(void)
     CHECK(d.bench_kth_lost);
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
     /* once normal steps are counted again, the next ARM clears it and M is taken */
-    set_steer(0.1);
+    set_steer(4.0);
     ticks(3);
     send(simple(LINK_DISARM, (uint16_t)(seq + 4)));
     ticks(5);
@@ -2524,6 +2524,32 @@ static void bench_hold_reaches_and_restores_the_target(void)
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
 }
 
+static void bench_hold_at_the_sensor_zero(void)
+{
+    /* Codex hold round 1 P2-1: a hold resting on raw 0 (frame 0x0000) keeps counting, nothing lost */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(0.05); /* near raw 0 */
+    ticks(5);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    set_steer(0.0); /* exactly raw 0: frame 0x0000 */
+    tick();
+    uint32_t c0 = d.bench_kth_counts;
+    link_msg m = hold_msg(seq++, c0, 1.0f, 0.0f, 12, 2000);
+    tick_msgs(&m, 1);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    for (int t = 0; t < 50; t++) {
+        tick();
+    }
+    CHECK(!d.bench_kth_lost);
+    CHECK(d.hold_on);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+}
+
 static void bench_hold_min_duty_floor(void)
 {
     uint16_t seq = hold_arm();
@@ -2637,5 +2663,6 @@ int main(void)
     bench_hold_reaches_and_restores_the_target();
     bench_hold_ends_on_expiry_and_on_a_commission();
     bench_hold_min_duty_floor();
+    bench_hold_at_the_sensor_zero();
     return FW_TEST_RESULT();
 }

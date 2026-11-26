@@ -17,7 +17,7 @@ from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 from forklift_core.mcu_link.messages import FaultFlag  # noqa: E402
 
-BENCH = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench2"
+BENCH = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench3"
 
 
 def rows(b):

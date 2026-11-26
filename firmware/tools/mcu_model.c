@@ -476,7 +476,7 @@ int main(int argc, char **argv)
     cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     cfg.commission_single_axis = arg_long(argc, argv, "--commission-single", 0) != 0; /* fw-single */
     /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): --bench 1 -- the bench image (an open commissioning model that takes
-       BENCH_SET); the product string ends " lim=lr1 bench2". */
+       BENCH_SET); the product string ends " lim=lr1 bench3". */
     cfg.bench_build = arg_long(argc, argv, "--bench", 0) != 0;
     if (cfg.bench_build) {
         /* as the board: joint zero half a turn from sensor 0, so the joint's zero is not the 0x0000 frame the bench

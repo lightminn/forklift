@@ -42,7 +42,7 @@ def test_a_bench_ask_builds_its_bench_set():
 
 
 def test_the_bench_image_is_told_by_its_exact_suffix():
-    assert bl.bench_image("forklift-mcu commission OPEN diag-fw-bench-1-0-gabc rec=1f4207f4 lim=lr1 bench2")
+    assert bl.bench_image("forklift-mcu commission OPEN diag-fw-bench-1-0-gabc rec=1f4207f4 lim=lr1 bench3")
     assert not bl.bench_image("forklift-mcu commission OPEN v rec=1 lim=lr1")
     assert not bl.bench_image("forklift-mcu commission OPEN v rec=1 lim=lr1 benchx")
     assert not bl.bench_image(None)

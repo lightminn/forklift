@@ -496,7 +496,11 @@ static void read_sensors(drive *d, const drive_inputs *in)
         uint16_t a12;
         /* 0x0000 passes the CRC and is what a MISO stuck low reads: never counted, so a stuck run of it ages
            into a gap (Codex fw-bench round 4 P2-1); a real angle 0 passed at speed is one frame skipped */
-        if (in->abs_frame[0] != 0x0000u && kth7801_decode(in->abs_frame[0], c->steer.crc, &a12)) {
+        /* a real raw 0 is counted when the last counted angle is near it (a hold at the sensor's zero, Codex hold
+           round 1 P2-1); a 0x0000 run from far away (a MISO stuck low) still ages into a gap */
+        bool zero_ok = d->bench_kth_have && (d->bench_kth_prev <= BENCH_KTH_STEP_MAX ||
+                                             d->bench_kth_prev >= 4096u - BENCH_KTH_STEP_MAX);
+        if ((in->abs_frame[0] != 0x0000u || zero_ok) && kth7801_decode(in->abs_frame[0], c->steer.crc, &a12)) {
             if (d->bench_kth_have) {
                 int32_t step = (int32_t)a12 - (int32_t)d->bench_kth_prev;
                 if (step > 2047) {

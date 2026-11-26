@@ -1918,17 +1918,22 @@ def _hold_summary(session, samples: list) -> dict:
     info = dict(session.hold_info)
     tgt = info["target_counts"]
     run_ = [s for s in samples[session._bench_index or 0:] if s.state.boot_id == session._bench_boot]
-    armed = [s for s in run_ if s.state.mode == Mode.ARMED]
+    # only the STATEs that took a BENCH_HOLD, first to last (Codex hold round 1 P2-4: not the pre/post zero)
+    seqs = {q for q, _d in session.sent} - {q for q, d in session.sent if d == 0}
+    took = [k for k, s in enumerate(run_) if s.state.last_rx_seq in seqs and s.state.mode == Mode.ARMED]
+    armed = run_[took[0]:took[-1] + 1] if took else []
     errs = [bl.counts_delta(bl.kth_counts(s.state), tgt) for s in armed]
     db = session.hold["deadband"]
+    info["accepted"] = bool(took)
     if errs:
-        first_in = next((k for k, e in enumerate(errs) if abs(e) <= db), None)
+        first_in = next((k for k, e in enumerate(errs) if abs(e) < db), None)
         after = errs[first_in:] if first_in is not None else []
         cur = [abs(s.state.current_ma[2]) for s in armed]
+        t0 = armed[0].state.mcu_time_us
         info.update({"armed_states": len(errs), "final_error_counts": errs[-1], "max_abs_error_counts": max(map(abs, errs)),
-                     "settled_after_s": None if first_in is None else first_in * 0.01,
+                     "settled_after_s": None if first_in is None else (armed[first_in].state.mcu_time_us - t0) / 1e6,
                      "max_abs_error_after_settle_counts": max(map(abs, after)) if after else None,
-                     "in_deadband_share_after_settle": (sum(1 for e in after if abs(e) <= db) / len(after)) if after
+                     "in_deadband_share_after_settle": (sum(1 for e in after if abs(e) < db) / len(after)) if after
                      else None,
                      "current_mean_ma": sum(cur) / len(cur), "current_peak_ma": max(cur)})
     return info
