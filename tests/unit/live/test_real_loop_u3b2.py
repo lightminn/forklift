@@ -91,6 +91,11 @@ def register(r, pose=PALLET):
     return pid, reply["targets_revision"]
 
 
+def still(r):
+    """The still span the console shows (U3c): the pallet confirmation names it."""
+    return r.loop.real_status(r.now)["still_serial"]
+
+
 def bypass_d5(r):
     reply, _ = ask(r, "check_bypass", check="d5_pocket", on=True)
     assert reply["t"] == "ack", reply
@@ -114,9 +119,9 @@ def test_the_start_check_names_the_registration_and_answers_the_region():
                 {"pallet_id": pid, "targets_revision": rev}, {"pallet_id": pid, "targets_revision": rev,
                                                               "register_serial": True}):
         assert r.loop._d5_refusal(bad) == "operator_start_needs_registration"  # noqa: SLF001
-    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev - 1, register_serial=r.serial)
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev - 1, register_serial=r.serial, still_serial=still(r))
     assert reply["t"] == "reject" and reply["reason"] == "targets_changed", reply
-    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     assert reply["t"] == "ack" and reply["pallet_id"] == pid and reply["targets_revision"] == rev, reply
     assert reply["region"] == pytest.approx(REGION)
     ev = [e for e in r.events if e["t"] == "operator_start"]
@@ -127,7 +132,7 @@ def test_an_unregistered_pallet_cannot_be_confirmed():
     r = rig()
     pid = next(iter(r.core.targets.pallets))
     r.tick(30)
-    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=int(r.core.targets.revision), register_serial=r.serial)
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=int(r.core.targets.revision), register_serial=r.serial, still_serial=still(r))
     assert reply["t"] == "reject" and reply["reason"] == "pallet_not_registered", reply
 
 
@@ -143,7 +148,7 @@ def test_the_start_check_is_not_bypassable_without_depth_only():
 def test_the_submit_needs_the_d5_bypass():
     r = rig()
     pid, rev = register(r)
-    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     reply = submit(r, rev)
     assert reply["t"] == "reject" and reply["reason"] == "d5_pocket:no_depth_source", reply
 
@@ -152,7 +157,7 @@ def test_a_confirmation_of_an_older_registration_does_not_carry():
     r = rig()
     bypass_d5(r)
     pid, rev = register(r)
-    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     assert ok["t"] == "ack", ok
     _, rev2 = register(r, (PALLET[0] + 0.02, PALLET[1], PALLET[2]))  # registered again, still on the placement
     assert rev2 != rev
@@ -164,7 +169,7 @@ def test_a_confirmation_of_another_relocalization_generation_does_not_carry():
     r = rig()
     bypass_d5(r)
     pid, rev = register(r)
-    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     r.loop.reloc_gen = 5  # the place was found again after the check
     reply = submit(r, rev)
     assert reply["t"] == "reject" and reply["reason"].endswith("operator_start:unconfirmed"), reply
@@ -174,7 +179,7 @@ def test_the_confirmed_submit_runs_with_the_confirmed_region_and_records_its_use
     r = rig()
     bypass_d5(r)
     pid, rev = register(r)
-    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     reply = submit(r, rev)
     assert reply["t"] == "ack", reply
     run_until(r, lambda rec: r.core.state.get("d5_bypass_check")
@@ -192,7 +197,7 @@ def test_a_region_other_than_the_confirmed_one_ends_the_mission():
     r = rig()
     bypass_d5(r)
     pid, rev = register(r)
-    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     assert submit(r, rev)["t"] == "ack"
     r.tick()
     r.loop.operator_start.used["region"] = [PALLET[0] + 0.05, *REGION[1:]]  # what the eyes cleared is elsewhere
@@ -211,7 +216,7 @@ def test_a_turned_axis_within_the_tolerance_exempts_the_confirmed_rectangle_itse
 def _confirmed(r):
     bypass_d5(r)
     pid, rev = register(r)
-    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     assert ok["t"] == "ack", ok
     return pid, rev
 
@@ -280,9 +285,9 @@ def test_a_confirmation_sent_from_the_screen_before_a_same_pose_registration_is_
     old = r.serial
     _, rev2 = register(r)  # the same pose: the same revision, a new registration
     assert rev2 == rev and r.serial == old + 1
-    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=old)
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=old, still_serial=still(r))
     assert reply["t"] == "reject" and reply["reason"] == "targets_changed", reply
-    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial)
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial, still_serial=still(r))
     assert reply["t"] == "ack" and reply["register_serial"] == r.serial, reply
 
 

@@ -270,6 +270,13 @@ export const REJECT = {
   "d5_pocket:no_depth_source": "깊이 카메라가 없어 D5 포켓 우회를 켜야 제출할 수 있습니다",
   "operator_start:unconfirmed": "이 팔레트·등록 번호의 시작 확인이 없습니다 · 화면을 보고 다시 확인하세요",
   "not_ready:operator_start:unconfirmed": "시작 확인이 없습니다 · 화면을 보고 확인한 뒤 제출하세요",
+  // U3c (operating plan 2.7, 2.9): the precondition row of an IMU that did not qualify
+  // U3c (Codex round 1 P3-2): the scan source's refusals the precondition row tells (real_sources.py), reason after
+  "feed:": "스캔 수신을 거부했습니다",
+  "frame:": "스캔 프레임이 자격을 잃었습니다",
+  // U3c (Codex round 2): the truck moved after the six lines were ticked
+  still_changed: "확인한 뒤 차가 움직였습니다 · 서 있는 지금 여섯 항목을 다시 확인하세요",
+  "imu:unqualified": "IMU 가 검증되지 않았습니다 · imu 우회를 켜야 제출·무장할 수 있습니다(우회 중에는 기울기 감시 꺼짐)",
   // U3b-1: the operating run's case A and run time
   run_time_short: "남은 실행 시간이 모자랍니다",
   "case_a:": "승인된 배치·경로(사례 A)가 아닙니다",

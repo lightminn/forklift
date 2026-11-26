@@ -65,9 +65,14 @@ export function toggleShown(toggle, status) {
 export function bypassButtons(status, hasLease) {
   const on = new Set(status && Array.isArray(status.bypassed) ? status.bypassed : []);
   const why = closedWhy(status, hasLease);
-  return BYPASSABLE.map((check) => ({
-    check, label: CHECK_LABELS[check] ?? check, bypassed: on.has(check), enabled: why === null, why,
-  }));
+  return BYPASSABLE.map((check) => {
+    // U3c (Codex round 1 P3-3): what the vehicle refuses on this run is closed here too (real_loop
+    // OPERATING_NOT_BYPASSABLE; the per-pallet confirmation without depth, plan 2.6)
+    const never = (status && status.operating && check === "layer_timing")
+      || (check === "operator_start" && status && Number.isInteger(status.register_serial));
+    const w = never ? "이 실행에서는 우회할 수 없습니다" : why;
+    return { check, label: CHECK_LABELS[check] ?? check, bypassed: on.has(check), enabled: w === null, why: w };
+  });
 }
 
 // The operator answer's key, taken when the request is drawn: (session_epoch, kind, serial), or null.
@@ -101,7 +106,8 @@ export function statusSig(status) {
     status.permit?.state,
     status.mission?.status, status.mode, req ? [req.kind, req.serial] : null, status.field_recovery ?? null,
     status.bypassed ?? [], status.targets_revision ?? null,
-    status.relocalize_generation ?? null]);  // 5c-2: a press is bound to the generation drawn (design 6, 9)
+    status.relocalize_generation ?? null,  // 5c-2: a press is bound to the generation drawn (design 6, 9)
+    status.register_serial ?? null]);  // U3c: a pallet confirmation is bound to the registration drawn
 }
 
 // 5c-2 (design 6, 8-9): the relocalization row. Shown while a generation is open or a last attempt is to be told.
@@ -146,4 +152,124 @@ export function relocalizeResult(ack, status) {
   const gen = Number.isInteger(status.relocalize_generation) ? status.relocalize_generation : null;
   if (gen !== null && gen !== ack.generation) return null; // an older generation's verdict under a newer one
   return { state: r.state, reason: r.reason ?? null };
+}
+
+// U3c (docs/plans/2026-11-26-real-operating-assembly.md 2.9): the operating run's precondition rows -- the assembly's
+// passed items as one grey line, then C7 IMU, C8 D5 and the pallet confirmation, and the scan source's newest refusal.
+// Each row: {key, cls: "pass" | "blocked" | "bypassed" | "note", text}. Empty when the status has no preconditions
+// (HIL, replay). rejectText(reason) turns a refusal into the operator's words (profile.js).
+const RUNTIME_LABELS = { imu: "IMU", d5_pocket: "D5 포켓", pallet_confirm: "팔레트 확인", scan: "스캔" };
+const BYPASS_NOTE = { imu: " (기울기 감시 꺼짐)" };
+export function preconditionRows(status, rejectText = (r) => r) {
+  const pre = status && status.preconditions;
+  if (!pre || typeof pre !== "object") return [];
+  const out = [];
+  const passed = Array.isArray(pre.passed) ? pre.passed : [];
+  if (passed.length) out.push({ key: "passed", cls: "pass", text: `조립 통과: ${passed.join(" · ")}` });
+  for (const r of Array.isArray(pre.runtime) ? pre.runtime : []) {
+    const label = `${r.id} ${RUNTIME_LABELS[r.item] ?? r.item}`;
+    const key = `${r.id}:${r.item}`;
+    if (r.state === "note") {
+      out.push({ key, cls: "note", text: r.why ? `${label} · 최근 거부: ${rejectText(r.why)}` : `${label} · 거부 없음` });
+    } else if (r.state === "bypassed") {
+      out.push({ key, cls: "bypassed", text: `우회 중: ${label}${BYPASS_NOTE[r.item] ?? ""}` });
+    } else if (r.state === "pass") {
+      out.push({ key, cls: "pass", text: `${label} 통과` });
+    } else {
+      // anything else (blocked, or a state this console does not know) reads as blocked
+      out.push({ key, cls: "blocked", text: `${label} 막힘${r.why ? ` · ${rejectText(r.why)}` : ""}` });
+    }
+  }
+  return out;
+}
+
+// U3c (plan 2.6): the six lines the operator checks before the pallet confirmation, or null when this run needs no
+// per-pallet confirmation (register_serial is set only on the operating run without depth). The fourth shows the lift
+// target and the sixth the C11 test pallet and mass from the record the assembly judged ("—" where it gave none).
+export function palletConfirmTexts(status) {
+  if (!status || !Number.isInteger(status.register_serial)) return null;
+  const load = (status.preconditions && status.preconditions.load) || {};
+  // the approved values exactly as the record gives them -- a rounded mass or height is another limit (round 1 P2-1)
+  const num = (v) => (Number.isFinite(v) ? String(v) : "—");
+  return [
+    "포크가 포켓 밖에 있음",
+    "포켓 둘이 비어 있음",
+    "팔레트 윗면과 등록 사각형 안에 다른 물체 없음",
+    `승강 목표 ${num(load.lift_target_m)} m + 팔레트 높이까지 위 공간 비어 있음`,
+    "빈 포크·승강 내림",
+    `C11 에서 승인한 시험 팔레트 ${load.test_pallet ? String(load.test_pallet) : "—"}, 질량 ${num(load.pallet_mass_kg)} kg 이하`,
+  ];
+}
+
+// U3c (plan 2.6): the operator_start request's fields. On a run without the per-pallet confirmation: {} (as before).
+// Otherwise the registration this console made, still the vehicle's current one (same session, revision and
+// register serial), as {pallet_id, targets_revision, register_serial}; null when there is none to confirm.
+export function startFields(registered, status, targets = null) {
+  if (!status) return null;
+  if (!Number.isInteger(status.register_serial)) return {};
+  if (!registered || registered.session_epoch !== status.session_epoch || !Number.isInteger(registered.serial)
+    || registered.serial !== status.register_serial || registered.revision !== status.targets_revision) return null;
+  // a newer list from either message (as submitRevision, Codex round 1 P3-1)
+  if (targets && Number.isInteger(targets.targets_revision) && targets.targets_revision > registered.revision) return null;
+  // the still span the six lines were ticked in (Codex round 2 P1): none while not still -- nothing to confirm
+  if (!Number.isInteger(status.still_serial)) return null;
+  return { pallet_id: registered.pallet, targets_revision: registered.revision, register_serial: registered.serial,
+    still_serial: status.still_serial };
+}
+
+// U3c: the start check's state line -- what the vehicle bound (pallet, register serial, the bypass region), or the
+// plain "확인됨" on a run without the per-pallet confirmation.
+export function startStateText(status) {
+  if (!status || !status.operator_start) return "";
+  const b = status.operator_start_binding;
+  if (!b || !Array.isArray(b.region) || b.region.length !== 5) return "확인됨";
+  const [x, y, len, wid, yaw] = b.region.map(Number);
+  return `확인됨 · ${b.pallet_id} · 등록 #${b.register_serial} · 영역 중심 (${x.toFixed(2)}, ${y.toFixed(2)}) m`
+    + ` · ${len.toFixed(2)}×${wid.toFixed(2)} m · ${((yaw * 180) / Math.PI).toFixed(1)}°`;
+}
+
+// U3c (Codex round 1 P1-2): the region the confirmation would bind, shown before the six lines are ticked -- the
+// vehicle's own d5_region of this console's registration (real_status.register_region), or null when the status's
+// region is not of that registration (another serial, revision or pallet).
+export function confirmRegion(registered, status, targets = null) {
+  const r = status && status.register_region;
+  if (!r || !registered || !Array.isArray(r.region) || r.region.length !== 5) return null;
+  if (registered.session_epoch !== status.session_epoch || r.register_serial !== registered.serial
+    || r.targets_revision !== registered.revision || r.pallet_id !== registered.pallet) return null;
+  // the list moved on since (a pose correction, Codex round 2 P2-1; the targets message first, round 3 P3): that
+  // region is no longer the one bound
+  if (status.targets_revision !== registered.revision) return null;
+  if (targets && Number.isInteger(targets.targets_revision) && targets.targets_revision > registered.revision) return null;
+  // a relocalization open: the place is not known, nothing to check yet (Codex round 3 P2)
+  if (Number.isInteger(status.relocalize_generation)) return null;
+  // not standing: nothing the eyes can check yet (Codex round 5 P3)
+  if (!Number.isInteger(status.still_serial)) return null;
+  return r.region.map(Number);
+}
+
+export function regionText(region) {
+  if (!region) return "";
+  const [x, y, len, wid, yaw] = region;
+  return `확인할 영역(팔레트 + 띠, 지도에 주황 점선) · 중심 (${x.toFixed(2)}, ${y.toFixed(2)}) m · `
+    + `${len.toFixed(2)}×${wid.toFixed(2)} m · ${((yaw * 180) / Math.PI).toFixed(1)}°`;
+}
+
+// What the six ticks are bound to (Codex round 1 P1-1, round 2 P1): the session, the lease, the registration
+// (pallet, pose, revision, serial), the relocalization generation, the still span and the six lines -- any change
+// unticks them.
+export function checksKey(status, generations, registered, texts) {
+  if (!status || !texts || !registered) return "";
+  return JSON.stringify([status.session_epoch, generations ? generations.lease_id : null, registered.pallet,
+    registered.pose, registered.revision, registered.serial, status.register_serial,
+    status.relocalize_generation ?? null, status.still_serial ?? null, texts]);  // a move unticks (round 2 P1)
+}
+
+// Why the six lines are not shown now (Codex round 4 P3): the registration kept, only the moment not right -- or
+// the registration itself is missing or old. Empty when they are shown.
+export function confirmWaitText(registered, status, targets = null) {
+  if (!status || !Number.isInteger(status.register_serial)) return "";
+  if (Number.isInteger(status.relocalize_generation)) return "재위치가 끝나면 확인할 영역과 여섯 항목이 나옵니다";
+  if (!Number.isInteger(status.still_serial)) return "차가 서면 확인할 영역과 여섯 항목이 나옵니다";
+  if (confirmRegion(registered, status, targets)) return "";
+  return "팔레트를 (다시) 등록하면 확인할 영역과 여섯 항목이 나옵니다";
 }
