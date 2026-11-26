@@ -1091,7 +1091,7 @@ static void handle_bench_hold(drive *d, const link_msg *m)
         return;
     }
     if (h->axis != DRIVE_CH_M || (h->sign != 1 && h->sign != -1) || !isfinite(h->kp) || !(h->kp > 0.0f) ||
-        !isfinite(h->ki) || h->ki < 0.0f || h->duty_max_e4 == 0 ||
+        !isfinite(h->ki) || h->ki < 0.0f || !isfinite(h->kd) || h->kd < 0.0f || h->duty_max_e4 == 0 ||
         h->duty_max_e4 > cm_duty_max_e4(d, DRIVE_CH_M) || h->min_duty_e4 > h->duty_max_e4 ||
         h->valid_after_echo_ms == 0) {
         d->reject_reason = DRIVE_REJECT_BAD_VALUE;
@@ -1116,6 +1116,11 @@ static void handle_bench_hold(drive *d, const link_msg *m)
     if (!d->hold_on || d->hold_target != h->target_counts) {
         pi_reset(&d->hold_pi); /* a new target starts its integral afresh */
     }
+    if (!d->hold_on) {
+        d->hold_rate = 0.0f;
+        d->hold_prev_counts = d->bench_kth_counts;
+    }
+    d->hold_kd = h->kd;
     d->cm_axis = DRIVE_CH_M;
     d->hold_on = true;
     d->hold_target = h->target_counts;
@@ -1284,12 +1289,21 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
                on a stale or lost count (the loss itself faults M) */
             int32_t err = (int32_t)(d->hold_target - d->bench_kth_counts);
             float e = (float)err * TWO_PI_F / 4096.0f;
+            /* the counter's rate (rad/s), filtered over ~10 ms: the damping term's input */
+            float raw_rate = (float)(int32_t)(d->bench_kth_counts - d->hold_prev_counts) * TWO_PI_F / 4096.0f / dt;
+            d->hold_prev_counts = d->bench_kth_counts;
+            d->hold_rate += 0.1f * (raw_rate - d->hold_rate);
             u = 0.0f;
             if (d->mode == DRIVE_MODE_ARMED && !over && bench_count_fresh(d)) {
-                u = (float)d->hold_sign * pi_step(&d->hold_pi_cfg, &d->hold_pi, e, 0.0f, dt);
-                if (u != 0.0f && fabsf(u) < d->hold_min_duty) {
-                    u = u > 0.0f ? d->hold_min_duty : -d->hold_min_duty; /* the break-away floor (off at 0) */
+                float p = pi_step(&d->hold_pi_cfg, &d->hold_pi, e, 0.0f, dt);
+                if (p != 0.0f && fabsf(p) < d->hold_min_duty) {
+                    p = p > 0.0f ? d->hold_min_duty : -d->hold_min_duty; /* the break-away floor (off at 0) */
                 }
+                /* damping against the count's own rate (in count space), then the cap */
+                float q = p - d->hold_kd * d->hold_rate;
+                float cap = d->hold_pi_cfg.out_max;
+                q = q > cap ? cap : (q < -cap ? -cap : q);
+                u = (float)d->hold_sign * q;
             }
         }
 #endif

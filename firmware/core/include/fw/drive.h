@@ -240,6 +240,9 @@ typedef struct drive {
     pi_config hold_pi_cfg;
     pi_state hold_pi;
     float hold_min_duty; /* 0: off */
+    float hold_kd;       /* duty per rad/s of the counter rate */
+    float hold_rate;     /* the counter rate, rad/s, first-order filtered (~10 ms) */
+    uint32_t hold_prev_counts;
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

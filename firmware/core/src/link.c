@@ -13,7 +13,7 @@
 #define CLEAR_LEN 4u
 #define COMMISSION_LEN 19u
 #define BENCH_SET_LEN 32u /* diag/fw-bench */
-#define BENCH_HOLD_LEN 36u /* diag/fw-bench */
+#define BENCH_HOLD_LEN 40u /* diag/fw-bench */
 #define STATE_LEN 84u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
@@ -164,6 +164,7 @@ static void put_payload(wr *w, const link_msg *m)
         put_u32(w, h->target_counts);
         put_f32(w, h->kp);
         put_f32(w, h->ki);
+        put_f32(w, h->kd);
         put_u16(w, h->deadband_counts);
         put_u16(w, h->duty_max_e4);
         put_u16(w, h->min_duty_e4);
@@ -269,6 +270,7 @@ static void get_payload(rd *r, link_msg *m)
         h->target_counts = get_u32(r);
         h->kp = get_f32(r);
         h->ki = get_f32(r);
+        h->kd = get_f32(r);
         h->deadband_counts = get_u16(r);
         h->duty_max_e4 = get_u16(r);
         h->min_duty_e4 = get_u16(r);

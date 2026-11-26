@@ -25,7 +25,7 @@ _CLEAR = struct.Struct("<I")
 _STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
 _BENCH_SET = struct.Struct("<II4H4I")  # diag/fw-bench: boot_id, bypass, duty_max_e4[4], time_ms[4]
-_BENCH_HOLD = struct.Struct("<BbIffHHHHHIQ")  # diag/fw-bench: axis, sign, target, kp, ki, deadband, duty max, valid...
+_BENCH_HOLD = struct.Struct("<BbIfffHHHHHIQ")  # diag/fw-bench: axis, sign, target, kp, ki, deadband, duty max, valid...
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
@@ -292,6 +292,7 @@ class BenchHold:
     target_counts: int
     kp: float
     ki: float
+    kd: float  # duty per rad/s of the counter's own rate (damping); 0: none
     deadband_counts: int
     duty_max_e4: int
     min_duty_e4: int  # 0: off; else a non-zero output is at least this (a cogging motor's break-away)
@@ -306,8 +307,9 @@ class BenchHold:
         if self.sign not in (1, -1):
             raise ValueError("sign: +1 or -1")
         _check_range("target_counts", self.target_counts, 0, U32_MAX)
-        if not (math.isfinite(self.kp) and self.kp > 0 and math.isfinite(self.ki) and self.ki >= 0):
-            raise ValueError("kp > 0 and ki >= 0, finite")
+        if not (math.isfinite(self.kp) and self.kp > 0 and math.isfinite(self.ki) and self.ki >= 0
+                and math.isfinite(self.kd) and self.kd >= 0):
+            raise ValueError("kp > 0, ki >= 0 and kd >= 0, finite")
         _check_range("deadband_counts", self.deadband_counts, 0, 0xFFFF)
         _check_range("duty_max_e4", self.duty_max_e4, 1, 10000)
         _check_range("min_duty_e4", self.min_duty_e4, 0, self.duty_max_e4)
@@ -357,7 +359,8 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.echo_mcu_time_us)
     if isinstance(message, BenchHold):
         return TYPE_BENCH_HOLD, _BENCH_HOLD.pack(
-            message.axis, message.sign, message.target_counts, message.kp, message.ki, message.deadband_counts,
+            message.axis, message.sign, message.target_counts, message.kp, message.ki, message.kd,
+            message.deadband_counts,
             message.duty_max_e4, message.min_duty_e4, message.valid_after_echo_ms, message.arm_gen, message.boot_id,
             message.echo_mcu_time_us)
     if isinstance(message, BenchSet):

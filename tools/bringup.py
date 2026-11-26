@@ -914,7 +914,7 @@ class CommissionSession(Session):
             expires = min(self.test_end_ns, now + b.host.cfg.cap_ms * 1_000_000, end_ns)
             b.last_queued = None
             blocked = b.host.bench_hold(h["sign"], target, h["kp"], h["ki"], h["deadband"], h["duty_max_e4"],
-                                        expires, now, min_duty_e4=h["min_duty_e4"])
+                                        expires, now, min_duty_e4=h["min_duty_e4"], kd=h["kd"])
             if blocked is None and b.last_queued is not None:
                 self.sent.append((b.last_queued["seq"], h["duty_max_e4"]))
                 self.last_expires_ns = expires
@@ -1692,6 +1692,8 @@ def main(argv=None) -> int:
                          "the hold's duty cap) instead of an open-loop duty")
     cm.add_argument("--hold-kp", type=float, default=1.0, help="hold: duty per rad of KTH error")
     cm.add_argument("--hold-ki", type=float, default=0.0, help="hold: duty per rad*s")
+    cm.add_argument("--hold-kd", type=float, default=0.0,
+                    help="hold: damping, duty per rad/s of the KTH count's own rate (filtered ~10 ms); 0 = none")
     cm.add_argument("--hold-deadband", type=int, default=12, help="hold: counts (4096 a turn) of no output")
     cm.add_argument("--hold-sign", type=int, choices=(1, -1), default=1,
                     help="hold: the duty sign that raises the KTH count (+1 on the 11-27 bench)")
@@ -2096,9 +2098,10 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
                 raise Refused("hold-target: the steering axis (M) with --bench-bypass steer_range")
             if turns is not None:
                 raise Refused("hold-target: no --stop-kth-turns (holding still is the point)")
+            kd_ = getattr(args, "hold_kd", 0.0)
             if not (math.isfinite(args.hold_kp) and args.hold_kp > 0 and math.isfinite(args.hold_ki)
-                    and args.hold_ki >= 0):
-                raise Refused("hold: --hold-kp > 0 and --hold-ki >= 0")
+                    and args.hold_ki >= 0 and math.isfinite(kd_) and kd_ >= 0):
+                raise Refused("hold: --hold-kp > 0, --hold-ki >= 0 and --hold-kd >= 0")
             if not 0 <= args.hold_deadband <= 0xFFFF:
                 raise Refused("hold: --hold-deadband in [0, 65535] counts")
             if not (math.isfinite(args.hold_min_duty) and 0 <= args.hold_min_duty <= abs(args.duty)):
@@ -2285,6 +2288,7 @@ def execute(args, bench: Bench) -> dict:
             session.stop_kth_turns = getattr(args, "stop_kth_turns", None)
             if getattr(args, "hold_target", None) is not None:
                 session.hold = {"target": args.hold_target, "kp": args.hold_kp, "ki": args.hold_ki,
+                                "kd": getattr(args, "hold_kd", 0.0),
                                 "deadband": args.hold_deadband, "sign": args.hold_sign,
                                 "duty_max_e4": int(round(abs(args.duty) * 10000)),
                                 "min_duty_e4": int(round(args.hold_min_duty * 10000))}

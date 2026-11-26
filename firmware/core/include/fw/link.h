@@ -69,6 +69,7 @@ typedef struct {
     int8_t sign;
     uint32_t target_counts; /* the travel counter value (mod 2^32) */
     float kp, ki;           /* duty per rad of counter error, duty per rad*s */
+    float kd;               /* duty per rad/s of the counter's own rate (damping); 0: none */
     uint16_t deadband_counts;
     uint16_t duty_max_e4;
     uint16_t min_duty_e4; /* 0: off; else a non-zero output is at least this (a cogging motor's break-away) */

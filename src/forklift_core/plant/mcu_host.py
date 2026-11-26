@@ -626,7 +626,8 @@ class McuLinkHost:
         return None
 
     def bench_hold(self, sign: int, target_counts: int, kp: float, ki: float, deadband_counts: int,
-                   duty_max_e4: int, expires_ns: int, now_ns: int, min_duty_e4: int = 0) -> Blocked | None:
+                   duty_max_e4: int, expires_ns: int, now_ns: int, min_duty_e4: int = 0,
+                   kd: float = 0.0) -> Blocked | None:
         """DIAGNOSTIC BRANCH ONLY (diag/fw-bench): queue one BENCH_HOLD (M at a travel-counter target) expiring at
         ``expires_ns``; the same checks and validity rule as ``commission``."""
         if not self.commission_mode:
@@ -636,7 +637,8 @@ class McuLinkHost:
             return blocked
         s = self._state
         try:
-            msg = BenchHold(2, int(sign), int(target_counts) & 0xFFFFFFFF, float(kp), float(ki), int(deadband_counts),
+            msg = BenchHold(2, int(sign), int(target_counts) & 0xFFFFFFFF, float(kp), float(ki), float(kd),
+                            int(deadband_counts),
                             int(duty_max_e4), int(min_duty_e4), valid, s.arm_gen, s.boot_id, s.mcu_time_us)
         except ValueError as exc:
             return Blocked(f"bad_value: {exc}")

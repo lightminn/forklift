@@ -2407,6 +2407,7 @@ static link_msg hold_msg(uint16_t seq, uint32_t target, float kp, float ki, uint
                                  .target_counts = target,
                                  .kp = kp,
                                  .ki = ki,
+                                 .kd = 0.0f,
                                  .deadband_counts = db,
                                  .duty_max_e4 = dmax,
                                  .min_duty_e4 = 0,
@@ -2522,6 +2523,37 @@ static void bench_hold_reaches_and_restores_the_target(void)
     CHECK(!d.hold_on);
     tick();
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+}
+
+static double hold_overshoot(float kd)
+{
+    /* a half-turn step on the simulated shaft (40 rad/s per duty, no friction): the largest pass beyond the target */
+    uint16_t seq = hold_arm();
+    uint32_t target = d.bench_kth_counts + 2048u;
+    double worst = 0.0;
+    for (int t = 0; t < 3000; t++) {
+        link_msg m = hold_msg(seq, target, 2.0f, 0.0f, 8, 2000);
+        m.u.hold.kd = kd;
+        if (t % 50 == 0) {
+            seq++;
+            hold_tick(&m);
+        } else {
+            hold_tick(NULL);
+        }
+        int32_t err = (int32_t)(target - d.bench_kth_counts);
+        if (-err > worst) {
+            worst = -err;
+        }
+    }
+    return worst;
+}
+
+static void bench_hold_damping_cuts_the_overshoot(void)
+{
+    double plain = hold_overshoot(0.0f);
+    double damped = hold_overshoot(0.05f);
+    CHECK(damped < plain * 0.5 || damped < 10.0);
+    CHECK(d.hold_on && d.mode == DRIVE_MODE_ARMED);
 }
 
 static void bench_hold_at_the_sensor_zero(void)
@@ -2664,5 +2696,6 @@ int main(void)
     bench_hold_ends_on_expiry_and_on_a_commission();
     bench_hold_min_duty_floor();
     bench_hold_at_the_sensor_zero();
+    bench_hold_damping_cuts_the_overshoot();
     return FW_TEST_RESULT();
 }

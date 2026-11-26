@@ -164,7 +164,7 @@ def confirmation_phrase(ask: RunAsk) -> str:
 # The bench image ends its USB product string with exactly these tokens (gen_build_info.cmake); the generation number
 # names what its STATE carries (2: the steering KTH travel counter) -- an older bench image is not this one (Codex
 # fw-bench round 3 P2-1).
-BENCH_SUFFIX = ("lim=lr1", "bench3")  # 3: + BENCH_HOLD (an older generation is refused for every run)
+BENCH_SUFFIX = ("lim=lr1", "bench4")  # 4: + the hold damping kd (an older generation is refused for every run)
 # The checks a BENCH_SET may turn off for one run (firmware drive.h DRIVE_BENCH_*). The stopping side -- overcurrent,
 # driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun -- has no name and never will.
 BENCH_BYPASS_BITS = {"steer_range": 1 << 0, "lift_range": 1 << 1}
