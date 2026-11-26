@@ -18,6 +18,8 @@
 #else
 #define BENCH(c) false
 #endif
+#define BENCH_KTH_GAP_US 3000u  /* diag/fw-bench: valid steering frames further apart: the count is lost */
+#define BENCH_KTH_STEP_MAX 512   /* diag/fw-bench: 1/8 turn in one frame (125 turns/s): the count is lost */
 #define HALF_RANGE_MARGIN 16383.0f /* half of the 16-bit difference's half range */
 
 /* Bits cleared by a successful ARM rather than by CLEAR_FAULTS: the expiry and commissioning
@@ -485,10 +487,18 @@ static void read_sensors(drive *d, const drive_inputs *in)
                 } else if (step < -2048) {
                     step += 4096;
                 }
-                d->bench_kth_counts += (uint32_t)step; /* modular: the host reads differences */
+                if (d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US ||
+                    step > BENCH_KTH_STEP_MAX || step < -BENCH_KTH_STEP_MAX) {
+                    /* a gap or a step no axis makes in one frame (a glitch passing the CRC): never
+                       counted, and the count is lost until the next ARM (Codex fw-bench round 3 P2-2) */
+                    d->bench_kth_lost = true;
+                } else {
+                    d->bench_kth_counts += (uint32_t)step; /* modular: the host reads differences */
+                }
             }
             d->bench_kth_prev = a12;
             d->bench_kth_have = true;
+            d->bench_kth_last_us = d->time_us;
         }
     }
 #endif
@@ -525,6 +535,11 @@ static uint32_t sensor_bits(const drive *d)
     if (!d->adc_valid) {
         bits |= DRIVE_FAULT_CURRENT_SENSE_INVALID;
     }
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->bench_kth_lost) {
+        bits |= DRIVE_FAULT_BENCH_KTH_LOST;
+    }
+#endif
     return bits;
 }
 
@@ -543,7 +558,7 @@ static uint32_t driving_sensor_bits(const drive *d)
         return bits & keep; /* M and H drive without their KTH: the bits stay in STATE only */
     }
     if (d->cm_axis == DRIVE_CH_M) {
-        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID;
+        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID | DRIVE_FAULT_BENCH_KTH_LOST; /* the latter: bench only */
         if (!bench_bypassed(d, DRIVE_BENCH_STEER_RANGE)) {
             keep |= DRIVE_FAULT_STEER_OUT_OF_RANGE;
         }
@@ -823,6 +838,10 @@ static void handle_arm(drive *d, const link_msg *m)
     d->arm_gen = d->arm_gen == 0xFFFFu ? 1u : (uint16_t)(d->arm_gen + 1u);
     d->mode = DRIVE_MODE_ARMED;
     d->latched &= ~ARM_CLEARS;
+#if defined(FW_CORE_BENCH)
+    d->bench_kth_lost = false; /* diag/fw-bench: a new arming counts afresh */
+    d->latched &= ~DRIVE_FAULT_BENCH_KTH_LOST;
+#endif
     reset_control(d);
     d->zero_seen = false;
     d->have_drive_seq = false;

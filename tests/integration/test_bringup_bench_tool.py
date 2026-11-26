@@ -17,7 +17,7 @@ from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 from forklift_core.mcu_link.messages import FaultFlag  # noqa: E402
 
-BENCH = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench"
+BENCH = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench2"
 
 
 def rows(b):
@@ -96,7 +96,7 @@ def _stopper(turns, window=None, names=()):
     s.axis, s.ignore, s.sensorless, s.stop_kth_turns, s.window = 2, FaultFlag(0), False, turns, window
     s.bench = bringup.bl.BenchAsk(2, tuple(names), None, None) if names else None
     s.bench_taken = {"seq": 1} if names or turns is not None else None
-    s._kth_base, s._prog_us, s._prog_value = None, None, None
+    s._kth_base, s._kth_started, s._prog_us, s._prog_value = None, False, None, None
     return s
 
 
@@ -120,6 +120,28 @@ def test_the_turn_stop_reads_the_boards_counter_either_way_and_across_its_wrap()
         assert why == "kth_turns" and i == 14  # 13 x 1000 = 13000 >= 3 x 4096 = 12288
     s = _stopper(None, window=(-0.2, 0.2))
     assert stop(s, _st(0, 0, rad=0.3), FaultFlag(0)) == "window"  # no turn stop, range on: the window as before
+
+
+def test_the_turn_stop_counts_from_the_last_undriven_state():
+    """Codex fw-bench round 3 P2-3: a drift before the axis is driven is not this run's turn."""
+    stop = bringup.CommissionSession.early_stop
+    s = _stopper(3.0, names=("steer_range",))
+    for i in range(10):  # the pre-zero: one turn back, the duty 0
+        assert stop(s, _st(-410 * i, i * 10_000, duty=0), FaultFlag(0)) is None
+    base, why, i = -410 * 9, None, 0
+    while why is None and i < 100:
+        why = stop(s, _st(base + 1000 * (i + 1), (10 + i) * 10_000), FaultFlag(0))
+        i += 1
+    assert why == "kth_turns" and i == 13  # 13 x 1000 >= 12288 from the last undriven count
+
+
+def test_a_lost_count_stops_the_run():
+    from types import SimpleNamespace
+
+    s = _stopper(3.0, names=("steer_range",))
+    st = _st(0, 0)
+    lost = SimpleNamespace(**{**st.__dict__, "fault_flags": FaultFlag.BENCH_KTH_LOST})
+    assert bringup.CommissionSession.early_stop(s, lost, FaultFlag(0)) == "kth_lost"
 
 
 def test_a_driven_steering_whose_kth_stops_is_stopped_when_its_range_is_off():

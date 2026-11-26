@@ -42,10 +42,15 @@ def test_a_bench_ask_builds_its_bench_set():
 
 
 def test_the_bench_image_is_told_by_its_exact_suffix():
-    assert bl.bench_image("forklift-mcu commission OPEN diag-fw-bench-1-0-gabc rec=1f4207f4 lim=lr1 bench")
+    assert bl.bench_image("forklift-mcu commission OPEN diag-fw-bench-1-0-gabc rec=1f4207f4 lim=lr1 bench2")
     assert not bl.bench_image("forklift-mcu commission OPEN v rec=1 lim=lr1")
     assert not bl.bench_image("forklift-mcu commission OPEN v rec=1 lim=lr1 benchx")
     assert not bl.bench_image(None)
+    # an older bench generation (no travel counter) is not this image, yet stays out of gates
+    old = "forklift-mcu commission OPEN v rec=1 lim=lr1 bench"
+    assert not bl.bench_image(old)
+    from forklift_core.plant import judgement
+    assert judgement.diagnostic_image(old) and judgement.diagnostic_image(old + "2")
 
 
 def test_the_travel_counter_is_read_mod_2_32():

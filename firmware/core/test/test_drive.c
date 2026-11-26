@@ -2187,6 +2187,52 @@ static void bench_counts_a_fast_turn_frame_by_frame(void)
     CHECK_EQ_U(st.kth_alt_crc_errors[0], (uint16_t)d.steer.alt_crc_errors);
 }
 
+static void bench_a_step_the_counter_cannot_tell_stops_m(void)
+{
+    /* Codex fw-bench round 3 P2-2: a glitch frame passing the CRC (0x0000) mid-turn, or valid frames too far apart,
+       is never counted; the count is lost, M faults while commissioned, and the next ARM counts afresh */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 1200, 150, echo_now()));
+    CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_KTH_LOST, 0);
+    uint32_t before = d.bench_kth_counts;
+    in.abs_frame[0] = 0x0000; /* angle 0, CRC 0: valid, ~2.0 rad away from the last frame */
+    tick();
+    CHECK(d.bench_kth_lost);
+    CHECK_EQ_U(d.bench_kth_counts, before); /* never counted */
+    CHECK(d.latched & DRIVE_FAULT_BENCH_KTH_LOST);
+    CHECK(d.mode != DRIVE_MODE_ARMED);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    /* the next ARM counts afresh */
+    set_steer(2.0);
+    ticks((int)cfg.stop_grace_ms + 50);
+    if (d.mode == DRIVE_MODE_FAULT) {
+        link_msg clr = {.type = LINK_CLEAR_FAULTS, .seq = seq++};
+        clr.u.clear.boot_id = d.boot_id;
+        send(clr);
+        for (int i = 0; i < 200 && d.mode != DRIVE_MODE_DISARMED; i++) {
+            tick();
+        }
+    }
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!d.bench_kth_lost);
+    CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_KTH_LOST, 0);
+    /* a gap: no fresh steering frame for 5 ms, then a valid one */
+    in.abs_fresh[0] = false;
+    ticks(5);
+    in.abs_fresh[0] = true;
+    set_steer(2.01);
+    tick();
+    CHECK(d.bench_kth_lost);
+}
+
 static void bench_limits_are_the_sessions(void)
 {
     /* the session's M time limit (0.5 s) ends the interval, not the build's 2 s */
@@ -2287,5 +2333,6 @@ int main(void)
     bench_set_refused_while_stopping_or_inside_an_interval();
     bench_overrides_never_weaken_the_stopping_side();
     bench_counts_a_fast_turn_frame_by_frame();
+    bench_a_step_the_counter_cannot_tell_stops_m();
     return FW_TEST_RESULT();
 }

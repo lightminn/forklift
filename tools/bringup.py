@@ -702,7 +702,9 @@ class CommissionSession(Session):
         self.bench: bl.BenchAsk | None = None
         self.bench_taken: dict | None = None
         self.stop_kth_turns: float | None = None
-        self._kth_base: int | None = None  # the board's travel counter at the run's first look (bench image)
+        self._kth_base: int | None = None  # the board's travel counter just before the run's first driven STATE
+        self._kth_started = False
+        self._bench_index: int | None = None  # the sample index the BENCH_SET was taken at
         self._prog_us: int | None = None  # the last progress mark while driven: MCU time and position
         self._prog_value: float | None = None
         self._bench_boot: int | None = None  # the boot that took this run's BENCH_SET
@@ -830,6 +832,7 @@ class CommissionSession(Session):
         self.bench_taken = {"seq": seq, "bypass": list(ask.names), "duty_max_e4": list(ask.duty_max_e4()),
                             "time_ms": list(ask.time_ms()), "overrides": want, "boot_id": boot0}
         self._bench_boot = boot0
+        self._bench_index = n0
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
@@ -920,10 +923,16 @@ class CommissionSession(Session):
         range_off = self._range_off()
         pos = None
         if self.axis == 2 and self.bench_taken is not None:
-            # the bench image's own travel counter (1 kHz, Codex fw-bench round 2 P2-2), not the 100 Hz angle
+            # the bench image's own travel counter (1 kHz, Codex fw-bench round 2 P2-2), not the 100 Hz angle; a step
+            # it could not tell stops the run (the board faults M too)
+            if state.fault_flags & FaultFlag.BENCH_KTH_LOST:
+                return "kth_lost"
             c = bl.kth_counts(state)
-            if self._kth_base is None:
-                self._kth_base = c
+            if not self._kth_started:
+                # the base: the last STATE before the axis is driven, so a pre-zero drift is not this run's (round 3)
+                if state.duty_e4[self.axis] == 0 or self._kth_base is None:
+                    self._kth_base = c
+                self._kth_started = state.duty_e4[self.axis] != 0
             pos = float(bl.counts_delta(self._kth_base, c))
             if self.stop_kth_turns is not None and abs(pos) >= self.stop_kth_turns * bl.KTH_COUNTS_PER_TURN:
                 return "kth_turns"
@@ -1699,6 +1708,12 @@ def main(argv=None) -> int:
         marks = {**marks, **jmarks}
     if args.cmd == "kth":
         rows = rows_
+        products = {args.image} | {r.get("product") for r in rows if r.get("t") == "connected"}
+        if any(bl.bench_image(p) or judgement.diagnostic_image(p) and "bench" in str(p) for p in products):
+            # diag/fw-bench: the bench image carries its KTH travel counter where the other variant's CRC count goes
+            print(json.dumps({**marks, "result": "invalid", "why": "bench image: no other-variant CRC counts "
+                              "(its STATE carries the steering travel counter there)", "image": args.image}))
+            return 1
         configured = {ax: v for ax, v in (("M", args.configured_m), ("H", args.configured_h)) if ax not in kabsent}
         states = [r for r in rows if r.get("t") == "state"]
         bad = next((why for r in states if (why := kth_row_problem(r)) is not None), None)
@@ -1839,14 +1854,16 @@ def _bench_ask(args) -> bl.BenchAsk | None:
     return ask
 
 
-def _kth_summary(samples: list, ch: int = 2) -> dict:
-    """diag/fw-bench: the steering KTH's travel over the run -- while the axis was driven (its applied duty non-zero)
-    and from then to the record's end (the coast included) -- unwrapped per STATE."""
+def _kth_summary(samples: list, ch: int = 2, *, start: int = 0, boot: int | None = None) -> dict:
+    """diag/fw-bench: the steering KTH's travel over this run (from ``start``, the boot that took its BENCH_SET only) --
+    from the last STATE before the axis was driven to the last driven one, and to the run's last STATE (the coast
+    included) -- read from the board's travel counter."""
+    samples = [s for s in samples[start:] if boot is None or s.state.boot_id == boot]
     idx = [i for i, s in enumerate(samples) if s.state.duty_e4[ch] != 0]
     if not idx:
         return {"driven_turns": 0.0, "driven_s": 0.0, "mean_turns_per_s": None, "to_end_turns": 0.0,
                 "source": "bench_kth_counts"}
-    first, last = samples[idx[0]].state, samples[idx[-1]].state
+    first, last = samples[max(idx[0] - 1, 0)].state, samples[idx[-1]].state
     turns = bl.counts_delta(bl.kth_counts(first), bl.kth_counts(last)) / bl.KTH_COUNTS_PER_TURN
     secs = (last.mcu_time_us - first.mcu_time_us) / 1e6
     to_end = bl.counts_delta(bl.kth_counts(first), bl.kth_counts(samples[-1].state)) / bl.KTH_COUNTS_PER_TURN
@@ -2231,7 +2248,10 @@ def execute(args, bench: Bench) -> dict:
                 if session.bench_taken is not None:
                     result["bench_set"] = session.bench_taken  # what the board took, by its seq
                 if AXES[args.axis] == 2 and session.bench_taken is not None:
-                    result["kth"] = _kth_summary(bench.samples)  # diag/fw-bench: turns, time, mean speed
+                    result["kth"] = _kth_summary(bench.samples, start=session._bench_index or 0,
+                                                 boot=session._bench_boot)  # diag/fw-bench: turns, time, speed
+                    result["kth"]["lost"] = any(s.state.fault_flags & FaultFlag.BENCH_KTH_LOST
+                                                for s in bench.samples[session._bench_index or 0:])
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
                     # (partial-parts plan v4)

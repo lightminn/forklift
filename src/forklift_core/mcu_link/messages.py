@@ -101,6 +101,7 @@ class FaultFlag(IntFlag):
     ENCODER_JUMP_L = 1 << 22
     ENCODER_JUMP_R = 1 << 23
     COMMISSION_TIME_LIMIT = 1 << 24  # v2: a nonzero commissioning duty held past its limit (kept until ARM)
+    BENCH_KTH_LOST = 1 << 30  # diag/fw-bench: the steering travel counter lost a step since the ARM (stops M)
     BENCH_OVERRIDES = 1 << 31  # diag/fw-bench: live, the bench image runs with a BENCH_SET other than its defaults
 
 
@@ -125,7 +126,7 @@ class ResetCause(IntEnum):
     OTHER = 4
 
 
-_FAULT_MASK = ((1 << 25) - 1) | (1 << 31)  # diag/fw-bench: bit 31 BENCH_OVERRIDES
+_FAULT_MASK = ((1 << 25) - 1) | (1 << 30) | (1 << 31)  # diag/fw-bench: bits 30 BENCH_KTH_LOST, 31 BENCH_OVERRIDES
 _STATE_FLAG_MASK = (1 << 8) - 1
 
 

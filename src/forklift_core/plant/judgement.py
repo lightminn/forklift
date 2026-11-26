@@ -30,7 +30,8 @@ DIAG_TOKEN_PREFIX = "diag-"  # a diagnostic image's version token (diag-commissi
 def diagnostic_image(product: str | None) -> bool:
     """A USB product string naming a diagnostic image (its version token starts with ``diag-``): built off main with
     protections changed, so nothing armed on it is evidence for a gate (Codex PR-2b P2-5)."""
-    if bool(product) and tuple(str(product).split()[-2:]) == ("lim=lr1", "bench"):
+    toks = str(product).split() if product else []
+    if len(toks) >= 2 and toks[-2] == "lim=lr1" and toks[-1].startswith("bench"):
         return True  # diag/fw-bench: the bench image changes protections per run (Codex fw-bench round 2 P3)
     return bool(product) and any(t.startswith(DIAG_TOKEN_PREFIX) for t in str(product).split())
 

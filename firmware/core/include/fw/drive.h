@@ -61,6 +61,10 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): live, never latched -- the bench image runs with a
    BENCH_SET that differs from the build's defaults (a bypass bit or a limit). */
 #define DRIVE_FAULT_BENCH_OVERRIDES (1u << 31)
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the bench image's steering travel counter could not tell a
+   step (valid frames more than 3 ms apart, or more than 1/8 turn in one frame) since the last ARM; a
+   stopping fault while M is commissioned on the bench image (Codex fw-bench round 3 P2-2). */
+#define DRIVE_FAULT_BENCH_KTH_LOST (1u << 30)
 
 /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the checks a BENCH_SET may turn off for the session. The
    stopping side (overcurrent, driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun)
@@ -225,6 +229,8 @@ typedef struct drive {
     uint32_t bench_kth_counts;
     uint16_t bench_kth_prev;
     bool bench_kth_have;
+    uint64_t bench_kth_last_us; /* the last valid frame's MCU time */
+    bool bench_kth_lost;        /* since the last ARM: a step the counter could not tell */
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
