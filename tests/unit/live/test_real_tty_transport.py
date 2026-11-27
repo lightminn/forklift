@@ -197,12 +197,13 @@ def test_grant_needs_the_lock_a_first_state_an_empty_judgement_and_the_current_b
 
 
 def test_motion_bytes_are_written_only_while_the_permission_holds():
-    from forklift_core.mcu_link.messages import Disarm
+    from forklift_core.mcu_link.messages import Disarm, Drive
     from forklift_core.plant.mcu_host import Outgoing
 
     m, t = make()
     feed(m, t, state())
-    drive = Outgoing("DRIVE", 3, b"\x05" * 20 + b"\x00", None, 0)
+    # a real DRIVE frame: the transport writes only whole frames it can read (bytes that are not one are refused, A1a-2)
+    drive = Outgoing("DRIVE", 3, encode(Drive(0.0, 0.0, 0.0, 0.0, 100, True, 1, 7, 1000), 3), None, 0)
     disarm = Outgoing("DISARM", 4, encode(Disarm(), 4), None, 0)
     t._poison_at = None
     assert t._write_first(drive, None) == "eagain"  # not granted: not one byte

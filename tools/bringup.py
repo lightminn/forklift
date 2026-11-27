@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import secrets
 import random
 import sys
 import time
@@ -56,6 +57,7 @@ from forklift_core.live.synthetic import (
 )
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
+    BenchStop,
     Drive,
     FaultFlag,
     LinkDecoder,
@@ -143,9 +145,14 @@ class _BenchHost(McuLinkHost):
     on_open = None
     on_lost = None
 
+    products_seen: list | None = None
+
     def link_identity(self, product):
         if self.on_open is not None:
             self.on_open()
+        if self.products_seen is None:
+            self.products_seen = []
+        self.products_seen.append(product)  # every opening's product: a cpr judged by all of them (A1a-2 r2)
         return super().link_identity(product)
 
     def disconnected(self, now_ns):
@@ -249,6 +256,15 @@ class Bench:
             self.out.write(json.dumps(row, default=str) + "\n")
         except (OSError, ValueError):
             self.record_errors += 1
+
+    def flush_record(self) -> bool:
+        """Push the record out of this process's buffer now (a row that must exist before the next step)."""
+        try:
+            self.out.flush()
+            return True
+        except (OSError, ValueError):
+            self.record_errors += 1
+            return False
 
     def cycle(self) -> None:
         now = time.monotonic_ns()
@@ -441,7 +457,7 @@ class Session:
         b.phase = "arm"
         self.test_end_ns = time.monotonic_ns() + int(budget_s * 1e9)
         self.arm_requested = True
-        blocked = b.host.request_arm(time.monotonic_ns())
+        blocked = self.request_arm(time.monotonic_ns())
         if blocked is not None:
             raise Refused(f"arm blocked: {blocked.reason}")
         if not b.run_until(lambda: b.host.ready, 2.0):  # arm_pending -> zero_pending -> ready, no retry
@@ -452,6 +468,9 @@ class Session:
 
     def preflight(self, state: McuState) -> None:
         check_build(state, allow_locked=self.b.allow_locked)
+
+    def request_arm(self, now_ns: int):
+        return self.b.host.request_arm(now_ns)
 
     def send(self, left: float, right: float, end_ns: int | None = None) -> int | None:
         """One DRIVE expiring at most at the run's fixed end and at ``end_ns``. Returns its seq when queued."""
@@ -692,6 +711,14 @@ class CommissionSession(Session):
         # stop leaves out (--bypass), whether the board must carry lim=lr1, and a scenario (locked boards only)
         self.duty_max, self.ignore, self.large, self.scenario = duty_max, ignore, large, scenario
         self.preflight_product: str | None = None
+        # the bench image (bench console plan A1a): the run's BENCH_SET ask (None: the image's defaults), whether the
+        # board is the bench image, the run id the BENCH_SET and BENCH_ARM carry, and what the board took
+        self.bench: bl.BenchAsk | None = None
+        self.bench_image = False
+        self.run_id: int | None = None
+        self.bench_taken: dict | None = None
+        self._bench_pending: dict | None = None
+        self._boot0: int | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -727,7 +754,22 @@ class CommissionSession(Session):
             raise Refused("single-axis: a fw-single product with outputs_locked in STATE: the board disagrees")
         # the arming's zero COMMISSION fixes this run's axis on fw-single; every other path keeps L(0)
         self.b.host.commission_zero_axis = self.axis if single_image else 0
-        if self.axis >= 2 and not self.sensorless:
+        # the bench image (plan A1a, contract 8): told apart by its exact suffix; any other bench generation is refused
+        # for every run, bench values on another image too. On it every run sends its BENCH_SET (the defaults when
+        # none was asked) and arms with BENCH_ARM, so no run inherits another's overrides
+        self.bench_image = bl.bench_image(self.preflight_product)
+        if bl.any_bench_image(self.preflight_product) and not self.bench_image:
+            raise Refused(f"bench: {self.preflight_product!r} is another bench generation than "
+                          f"'{' '.join(bl.BENCH_SUFFIX)}': refused for every run")
+        if self.bench is not None and not self.bench_image:
+            raise Refused(f"bench: {self.preflight_product!r} is not the bench image (no product ending "
+                          f"'{' '.join(bl.BENCH_SUFFIX)}')")
+        if self.bench_image:
+            self._bench_set()
+            state = self.b.state
+        if self.axis >= 2 and not self.sensorless and self.window is None and not self._range_off():
+            raise Refused("window: steering and lift need --window unless the bench run turns their range off")
+        if self.axis >= 2 and not self.sensorless and self.window is not None:
             v = state.steering_rad if self.axis == 2 else state.lift_m
             lo, hi = self.window
             if not (v == v and lo < v < hi):
@@ -739,6 +781,145 @@ class CommissionSession(Session):
                      "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
                      "single_axis": single_image, "sensorless": self.sensorless,
                      "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
+
+    def _range_off(self) -> bool:
+        name = {2: "steer_range", 3: "lift_range"}.get(self.axis)
+        return self.bench is not None and name in self.bench.names
+
+    def _bench_set(self) -> None:
+        """Send this run's BENCH_SET with a fresh run id and read the board's acceptance (its seq in
+        STATE.last_rx_seq, no reject); anything else refuses the run before the ARM."""
+        b = self.b
+        ask = self.bench or bl.BenchAsk(self.axis, (), None, None)
+        conn0, disc0 = b.conn, b.host.disconnects
+        self._boot0 = boot0 = b.state.boot_id  # the DISARMED STATE's boot, kept to the BENCH_ARM (A1a-2 r3)
+
+        def same_link() -> bool:
+            return (b.conn == conn0 and b.host.disconnects == disc0 and b.state is not None
+                    and b.state.boot_id == boot0)
+
+        # the board's record of the last run first (a CLI that ended before writing it down, same boot): recovered
+        # here, before this run's BENCH_ARM clears it (contract 8.3; A1a-2 P2)
+        stopped = (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
+        t_stop = b.state.mcu_time_us  # Session.arm saw this DISARMED STATE
+
+        def stopped_pair() -> bool:
+            # a pair that came with an accepted STATE of this boot and arming generation, in a stopped mode, no older
+            # than the stop seen now, with the latest STATE still stopped: an older pair (an empty record seen while
+            # the last run drove) never stands for the board's record now (A1a-2 r3, r4)
+            st, cur = b.host.bench_state_of, b.host.state
+            return (st is not None and cur is not None and st.boot_id == cur.boot_id and st.arm_gen == cur.arm_gen
+                    and st.mode in stopped and cur.mode in stopped and st.mcu_time_us >= t_stop)
+
+        if not b.run_until(lambda: not same_link() or stopped_pair(), 1.0):
+            raise Refused("bench: no BENCH_STATE with the board's current STATE on this connection")
+        self._link_check(same_link, conn0, disc0)
+        prev = b.host.bench_state
+        if prev.result_run_id != 0:
+            errors0 = b.record_errors
+            b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, "run_id": prev.result_run_id,
+                    "stop_reason": BenchStop(prev.stop_reason).name.lower() if prev.stop_reason <= max(BenchStop)
+                    else prev.stop_reason, "axis": "LRMH"[prev.result_axis] if prev.result_axis < 4 else None,
+                    "blocked": prev.blocked})
+            b.flush_record()  # out of this process before the BENCH_ARM can clear the board's copy
+            if b.record_errors != errors0:
+                # the next ARM clears the board's record: never before it is written down (A1a-2 r2)
+                raise Refused("bench: the last run's board record could not be written: nothing is armed")
+        self.run_id = secrets.randbits(32) or 1
+        # its seq differs from every number this boot's recent STATEs named, so no STATE written before the board
+        # took this BENCH_SET can carry it (A1a-2 r2)
+        recent = {s.state.last_rx_seq for s in b.samples[-256:] if s.state.boot_id == b.state.boot_id}
+        while (b.host.skip_seq(0) & 0xFFFF) in recent:
+            b.host.skip_seq(1)
+        boot, conn = b.state.boot_id, b.conn
+        echo_us = b.state.mcu_time_us
+        blocked = b.host.bench_set(self.run_id, ask, time.monotonic_ns())
+        if blocked is not None:
+            raise Refused(f"bench: BENCH_SET not queued ({blocked.reason})")
+        seq = b.host.last_queued_seq
+
+        def taken() -> bool:
+            # a STATE of this boot, received on this connection after the BENCH_SET's last byte went out, naming its
+            # seq with no reject (never an older STATE that happens to carry the same number)
+            st, rx = b.host.state, b.host.state_rx_ns
+            if st is None or rx is None or st.boot_id != boot or not same_link() or st.mcu_time_us <= echo_us:
+                return False
+            w = next((w for w in reversed(b.writes) if w.kind == "BENCH_SET" and (w.seq & 0xFFFF) == seq
+                      and w.conn == conn), None)
+            return (w is not None and w.done_ns <= rx and st.last_rx_seq == seq
+                    and st.reject_reason == RejectReason.NONE)
+
+        if not b.run_until(taken, 1.0):
+            self._link_check(same_link, conn0, disc0)
+            why = None if b.state is None else b.state.reject_reason.name
+            raise Refused(f"bench: the board did not take BENCH_SET seq {seq} (reject {why})")
+        # provisional: the seq is the board's answer only once its arming names this run (confirm_bench_arm)
+        self._bench_pending = {"seq": seq, "run_id": self.run_id, "bypass": list(ask.names),
+                               "duty_max_e4": list(ask.duty_max_e4()), "time_ms": list(ask.time_ms()),
+                               "overrides": ask.overrides()}
+        b.emit({"t": "bench_set_sent", **self._bench_pending})
+
+    def _link_check(self, same_link, conn0: int, disc0: int) -> None:
+        if same_link():
+            return
+        b = self.b
+        if b.conn != conn0 or b.host.disconnects != disc0:
+            raise Refused("the link reconnected before the ARM: run it again to confirm")
+        raise Refused("the board rebooted (a new boot id on the same link) before the ARM: run it again to confirm")
+
+    def arm(self, budget_s: float) -> None:
+        super().arm(budget_s)
+        if self.bench_image:
+            self.confirm_bench_arm()
+
+    def confirm_bench_arm(self) -> None:
+        """The BENCH_SET consumed: a BENCH_STATE of this boot, paired with an ARMED STATE, naming this run -- before
+        the first non-zero COMMISSION (A1a-2 r4). Only then is the board's acceptance recorded."""
+        b = self.b
+
+        def named() -> bool:
+            bs, st = b.host.bench_state, b.host.bench_state_of
+            return (bs is not None and st is not None and st.boot_id == self._boot0 and st.mode == Mode.ARMED
+                    and bs.run_id == self.run_id)
+
+        if not b.run_until(named, 0.5):
+            raise Refused("bench: the board's arming never named this run's BENCH_SET")
+        self.bench_taken = self._bench_pending  # the board took it, whatever happens next
+        if not b.host.ready:
+            b.emit({"t": "bench_set", **self.bench_taken})
+            raise Refused("bench: the arming ended while its BENCH_SET was being confirmed")
+        b.emit({"t": "bench_set", **self.bench_taken})
+
+    def request_arm(self, now_ns: int):
+        if self.bench_image:
+            if self.b.conn > 1 or self.b.host.disconnects:
+                raise Refused("the link reconnected before the ARM: run it again to confirm")
+            if self.b.state is None or self.b.state.boot_id != self._boot0:
+                raise Refused("the board rebooted (a new boot id on the same link) before the ARM: run it again to "
+                              "confirm")
+            return self.b.host.request_bench_arm(self.run_id, now_ns)
+        return self.b.host.request_arm(now_ns)
+
+    def end_bench_run(self) -> None:
+        """The bench image's end (contract 8.3): one zero COMMISSION after driving ends the run and the MCU stops it
+        itself (STOPPING -> DISARMED); no more zeros, which it would refuse as stopping."""
+        b = self.b
+        if self.send_duty(0) is None:
+            self.aborted = self.aborted or "bench_end_zero_not_queued"
+            return
+        b.run_until(lambda: b.state is not None and b.state.mode != Mode.ARMED, POST_ZERO_S + 0.5)
+
+    def bench_result(self) -> dict | None:
+        """The board's own record of this run from its latest BENCH_STATE (None off the bench image)."""
+        if not self.bench_image:
+            return None
+        bs = self.b.host.bench_state
+        if bs is None or bs.result_run_id != self.run_id:
+            # the board's record of this run was not seen (a lost pair, a run that never drove): never another run's
+            return {"run_id": self.run_id, "confirmed": False}
+        return {"run_id": self.run_id, "confirmed": True,
+                "stop_reason": BenchStop(bs.stop_reason).name.lower() if bs.stop_reason <= max(BenchStop)
+                else bs.stop_reason, "blocked": bs.blocked}
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
         raise Refused("the commissioning tool sends no DRIVE")
@@ -825,6 +1006,8 @@ class CommissionSession(Session):
         if self.sensorless:
             return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
         v = state.steering_rad if self.axis == 2 else state.lift_m
+        if self.window is None:
+            return None  # the bench run turned the range off: the hold ends by time (the board's own checks stay)
         lo, hi = self.window
         return None if v == v and lo <= v <= hi else "window"
 
@@ -896,8 +1079,22 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             session.stop_reason = "time"
     b.phase = "post_zero"
     if session.aborted is None:
-        session.hold_duty(0, POST_ZERO_S)
+        if getattr(session, "bench_image", False):
+            session.end_bench_run()  # one zero ends the run; the board stops it itself (contract 8.3)
+        else:
+            session.hold_duty(0, POST_ZERO_S)
     session.cleanup()
+    if getattr(session, "bench_image", False):
+        # the board's own first cause decides: a run that ended by expiry, a time limit, a fault or anything but the
+        # tool's one zero is not ok, whatever the samples say (A1a-2 P2)
+        br = session.bench_result()
+        if not br.get("confirmed"):
+            b.run_until(lambda: (session.bench_result() or {}).get("confirmed", False), 0.3)
+            br = session.bench_result()
+        if not br.get("confirmed"):
+            session.aborted = session.aborted or "bench_result_unconfirmed"
+        elif br.get("stop_reason") != "end_zero":
+            session.aborted = session.aborted or f"bench_stop_{br.get('stop_reason')}"
     # Acceptances are matched with the write log (order, connection, completion, echo), never with a seq alone: a
     # long run wraps the 16-bit seq and a USB-only reconnect brings the same boot back on a new fd (design 2026-11-25
     # 1.2, PR-2a). An ambiguous sample leaves the run unjudgeable instead of picking a frame.
@@ -1509,6 +1706,11 @@ def main(argv=None) -> int:
     cm.add_argument("--motor-detached", action="store_true",
                     help="fw-single steering/lift: the motor is off the mechanism (retyped on a terminal, recorded); "
                          "required there, since no end stop protects a coupled axis without its sensor checks")
+    # the bench image (bench console plan A1a, contract 8): one run's settings, sent before its BENCH_ARM
+    cm.add_argument("--bench-bypass", help="bench image: comma names the board turns off for this run "
+                                           f"({', '.join(sorted(bl.BENCH_BYPASS_BITS))}); the stopping side never")
+    cm.add_argument("--bench-duty-max", type=float, help="bench image: this axis's duty limit for the run, (0, 1]")
+    cm.add_argument("--bench-time-max", type=float, help="bench image: this axis's continuous output limit for the run, s")
     cm.add_argument("--sensorless", action="store_true",
                     help="fw-single steering/lift with no KTH window (instead of --window): output and stop only")
     cm.add_argument("--wheels-lifted", action="store_true",
@@ -1675,6 +1877,7 @@ def main(argv=None) -> int:
                                     (args.dir_left, args.dir_right), motor_counts_confirmed=args.motor_counts_confirmed)
                     out_ = asdict(res)
                     _mark_absent_result(out_, _absent_of(args))
+                    _mark_diagnostic_cpr(out_, bench.host.products_seen or [bench.host.usb_product])
                     print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **out_}))
                 return 0
             if args.cmd == "clear-faults":
@@ -1695,6 +1898,27 @@ def main(argv=None) -> int:
     return 0
 
 
+def _bench_ask(args) -> bl.BenchAsk | None:
+    """The run's BENCH_SET (plan A1a), or None when no bench argument was given (a bench board then gets its
+    defaults)."""
+    given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max")]
+    if all(v is None for v in given):
+        return None
+    try:
+        names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
+    except bl.LimitRefused as exc:
+        raise Refused(str(exc)) from None
+    for k in ("bench_duty_max", "bench_time_max"):
+        v = getattr(args, k, None)
+        if v is not None and not math.isfinite(v):
+            raise Refused(f"{k.replace('_', '-')}: a finite number")
+    ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
+                      getattr(args, "bench_time_max", None))
+    if (why := bl.bench_refusal(ask)) is not None:
+        raise Refused(why)
+    return ask
+
+
 def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[str, ...]]:
     """Design ② 2 and 10 and 2026-11-25 1.2: the tool's own limits, before anything is sent. Returns what the run
     asks, its profile and its bypass names."""
@@ -1703,6 +1927,10 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         names = bl.parse_bypass(getattr(args, "bypass", None))
     except bl.LimitRefused as exc:
         raise Refused(str(exc)) from None
+    bench = _bench_ask(args)
+    if bench is not None and (getattr(args, "single_axis", False) or getattr(args, "scenario", None) is not None
+                              or getattr(args, "profile_tri", None) is not None):
+        raise Refused("bench: a plain run only (no --single-axis, --scenario or --profile-tri)")
     if names and axis >= 2:
         raise Refused("bypass: the encoder early stop is a wheel's (L or R)")
     # fw-single (partial-parts plan 2026-11-25 PR-B): steering and lift only with the motor off the mechanism, with
@@ -1798,6 +2026,26 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         raise Refused("seconds: required without --scenario")
     peak = (profile.max_abs_e4 / 10000.0 if profile is not None else abs(args.duty)) * (1 if args.duty > 0 else -1)
     ask = bl.RunAsk(axis, peak, seconds)
+    if bench is not None and axis >= 2:
+        # steering and lift under the run's own limits (the image's 0.15 / 2 s when not given), the tool's hold a
+        # margin under the board's time limit
+        duty_lim = bench.duty_max if bench.duty_max is not None else COMMISSION_DUTY_MAX
+        t_lim = (bench.time_max_s if bench.time_max_s is not None
+                 else bl.BENCH_DEFAULT_TIME_MS[axis] / 1000.0) - bl.TIME_MARGIN_S
+        if not 0 < abs(ask.duty) <= duty_lim + 1e-12:
+            raise Refused(f"duty must be nonzero and within +-{duty_lim:g} (the bench run's limit)")
+        if not COMMISSION_HOLD_MIN_S <= seconds <= t_lim:
+            raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {t_lim:g}] (the bench run's time limit less "
+                          f"{bl.TIME_MARGIN_S} s)")
+        if (abs(ask.duty) > bl.VCC_WATCH_ABOVE + 1e-12 and not getattr(args, "vcc_watched", False)
+                and not getattr(args, "synthetic", False)):
+            raise Refused(f"vcc: above duty {bl.VCC_WATCH_ABOVE} watch VCC (--vcc-watched) -- steering and lift too")
+        range_off = (axis == 2 and "steer_range" in bench.names) or (axis == 3 and "lift_range" in bench.names)
+        if range_off and args.window is not None:
+            raise Refused("window: the range is off for this run -- give no --window (it stops by time)")
+        if not range_off and not sensorless and (args.window is None or not args.window[0] < args.window[1]):
+            raise Refused("window: steering and lift need --window LO HI with LO < HI")
+        return ask, profile, names + tuple(f"bench:{n}" for n in bench.names)
     if bl.is_large(ask):
         why = bl.large_refusal(ask, wheels_lifted=getattr(args, "wheels_lifted", False),
                                vcc_watched=getattr(args, "vcc_watched", False),
@@ -1822,6 +2070,13 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
     elif axis < 2 and args.window is not None:
         raise Refused("window: a wheel takes no window")
+    if bench is not None:
+        # a wheel: the run's own limits may only be lower than the image's (1.0, the validator's ms)
+        if bench.duty_max is not None and abs(ask.duty) > bench.duty_max + 1e-12:
+            raise Refused(f"duty must be within +-{bench.duty_max:g} (the bench run's limit)")
+        if bench.time_max_s is not None and seconds > bench.time_max_s - bl.TIME_MARGIN_S:
+            raise Refused(f"seconds must be at most {bench.time_max_s - bl.TIME_MARGIN_S:g} (the bench run's limit)")
+        names = names + tuple(f"bench:{n}" for n in bench.names)
     return ask, profile, names
 
 
@@ -1856,6 +2111,20 @@ def _mark_commission_result(result: dict, names: tuple, large: bool, product: st
 
 def _absent_of(args) -> tuple:
     return tuple(sorted(set(getattr(args, "absent", None) or ())))
+
+
+def _mark_diagnostic_cpr(result: dict, products) -> None:
+    """A cpr measured with any opening on a diagnostic image (the bench image included, plan A1a) keeps its computed
+    values but no official pass: S2 reads ``valid``."""
+    products = [products] if isinstance(products, str) or products is None else list(products)
+    diag = [p for p in products if judgement.diagnostic_image(p)]
+    if not diag:
+        return
+    result["not_for_gate"] = True
+    result["board_product"] = diag[0]
+    if "valid" in result and "computed_valid" not in result:
+        result["computed_valid"] = result["valid"]
+    result["valid"] = None
 
 
 def _mark_absent_result(result: dict, absent: tuple) -> None:
@@ -1960,7 +2229,14 @@ def execute(args, bench: Bench) -> dict:
             session.duty_max = bl.WHEEL_DUTY_MAX_OPEN if session.large else COMMISSION_DUTY_MAX
             session.ignore = bl.ignored_bits(names, AXES[args.axis])
             session.scenario = getattr(args, "scenario", None)
+            session.bench = _bench_ask(args)  # the bench image's run settings (plan A1a)
+            if session.bench is not None and session.bench.duty_max is not None:
+                session.duty_max = (session.bench.duty_max if AXES[args.axis] >= 2
+                                    else min(session.duty_max, session.bench.duty_max))
             conditions = {"bypass": list(names), "large": session.large,
+                          "bench": None if session.bench is None else {
+                              "bypass": list(session.bench.names), "duty_max": session.bench.duty_max,
+                              "time_max_s": session.bench.time_max_s},
                           "asked": {"duty": ask.duty, "seconds": ask.seconds},
                           "profile_tri": None if profile is None else list(args.profile_tri)}
             bench.emit({"t": "run_conditions", **conditions})
@@ -2016,6 +2292,9 @@ def execute(args, bench: Bench) -> dict:
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
                 result.update(conditions, board_product=session.preflight_product)
+                if session.bench_taken is not None:
+                    result["bench_set"] = session.bench_taken  # what the board took, by its seq
+                    result["bench_run"] = session.bench_result()
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
                     # (partial-parts plan v4)

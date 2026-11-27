@@ -34,6 +34,7 @@ import termios
 import time
 from pathlib import Path
 
+from forklift_core.mcu_link.framing import cobs_decode, crc16_ccitt_false
 from forklift_core.mcu_link.messages import LinkDecoder, McuState, StateFlag
 
 POISON = bytes([0x01]) * 96 + b"\x00"
@@ -57,6 +58,30 @@ class HilRefused(Exception):
 def hil_bits_ok(state: McuState) -> bool:
     f = state.flags
     return bool(f & StateFlag.HIL_PLANT) and bool(f & StateFlag.OUTPUTS_LOCKED) and not f & StateFlag.COMMISSION_BUILD
+
+
+_BENCH_TYPES = (0x06, 0x07, 0x08)  # BENCH_SET, the reserved BENCH_HOLD (A1b), BENCH_ARM (contract 8)
+_BENCH_KINDS = ("BENCH_SET", "BENCH_HOLD", "BENCH_ARM")
+
+
+def _bench_frame(f) -> bool:
+    """A bench command by its kind, or by the type byte of any frame in its bytes (a frame mislabelled, or a buffer
+    holding more than one, still counts). Bytes that do not read as frames are refused too: fail closed."""
+    if getattr(f, "kind", None) in _BENCH_KINDS:
+        return True
+    data = bytes(getattr(f, "data", b"") or b"")
+    if not data.endswith(b"\x00"):
+        return True  # a frame always ends with its delimiter
+    for piece in data[:-1].split(b"\x00"):
+        try:
+            body = cobs_decode(piece)
+        except Exception:  # noqa: BLE001 -- not a frame this transport can tell: never written
+            return True
+        if len(body) < 6 or crc16_ccitt_false(body[:-2]) != int.from_bytes(body[-2:], "little"):
+            return True  # not a whole frame with its CRC
+        if body[1] in _BENCH_TYPES:
+            return True
+    return False
 
 
 class LoopTtyTransport:
@@ -165,6 +190,11 @@ class LoopTtyTransport:
                 if not self._poison_out():
                     return
         while (f := host.next_frame(now_ns)) is not None:
+            if _bench_frame(f):
+                # refused for good here, before any gate: never requeued, so it can block nothing behind it (a DISARM)
+                self._event({"t": "tx_bench_refused", "seq": int(f.seq) & 0xFFFF, "kind": getattr(f, "kind", None)})
+                host.frame_refused(f, now_ns, "bench_frame_on_this_transport")
+                continue
             state = {}
 
             def write(f=f, *, judged_ns=None):
@@ -177,6 +207,9 @@ class LoopTtyTransport:
                 if not getattr(gate, "keep", False):
                     host.drop_drives("send_gate")
                 break
+            if r == "refused":
+                host.frame_refused(f, now_ns, "bench_frame_on_this_transport")  # dropped, the next frame goes on
+                continue
             if r == "eagain":
                 host.unsent(f, now_ns)  # not one byte out: back to the queue head (judged again next time)
                 break
@@ -224,6 +257,11 @@ class LoopTtyTransport:
         return True
 
     def _write_first(self, f, judged_ns) -> str:
+        if _bench_frame(f):
+            # never one byte of a bench command (bench console plan A1a 1, contract 8) on this transport, whatever
+            # its permission: the HIL and REAL executors' hosts cannot even queue one; this is the second wall
+            self._event({"t": "tx_bench_refused", "seq": int(f.seq) & 0xFFFF, "kind": getattr(f, "kind", None)})
+            return "refused"
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         self.first_byte_ns[seq] = entry
@@ -243,6 +281,8 @@ class LoopTtyTransport:
 
     def _write_rest(self, f, judged_ns) -> bool:
         """One os.write per gate pass (6a-2a impl round 1 P1-2): a short write leaves the rest for the next pass."""
+        if _bench_frame(f):
+            return False
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         n = self._os_write(f.data[self._cur_at:], "write_eio", f)
@@ -405,6 +445,8 @@ class RealTtyTransport(LoopTtyTransport):
         return getattr(f, "kind", None) in ("ARM", "DRIVE")
 
     def _write_first(self, f, judged_ns) -> str:
+        if _bench_frame(f):
+            return super()._write_first(f, judged_ns)  # refused there, whatever the permission (not requeued)
         if self._motion_frame(f) and not self.real_operating:
             return "eagain"  # not one byte: back to the queue (the next gate refuses it without the permission)
         return super()._write_first(f, judged_ns)
