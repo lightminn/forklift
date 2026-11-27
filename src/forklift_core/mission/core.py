@@ -6892,7 +6892,8 @@ class MissionCore:
         """Whether the layer covers the possible motion in direction ``d_``. Without an end slack: one question at
         ``motion[d_]``, as before. With it (U3e-1b, the D5 stages): the loop's own outputs and the command in effect
         at no slack -- a command is held to the path end (Codex round 4 P2: else a 0 request kept slewing on an
-        unexpired output) -- and the whole possible motion, the reading's bound included, at the slack."""
+        unexpired output) -- and the whole possible motion, the reading's bound included, at the slack, always: the
+        no-slack question keeps the end creep floor, so it cannot stand in for the slack's stop (Codex round 6 P2)."""
         v_ = motion.get(d_, 0.0)
         if not end_kw:
             a_, w_ = limit_fn(d_, v_)
@@ -6902,7 +6903,7 @@ class MissionCore:
             a_, w_ = limit_fn(d_, o_)
             if a_ < o_:
                 return False, w_
-        if v_ > o_:
+        if v_ > 0.0:
             a_, w_ = limit_fn(d_, v_, **end_kw)
             if a_ < v_:
                 return False, w_

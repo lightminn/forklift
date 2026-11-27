@@ -234,6 +234,18 @@ def test_no_request_on_an_unexpired_output_holds():
     assert out.requested_speed == 0.0 and c.state.get("motion_hold")
 
 
+def test_an_unexpired_output_above_the_reading_is_asked_with_the_slack_too():
+    """Codex U3e-1b round 6 P2: the layer's path 1.3 mm, the truck's own 1.0 mm, an unexpired 0.018 forward output above
+    the standing width (0.0156), nothing asked: the no-slack question passes on the end creep floor (0.02), the stop
+    within 1.0 + 8 mm (0.0168) does not -- held."""
+    speed = standing_speed(0.0183)
+    c, _, _ = core_at_end(speed, left=0.0013, leg_left=0.0010)
+    c.state.update(command_speed=0.018, outstanding_motion={1: 0.018})
+    assert STOP.speed_for(0.0010 + 0.008 + STOP.margin_m) < 0.018 < CONFIG.end_creep_mps
+    out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    assert out.requested_speed == 0.0 and c.state.get("motion_hold")
+
+
 def test_a_forward_request_on_an_unexpired_reverse_output_holds():
     c, _, _ = core_at_end(standing_speed())  # an empty grid: the output's own bound is what holds
     c.state.update(command_speed=-0.03, outstanding_motion={-1: 0.03})
@@ -288,7 +300,8 @@ def test_the_bypassed_s10_reaches_the_lift_at_a_27_8_ms_delay_bound(slack, monke
     from test_real_loop_console import ask, run_until
     from test_real_loop_d5 import submit
 
-    monkeypatch.setattr(MissionCore, "POCKET_END_SLACK_M", slack)
+    if not slack:
+        monkeypatch.setattr(MissionCore, "_end_slack", lambda self, tracker, rear: {})  # the call path before U3e-1b
     r = Rig(real_requests=True, real_layer=True, direction_evidence=False, scan_period_s=0.12)
     r.loop._speed_delay_s = lambda: 0.0278
     r.start()
