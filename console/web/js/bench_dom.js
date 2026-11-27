@@ -3,7 +3,8 @@
 // both (and their handlers) on any other welcome or a disconnect, draws, and sends through the controller. The big
 // STOP is the shared one (pressStop): the bench screen adds only its own requests.
 
-import { AXES, BYPASS, advice, bypassChips, fieldState, largePhrase, resultView } from "./bench.js";
+import { AXES, BYPASS, DEFAULT_SOURCE, advice, bypassChips, clearView, fieldState, largePhrase,
+  resultView } from "./bench.js";
 import { BENCH_TEXT as T, benchDetailText } from "./profile.js";
 
 const VIEW = "bench";
@@ -52,7 +53,7 @@ function buildPage() {
         el("div", { class: "bn-row" }, num("bn-duty", "듀티", "0.01"), num("bn-seconds", "시간 s", "0.1"),
           num("bn-duty-max", "듀티 상한(선택)", "0.01"), num("bn-time-max", "시간 상한 s(선택)", "0.1")),
         el("div", { class: "bn-row", id: "bn-window-row" }, num("bn-win-lo", "창 아래", "0.01"),
-          num("bn-win-hi", "창 위", "0.01")),
+          num("bn-win-hi", "창 위", "0.01"), el("span", { class: "hint", id: "bn-win-unit" })),
         el("div", { class: "bn-row hint" }, el("span", { text: `정지: N 회전 / N 카운트 · ${T.waitB2}` })),
         bypassRow,
         el("div", { class: "bn-advice warn", id: "bn-advice", hidden: true }),
@@ -69,6 +70,7 @@ function buildPage() {
           el("input", { id: "bn-cause", type: "text", placeholder: T.cause, "aria-label": T.cause }),
           el("button", { class: "btn", id: "bn-clear", type: "button", text: T.clear })),
         el("div", { class: "hint", text: T.clearAdvice }),
+        el("div", { class: "hint", id: "bn-clear-result", role: "status" }),
         el("div", { class: "hint", id: "bn-msg", role: "status" })),
       el("div", { class: "bn-col" },
         el("div", { class: "hint", text: T.graph }),
@@ -77,8 +79,19 @@ function buildPage() {
 }
 
 function buildRail() {
-  return el("button", { class: "rail-item", type: "button", "data-view": VIEW, id: "bn-rail" },
-    el("span", { text: T.menu }));
+  // an icon as the other entries have: the narrow layout hides their text (app.css, max-width 1180px)
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ["M4 18h16", "M7 18V9l5-4 5 4v9", "M12 11v4"]) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", d);
+    svg.append(p);
+  }
+  const b = el("button", { class: "rail-item", type: "button", "data-view": VIEW, id: "bn-rail", title: T.menu }, svg);
+  b.append(T.menu);
+  return b;
 }
 
 function form() {
@@ -115,6 +128,8 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
       if (id === "bn-start") {
         const r = m.bench.run(form());
         say(r.problems.length ? `입력 확인: ${r.problems.join(", ")}` : r.sent ? "보냄" : "보낼 수 없음");
+        // a large run's retyped confirmation is used once (round 2 P1-1): the next run retypes it
+        if (r.sent) document.getElementById("bn-large").value = "";
       } else if (id === "bn-stop") {
         pressStop("bench"); // the shared STOP: the same request the top STOP and Escape send
       } else if (id === "bn-disarm") {
@@ -124,8 +139,25 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
         say(r.problems.length ? "원인을 적으세요" : r.sent ? "보냄" : "보낼 수 없음");
       }
     }, opt);
-    page.addEventListener("change", () => renderBench(m, { rejectText }), opt);
-    mounted = { rail, page, abort };
+    page.addEventListener("change", (ev) => {
+      const id = ev.target?.id;
+      if (["bn-axis", "bn-duty", "bn-seconds"].includes(id)) {
+        document.getElementById("bn-large").value = ""; // the confirmation was for another run (round 2 P1-1)
+      }
+      if (id === "bn-axis") {
+        // the window belongs to its axis (rad for steering, m for lift: round 2 P1-2), the source follows the axis
+        document.getElementById("bn-win-lo").value = "";
+        document.getElementById("bn-win-hi").value = "";
+        const srcSel = document.getElementById("bn-source");
+        srcSel.dataset.list = "";
+        srcSel.dataset.axis = "";
+      }
+      renderBench(m, { rejectText });
+    }, opt);
+    page.addEventListener("input", (ev) => {
+      if (["bn-duty", "bn-seconds"].includes(ev.target?.id)) document.getElementById("bn-large").value = "";
+    }, opt);
+    mounted = { rail, page, abort, replies: 0 };
     renderBench(m, { rejectText });
   } else if (!want && mounted) {
     const wasShown = !mounted.page.hidden;
@@ -150,12 +182,14 @@ export function renderBench(m, { rejectText }) {
   // the source list follows the axis
   const srcSel = document.getElementById("bn-source");
   const want = fs.sources.join(",");
-  if (srcSel.dataset.list !== want) {
+  if (srcSel.dataset.list !== want || srcSel.dataset.axis !== f.axis) {
     srcSel.replaceChildren(...fs.sources.map((s) => el("option", { value: s, text: T.source[s] })),
       el("option", { value: "mt", text: `${T.source.mt} · ${T.waitA1c}`, disabled: true }));
     srcSel.dataset.list = want;
-    srcSel.value = fs.source;
+    srcSel.dataset.axis = f.axis;
+    srcSel.value = DEFAULT_SOURCE[f.axis] ?? fs.source; // a new axis starts on its own default (P3)
   }
+  setText("bn-win-unit", f.axis === "M" ? "rad(조향)" : f.axis === "H" ? "m(승강)" : "");
   for (const [n, open] of Object.entries(fs.bypassOpen)) {
     const box = document.getElementById(`bn-bp-${n}`);
     if (box) {
@@ -182,30 +216,36 @@ export function renderBench(m, { rejectText }) {
     + `${T.chipsHost} ${chips.host.join(", ") || "—"}`;
   // the buttons: the start needs the lease and a ready board; DISARM and the clear need the lease
   const lease = m.session.hasLease;
-  document.getElementById("bn-start").disabled = !(lease && st?.ready && !run);
+  document.getElementById("bn-start").disabled = !(lease && st?.ready && !run && !m.bench.runPending);
   document.getElementById("bn-disarm").disabled = !lease;
   const latched = ["FAULT", "ESTOP"].includes(st?.board?.mode);
   document.getElementById("bn-clear").disabled = !(lease && latched && !run); // only a latched board is cleared
   // the last reply, with the large run's exact phrase when the server named it
-  const last = m.bench.replies.at(-1);
+  const replies = m.bench.replies;
+  const last = replies.at(-1);
   const phrase = last ? largePhrase(last.detail) : null;
   const hint = document.getElementById("bn-large-hint");
   hint.hidden = !phrase;
   if (phrase) hint.textContent = `그대로 입력: ${phrase}`;
-  if (last) {
+  if (last && replies.length !== mounted.replies) {
+    // only a new answer is written over the line (a local input message stays until then: P3)
+    mounted.replies = replies.length;
     const text = last.t === "ack" ? T.replyOk
       : `${T.replyRefused} · ${rejectText(last.reason)}${last.detail ? ` (${benchDetailText(last.detail)})` : ""}`;
     setText("bn-msg", `${last.kind}: ${text}`);
   }
+  const cv = clearView(m.bench.clear);
+  setText("bn-clear-result", cv ? `고장 해제: ${cv.ok ? "해제됨" : cv.result}${cv.why ? ` · ${cv.why}` : ""} · 전 ${cv.before.mode} `
+    + `(${cv.before.faults}, drv ${cv.before.driver}) → 후 ${cv.after.mode ?? "—"} (${cv.after.faults}, drv ${cv.after.driver})` : "");
   renderResult(m);
-  drawGraph(m, f.axis);
+  drawGraph(m, run?.axis ?? f.axis); // the axis being driven while a run goes, the picked one otherwise (P2-4)
 }
 
 function renderResult(m) {
   const own = m.bench.result;
   const v = resultView(own ?? m.bench.previous);
   const box = document.getElementById("bn-result");
-  const key = JSON.stringify(v);
+  const key = JSON.stringify([Boolean(own), v]); // whose result it is belongs to the key (P2-2)
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   if (!v) {

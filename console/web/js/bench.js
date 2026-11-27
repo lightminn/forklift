@@ -109,6 +109,22 @@ export function resultView(result) {
   };
 }
 
+// The firmware's 32-bit modular count step (forklift_core.mcu_link.messages.wheel_count_delta).
+export function wheelDelta(newer, older) {
+  const d = (newer - older + 2 ** 31) % 2 ** 32;
+  return (d < 0 ? d + 2 ** 32 : d) - 2 ** 31;
+}
+
+// A clear_result's rows (6.5: what to check before VM goes back on).
+export function clearView(c) {
+  if (!c) return null;
+  const faults = (v) => (v?.fault_flags?.length ? v.fault_flags.join(", ") : "없음");
+  return { result: c.result ?? null, why: c.why ?? null, cause: c.cause ?? null,
+    before: { mode: c.before?.mode ?? null, faults: faults(c.before), driver: (c.before?.driver_status ?? []).join(" ") },
+    after: { mode: c.after?.mode ?? null, faults: faults(c.after), driver: (c.after?.driver_status ?? []).join(" ") },
+    ok: c.result === "cleared" };
+}
+
 // The last GRAPH_WINDOW_MS of bench_state samples (the screen stream; verdicts come from the board's own STATEs).
 export class Graph {
   constructor(windowMs = GRAPH_WINDOW_MS) {
@@ -119,8 +135,9 @@ export class Graph {
   push(atMs, state) {
     const b = state?.board;
     if (!b) return;
-    this.samples.push({ t: atMs, duty: [...(b.duty_e4 ?? [0, 0, 0, 0])], current: [...(b.current_ma ?? [0, 0, 0, 0])],
-      steer: b.steering_rad ?? null, lift: b.lift_m ?? null, wheel: [...(b.wheel_count ?? [0, 0])] });
+    this.samples.push({ t: atMs, boot: b.boot_id ?? null, duty: [...(b.duty_e4 ?? [0, 0, 0, 0])],
+      current: [...(b.current_ma ?? [0, 0, 0, 0])], steer: b.steering_rad ?? null, lift: b.lift_m ?? null,
+      wheel: [...(b.wheel_count ?? [0, 0])] });
     const cut = atMs - this.windowMs;
     while (this.samples.length && this.samples[0].t < cut) this.samples.shift();
   }
@@ -132,14 +149,23 @@ export class Graph {
   // the measurement for an axis: steering rad (M), lift m (H), or the wheel count since the window's first sample
   series(axis) {
     const k = axis === "R" ? 1 : 0;
-    let base = this.samples.length ? this.samples[0].wheel[k] : 0;
-    let prev = base;
-    let offset = 0;
+    // the count since the window's first sample of the same boot, by the firmware's 32-bit modular step
+    // (messages.wheel_count_delta); a boot change breaks the line (null) and the count starts again from there
+    let prev = null;
+    let boot;
+    let total = 0;
     const counts = this.samples.map((s) => {
       const c = s.wheel[k];
-      if (Math.abs(c - prev) > 2 ** 30) { offset += prev - base; base = c; } // a reboot or a wrap: no false jump
+      if (prev === null || s.boot !== boot) {
+        const first = prev === null;
+        prev = c;
+        boot = s.boot;
+        total = 0;
+        return first ? 0 : null;
+      }
+      total += wheelDelta(c, prev);
       prev = c;
-      return offset + c - base;
+      return total;
     });
     return this.samples.map((s, i) => ({
       t: s.t,
@@ -158,6 +184,8 @@ export function createBenchController({ session, now = () => Date.now() }) {
   let previous = null; // the board's last result the stream carries (a run before this tab's, never attached to one)
   let clear = null;
   let runId = null; // the request id of this tab's latest bench_run
+  let clearId = null; // the request id of this tab's latest clear_faults
+  let stateAt = null; // when the latest bench_state of this connection came (the health row's stream age)
   const pending = new Map(); // request_id -> kind
   const replies = []; // {kind, t, reason, detail, at}
   const graph = new Graph();
@@ -167,7 +195,8 @@ export function createBenchController({ session, now = () => Date.now() }) {
     promise.then((r) => {
       if (!pending.has(requestId)) return; // forgotten at a disconnect: its answer is not this connection's
       pending.delete(requestId);
-      if (kind === "bench_run" && r?.t === "ack") result = null; // accepted: its own result is the next one
+      // accepted: its own result is the next one -- unless that result already came (a late ACK of a resend)
+      if (kind === "bench_run" && r?.t === "ack" && result?.request_id !== requestId) result = null;
       replies.push({ kind, t: r?.t ?? "none", reason: r?.reason ?? null, detail: r?.detail ?? null, at: now() });
       while (replies.length > 20) replies.shift();
     });
@@ -177,6 +206,7 @@ export function createBenchController({ session, now = () => Date.now() }) {
     if (!visible || !BENCH_REQUESTS.has(kind)) return null;
     const id = `bench-${kind}-${Math.random().toString(16).slice(2)}-${now()}`;
     if (kind === "bench_run") runId = id;
+    if (kind === "clear_faults") clearId = id;
     track(kind, session.request(kind, fields, { requestId: id }), id);
     return id;
   }
@@ -191,6 +221,9 @@ export function createBenchController({ session, now = () => Date.now() }) {
         previous = null;
         clear = null;
         runId = null;
+        clearId = null;
+        stateAt = null;
+        replies.length = 0; // another connection's answers are not this screen's
         graph.clear();
       }
     },
@@ -200,22 +233,27 @@ export function createBenchController({ session, now = () => Date.now() }) {
       pending.clear();
       visible = false;
       state = null;
+      stateAt = null;
+      replies.length = 0;
       graph.clear();
     },
     onMessage(msg) {
       if (!visible || !msg) return;
       if (msg.t === "bench_state" && msg.session_epoch === session.epoch) {
         state = msg;
+        stateAt = now();
         graph.push(now(), msg);
         if (msg.last_result) previous = msg.last_result;
       } else if (msg.t === "bench_result") {
         if (msg.request_id === runId) result = msg; // the run this tab asked for: ACK is acceptance, this is its end
         previous = msg;
       } else if (msg.t === "clear_result") {
-        clear = msg;
+        if (msg.request_id === clearId) clear = msg; // this tab's clear: its end (ACK was only acceptance)
       }
     },
     run(form) {
+      // one start at a time: not while one is on its way or a run is going (round 2 P2-2)
+      if ([...pending.values()].includes("bench_run") || state?.run) return { sent: null, problems: ["busy"] };
       const { fields, problems } = runFields(form);
       if (problems.length) return { sent: null, problems };
       return { sent: send("bench_run", fields), problems };
@@ -238,6 +276,12 @@ export function createBenchController({ session, now = () => Date.now() }) {
     },
     get previous() {
       return previous;
+    },
+    get stateAt() {
+      return stateAt;
+    },
+    get runPending() {
+      return [...pending.values()].includes("bench_run");
     },
     get clear() {
       return clear;

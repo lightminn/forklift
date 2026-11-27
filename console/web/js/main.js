@@ -259,6 +259,13 @@ m.session.subscribe((msg) => {
     } catch {
       /* storage unavailable */
     }
+  } else if (msg.t === "bench_state") {
+    // the bench console: a lease it no longer gives this tab is not reclaimed by a reload (as the state branch does)
+    try {
+      if (!m.session.hasLease && msg.lease?.client_id !== clientId) sessionStorage.removeItem("console.held_lease");
+    } catch {
+      /* storage unavailable */
+    }
   } else if (msg.t === "state") {
     m.stateAt = performance.now();
     m.queue.onState(msg); // mission queue plan D3, D4: silence, anomalies, the lease, last_result
@@ -1053,6 +1060,7 @@ function healthTick() {
     cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
     grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
     queue: { run: q.run, stopReason: q.stopReason, items: q.items.length, blocked: q.lastPickBlocked },
+    bench: m.bench.visible ? { stateAt: m.bench.stateAt } : null,
   });
   const viewing = !$("v-health").hidden && !document.hidden;
   m.alarms.update(m.health.rows, performance.now(), Date.now() / 1000, { epoch: m.session.epoch, viewing });

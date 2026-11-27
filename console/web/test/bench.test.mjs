@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSession } from "../js/protocol.js";
-import { Graph, advice, bypassChips, createBenchController, fieldState, isBenchWelcome, largePhrase, resultView,
-  runFields } from "../js/bench.js";
+import { Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
+  resultView, runFields, wheelDelta } from "../js/bench.js";
 
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
 
@@ -214,4 +214,117 @@ test("a non-bench session never has a bench state", () => {
   welcome(REAL);
   s.onMessage({ t: "state", session_epoch: 9, control_gen: 2, arm_gen: 0, armed: false, mode: "PAUSED" });
   assert.equal(s.benchState, null);
+});
+
+test("after a disconnect, a pump before the next welcome resends no bench request, only the STOP (round 2 P2-6)", () => {
+  for (const next of [BENCH, { ...BENCH, session_epoch: 10, request_token: 90 }]) {
+    const { s, b, sent, welcome, disconnect, tick } = rig();
+    welcome(BENCH);
+    s.onMessage({ t: "state", session_epoch: 9, control_gen: 1, arm_gen: 0, armed: false, mode: "PAUSED" });
+    s.onMessage({ t: "bench_state", session_epoch: 9, control_gen: 1, lease: null, board: { mode: "FAULT" } });
+    const run = b.run(FORM).sent;
+    const clr = b.clearFaults("cause").sent;
+    s.stop("console");
+    const stopId = sent.at(-1).request_id;
+    disconnect();
+    const before = sent.length;
+    tick(2000);
+    s.pump(); // the new socket is open, its welcome not here yet
+    const resent = sent.slice(before);
+    assert.ok(!resent.some((m) => m.request_id === run || m.request_id === clr));
+    assert.ok(resent.some((m) => m.request_id === stopId));
+    welcome(next);
+    tick(2000);
+    s.pump();
+    assert.ok(!sent.slice(before).some((m) => m.request_id === run || m.request_id === clr));
+  }
+});
+
+test("one start at a time: a second press while the first waits is not sent (round 2 P2-2)", () => {
+  const { b, sent, welcome } = rig();
+  welcome(BENCH);
+  const first = b.run(FORM);
+  const second = b.run(FORM);
+  assert.ok(first.sent);
+  assert.equal(second.sent, null);
+  assert.deepEqual(second.problems, ["busy"]);
+  assert.equal(sent.filter((m) => m.t === "bench_run").length, 1);
+});
+
+test("a late ACK of a resend never clears the result that already came (round 2 P2-2)", async () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  const id = b.run(FORM).sent;
+  s.onMessage({ t: "bench_result", request_id: id, closed: "ended", verdict: { run_cleanup: { ok: true, why: [] } } });
+  assert.equal(b.result.request_id, id);
+  s.onMessage({ t: "ack", of: "bench_run", request_id: id });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.result?.request_id, id);
+});
+
+test("another tab's result is the previous one, never this tab's", () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  b.run(FORM);
+  s.onMessage({ t: "bench_result", request_id: "someone-else", closed: "ended" });
+  assert.equal(b.result, null);
+  assert.equal(b.previous.request_id, "someone-else");
+});
+
+test("the clear's end is this tab's clear_result only, with its before and after (round 2 P2-1)", () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  s.onMessage({ t: "bench_state", session_epoch: 9, control_gen: 1, lease: null, board: { mode: "FAULT" } });
+  const id = b.clearFaults("over-current on M").sent;
+  s.onMessage({ t: "clear_result", request_id: "other", result: "cleared" });
+  assert.equal(b.clear, null);
+  s.onMessage({ t: "clear_result", request_id: id, result: "not_cleared", why: "reject DRIVER",
+    before: { mode: "FAULT", fault_flags: ["OVERCURRENT_M"], driver_status: ["C0", "C0", "E2", "C0"] },
+    after: { mode: "FAULT", fault_flags: ["OVERCURRENT_M"], driver_status: ["C0", "C0", "E2", "C0"] } });
+  const v = clearView(b.clear);
+  assert.equal(v.ok, false);
+  assert.equal(v.result, "not_cleared");
+  assert.equal(v.before.faults, "OVERCURRENT_M");
+  assert.equal(v.after.driver, "C0 C0 E2 C0");
+});
+
+test("the answers of an earlier connection are not shown on the next one (P3)", async () => {
+  const { s, b, welcome, disconnect } = rig();
+  welcome(BENCH);
+  const id = b.run(FORM).sent;
+  s.onMessage({ t: "reject", of: "bench_run", request_id: id, reason: "bench_refused", detail: "x" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.replies.length, 1);
+  disconnect();
+  welcome({ ...BENCH, session_epoch: 10 });
+  assert.deepEqual(b.replies, []);
+});
+
+test("the count graph follows the firmware's 32-bit step and breaks at a boot change (round 2 P2-4)", () => {
+  assert.equal(wheelDelta(0, 2 ** 32 - 1), 1);
+  assert.equal(wheelDelta(2 ** 32 - 1, 0), -1);
+  assert.equal(wheelDelta(105, 100), 5);
+  const g = new Graph(100000);
+  const push = (t, boot, c) => g.push(t, { board: { boot_id: boot, duty_e4: [0, 0, 0, 0], current_ma: [0, 0, 0, 0],
+    wheel_count: [c, 0] } });
+  push(0, 1, 2 ** 32 - 2);
+  push(10, 1, 2 ** 32 - 1);
+  push(20, 1, 0); // the 32-bit wrap: +1, not a fall
+  push(30, 2, 0); // a reboot: the line breaks
+  push(40, 2, 5);
+  assert.deepEqual(g.series("L").map((p) => p.value), [0, 1, 2, null, 5]);
+});
+
+test("a bench session's health reads the bench stream, never 'no state since welcome' (round 2 P2-5)", async () => {
+  const { healthRows } = await import("../js/health.js");
+  const base = { nowMs: 10000, welcomeAt: 1000, link: { up: true, mediaUp: true }, caps: { control: true },
+    state: null, stateAt: null, cameraAt: null, scanAt: null, scanReceivedAt: null, grid: { present: false },
+    queue: { run: "idle", items: 0 } };
+  const ok = healthRows({ ...base, bench: { stateAt: 9950 } });
+  assert.equal(ok.find((r) => r.key === "state").level, "ok");
+  assert.equal(ok.find((r) => r.key === "pose").level, "off");
+  const silent = healthRows({ ...base, bench: { stateAt: null } });
+  assert.equal(silent.find((r) => r.key === "state").level, "crit");
+  const vehicle = healthRows({ ...base, bench: null });
+  assert.equal(vehicle.find((r) => r.key === "state").level, "crit"); // the vehicle profile as before
 });

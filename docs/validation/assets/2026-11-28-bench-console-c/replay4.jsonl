@@ -1,3 +1,0 @@
-{"at": 1795797807.8062587, "mode": "bench-mute", "epoch": 5151, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
-{"at": 1795797808.2576082, "mode": "bench-mute", "epoch": 5151, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
-{"at": 1795797810.8211932, "mode": "bench-mute", "epoch": 5151, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
