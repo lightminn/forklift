@@ -34,7 +34,8 @@ import termios
 import time
 from pathlib import Path
 
-from forklift_core.mcu_link.messages import LinkDecoder, McuState, StateFlag
+from forklift_core.mcu_link.framing import cobs_decode
+from forklift_core.mcu_link.messages import TYPE_BENCH_ARM, TYPE_BENCH_SET, LinkDecoder, McuState, StateFlag
 
 POISON = bytes([0x01]) * 96 + b"\x00"
 READ_CAP = 4096
@@ -57,6 +58,21 @@ class HilRefused(Exception):
 def hil_bits_ok(state: McuState) -> bool:
     f = state.flags
     return bool(f & StateFlag.HIL_PLANT) and bool(f & StateFlag.OUTPUTS_LOCKED) and not f & StateFlag.COMMISSION_BUILD
+
+
+_BENCH_TYPES = (TYPE_BENCH_SET, TYPE_BENCH_ARM)
+
+
+def _bench_frame(f) -> bool:
+    """A bench command by its kind or by the type byte of its own bytes (a frame mislabelled still counts)."""
+    if getattr(f, "kind", None) in ("BENCH_SET", "BENCH_ARM"):
+        return True
+    data = bytes(getattr(f, "data", b"") or b"")
+    try:
+        body = cobs_decode(data[:-1] if data.endswith(b"\x00") else data)
+    except Exception:  # noqa: BLE001 -- not a frame this transport can read: not a bench one either
+        return False
+    return len(body) >= 2 and body[1] in _BENCH_TYPES
 
 
 class LoopTtyTransport:
@@ -224,6 +240,11 @@ class LoopTtyTransport:
         return True
 
     def _write_first(self, f, judged_ns) -> str:
+        if _bench_frame(f):
+            # never one byte of a bench command (bench console plan A1a 1, contract 8) on this transport, whatever
+            # its permission: the HIL and REAL executors' hosts cannot even queue one; this is the second wall
+            self._event({"t": "tx_bench_refused", "seq": int(f.seq) & 0xFFFF, "kind": getattr(f, "kind", None)})
+            return "eagain"
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         self.first_byte_ns[seq] = entry
@@ -243,6 +264,8 @@ class LoopTtyTransport:
 
     def _write_rest(self, f, judged_ns) -> bool:
         """One os.write per gate pass (6a-2a impl round 1 P1-2): a short write leaves the rest for the next pass."""
+        if _bench_frame(f):
+            return False
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         n = self._os_write(f.data[self._cur_at:], "write_eio", f)

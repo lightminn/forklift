@@ -34,6 +34,11 @@ from dataclasses import dataclass, field
 
 from forklift_core.mcu_link.messages import (
     Arm,
+    BenchArm,
+    BenchMode,
+    BenchSet,
+    BenchSource,
+    BenchState,
     ClearFaults,
     Commission,
     Disarm,
@@ -47,6 +52,7 @@ from forklift_core.mcu_link.messages import (
     valid_after_echo_ms,
 )
 from forklift_core.mcu_link.build_policy import Client, commission_allowed, drive_refusal, estop_waived
+from forklift_core.plant import bench_limits as bl
 from forklift_core.plant.real_vehicle import RearDrive
 
 
@@ -108,7 +114,7 @@ class LinkHealth:
 
 @dataclass(frozen=True)
 class Outgoing:
-    kind: str  # "ARM", "DISARM", "CLEAR_FAULTS", "DRIVE", "COMMISSION"
+    kind: str  # "ARM", "DISARM", "CLEAR_FAULTS", "DRIVE", "COMMISSION", "BENCH_SET", "BENCH_ARM"
     seq: int
     data: bytes
     expires_ns: int | None  # DRIVE/COMMISSION only: dropped, not written, once this has passed
@@ -169,6 +175,11 @@ class McuLinkHost:
         self._arm: dict | None = None  # boot, prev_gen, gen, deadline_ns, reject_at_request
         self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
         self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
+        # the bench image (mcu-link contract 8): the latest BENCH_STATE whose pair_seq names the STATE decoded right
+        # before it, and that STATE's seq; only a commission-mode host on a bench5 image sends bench commands
+        self.bench_state: BenchState | None = None
+        self.bench_state_rx_ns: int | None = None
+        self._last_state_seq: int | None = None
 
     # ---------------------------------------------------------------- state
     @property
@@ -253,14 +264,23 @@ class McuLinkHost:
             events.append(HostEvent("authorization_revoked" if self.authorized else "arm_failed", {"reason": reason}))
         self._auth, self._arm = _NONE, None
         self._auth_gen += 1
-        self._drop(lambda o: o.kind in _MOTION or o.kind == "ARM", f"revoked: {reason}")
+        self._drop(lambda o: o.kind in _MOTION or o.kind in ("ARM", "BENCH_ARM"), f"revoked: {reason}")
 
     # ---------------------------------------------------------------- receive
     def on_bytes(self, data: bytes, now_ns: int) -> list[HostEvent]:
         self._log("received", now_ns, bytes(data), None)
         before = self._decoder.errors
         events: list[HostEvent] = []
-        states = [rec.message for rec in self._decoder.feed(bytes(data), now_ns) if isinstance(rec.message, McuState)]
+        states = []
+        for rec in self._decoder.feed(bytes(data), now_ns):
+            if isinstance(rec.message, McuState):
+                states.append(rec.message)
+                self._last_state_seq = rec.seq
+            elif isinstance(rec.message, BenchState):
+                # its STATE came right before it (one write on the board, contract 8.5): any other is not a pair
+                if self._last_state_seq is not None and rec.message.pair_seq == self._last_state_seq:
+                    self.bench_state, self.bench_state_rx_ns = rec.message, now_ns
+                self._last_state_seq = None
         if self.cfg.gap_clock == "mcu":
             self._on_read_mcu(states, now_ns, events)
         else:
@@ -490,6 +510,7 @@ class McuLinkHost:
     def disconnected(self, now_ns: int) -> list[HostEvent]:
         """The adapter lost the device: forget the link, drop everything queued."""
         self.usb_product, self.estop_waived = None, False
+        self.bench_state, self.bench_state_rx_ns, self._last_state_seq = None, None, None
         events: list[HostEvent] = []
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
@@ -504,7 +525,58 @@ class McuLinkHost:
         return events
 
     # ---------------------------------------------------------------- operator requests
+    def bench_refusal(self, s: McuState | None = None) -> str | None:
+        """Why this host must not send a bench command (plan A1a 1, contract 8): only a commission-mode (bring-up)
+        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench5``), whose
+        STATE says a commissioning build with open outputs and no HIL plant."""
+        s = self._state if s is None else s
+        if not self.commission_mode:
+            return "not_commission_host"
+        if not bl.bench_image(self.usb_product):
+            return "not_bench5_image"
+        if s is None:
+            return "no_state"
+        if not s.flags & StateFlag.COMMISSION_BUILD:
+            return "not_commission_build"
+        if s.flags & (StateFlag.OUTPUTS_LOCKED | StateFlag.HIL_PLANT):
+            return "outputs_locked_or_hil"
+        return None
+
+    def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1) -> Blocked | None:
+        """Queue the run's BENCH_SET (duty mode, no measurement source, no distance stop -- A1a), echoing the latest
+        STATE. Its seq is ``last_queued_seq``; the caller reads the board's acceptance from STATE."""
+        refused = self.bench_refusal()
+        if refused is not None:
+            return Blocked(f"bench_refused: {refused}")
+        s = self._state
+        if not self._fresh(now_ns):
+            return Blocked("no_state")
+        if s.mode != Mode.DISARMED or self._auth != _NONE:
+            return Blocked("not_disarmed")
+        if len(self._outbox) >= self.cfg.outbox_max:
+            return Blocked("outbox_full")
+        try:
+            msg = BenchSet(s.boot_id, s.mcu_time_us, int(run_id), int(BenchMode.DUTY), int(ask.axis),
+                           int(BenchSource.NONE), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), 0)
+        except ValueError as exc:
+            return Blocked(f"bad_value: {exc}")
+        self._enqueue("BENCH_SET", msg, now_ns)
+        return None
+
+    def request_bench_arm(self, run_id: int, now_ns: int) -> Blocked | None:
+        """The bench image's ARM (contract 8.2): consumes the BENCH_SET with ``run_id``; the same arming exchange as
+        ``request_arm`` (ready after the zero)."""
+        refused = self.bench_refusal()
+        if refused is not None:
+            return Blocked(f"bench_refused: {refused}")
+        return self._request_arm(now_ns, lambda s: ("BENCH_ARM", BenchArm(s.boot_id, s.mcu_time_us, int(run_id))))
+
     def request_arm(self, now_ns: int) -> Blocked | None:
+        if self.commission_mode and bl.bench_image(self.usb_product):
+            return Blocked("bench_image_arms_with_bench_arm")  # the board refuses a plain ARM (wrong_build)
+        return self._request_arm(now_ns, lambda s: ("ARM", Arm(s.boot_id, s.mcu_time_us)))
+
+    def _request_arm(self, now_ns: int, build) -> Blocked | None:
         s = self._state
         if s is None or not self._fresh(now_ns):
             return Blocked("no_state")
@@ -525,7 +597,8 @@ class McuLinkHost:
         self._auth = _ARM_PENDING
         self._arm = {"boot": s.boot_id, "prev_gen": s.arm_gen, "gen": None, "reject_at_request": s.reject_reason,
                      "deadline_ns": now_ns + int(self.cfg.arm_timeout_s * 1e9)}
-        self._enqueue("ARM", Arm(s.boot_id, s.mcu_time_us), now_ns, echo=(s.boot_id, s.mcu_time_us))
+        kind, msg = build(s)
+        self._enqueue(kind, msg, now_ns, echo=(s.boot_id, s.mcu_time_us))
         return None
 
     def cancel_arm(self, now_ns: int, reason: str) -> list[HostEvent]:
