@@ -189,7 +189,7 @@ def test_the_real_precheck_reads_the_first_state_judges_and_writes_nothing(monke
     monkeypatch.setattr(tool, "_is_pty", lambda d: False)
     assert tool.main(["--run", "--client", "real", "--precheck", "--device", "/dev/forklift-mcu"]) == 2
     rec = json.loads(capsys.readouterr().out)
-    assert rec["refused"][0] == "precondition:unlock_incomplete"
+    assert rec["refused"] and "precondition:unlock_incomplete" not in rec["refused"]  # U3e-2: the lock is gone
     assert rec["board"]["state_seen"] is True and rec["board"]["usb_serial"] == "ABC"
     assert made and made[0].real_operating is False
     import errno

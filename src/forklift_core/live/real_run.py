@@ -21,6 +21,7 @@ import math
 import queue
 import secrets
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -118,11 +119,12 @@ def map_occupancy(grid):
                          np.asarray(grid.occupied()).T)
 
 
-def read_settings(path) -> dict:
+def read_settings(path, raw: bytes | None = None) -> dict:
+    """``raw``: the file's bytes already read (the operating run parses the bytes it hashes, U3e-2)."""
     import yaml
 
     try:
-        data = yaml.safe_load(Path(path).read_text())
+        data = yaml.safe_load(Path(path).read_text() if raw is None else raw.decode("utf-8"))
         for key in ("lift_target_m", "lift_rate_mps", "drive_acceleration_mps2", "withdraw_speed_mps", "speeds",
                     "mission_stages"):
             if key not in data:
@@ -132,12 +134,20 @@ def read_settings(path) -> dict:
     return data
 
 
-def read_vehicle(path):
+def read_vehicle(path, raw: bytes | None = None, chassis_raw: bytes | None = None):
+    """``raw``·``chassis_raw``: vehicle.yaml's and its chassis model's bytes already read (the operating run parses the
+    bytes it hashes, U3e-2 Codex round 3 P2-2); None: read from ``path``."""
+    import yaml
+
     from forklift_core.plant.kinematics import RealKinematics
-    from forklift_core.plant.real_vehicle import load_real_vehicle
+    from forklift_core.plant.real_vehicle import load_real_vehicle, real_vehicle_from_mapping
 
     try:
-        vehicle = load_real_vehicle(path)
+        if raw is None:
+            vehicle = load_real_vehicle(path)
+        else:
+            vehicle = real_vehicle_from_mapping(yaml.safe_load(raw.decode("utf-8")),
+                                                yaml.safe_load(chassis_raw.decode("utf-8")))
         return vehicle, RealKinematics(vehicle)
     except Exception as err:  # noqa: BLE001 -- any malformed vehicle file is a structural refusal
         raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
@@ -388,13 +398,53 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                                chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
     except (OSError, ValueError, TypeError, yaml.YAMLError):
         pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
-    try:
-        cfg = ra.load_s10a(paths.s10a)
-    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
-        raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
-    data = read_settings(paths.settings)
-    vehicle, kin = read_vehicle(paths.vehicle)
-    watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
+    operating_ = paths.replay is None and not paths.hil
+    chassis_p = None  # the operating run: the chassis path its vehicle bytes named, kept for the URDF and the end
+    if not operating_:
+        try:
+            cfg = ra.load_s10a(paths.s10a)
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
+        data = read_settings(paths.settings)
+        vehicle, kin = read_vehicle(paths.vehicle)
+        watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
+    else:
+        # the operating run: S10-A, settings, vehicle (with its chassis model) and watch parsed from the very bytes
+        # hashed here -- a file replaced and put back while preparing cannot leave its middle version in the run
+        # (Codex U3e-2 rounds 2-3); the end comparison then refuses any file that differs from these bytes
+        def bound(path, name):
+            try:
+                data_ = Path(path).read_bytes()
+            except OSError as err:
+                raise AssemblyRefused([f"config_unreadable:{name}:{type(err).__name__}"]) from err
+            hashes_at_start[name] = hashlib.sha256(data_).hexdigest()
+            return data_
+
+        try:
+            cfg = ra.s10a_from_mapping(yaml.safe_load(bound(paths.s10a, "s10a").decode("utf-8")))
+        except (ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
+        data = read_settings(paths.settings, raw=bound(paths.settings, "settings"))
+        try:  # the file a link points at, fixed once before it is read (Codex U3e-2 round 5 P2)
+            vehicle_real = Path(paths.vehicle).resolve()
+        except (OSError, RuntimeError) as err:
+            raise AssemblyRefused([f"config_unreadable:vehicle:{type(err).__name__}"]) from err
+        vehicle_raw = bound(vehicle_real, "vehicle")
+        try:  # the chassis model the bytes just read name (relative to the file it really is, Codex U3e-2 r4 P2-2)
+            from forklift_core.plant.real_vehicle import chassis_path_from
+
+            chassis_p = chassis_path_from(vehicle_real, yaml.safe_load(vehicle_raw.decode("utf-8")))
+        except (ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
+        vehicle, kin = read_vehicle(vehicle_real, raw=vehicle_raw, chassis_raw=bound(chassis_p, "chassis_params"))
+        watch_raw = bound(paths.watch, "watch")
+        try:
+            with tempfile.TemporaryDirectory(prefix="forklift-prep-") as snap_:
+                watch_copy = Path(snap_) / "safety_watch.yaml"  # the watch loaders take a path: these bytes' copy
+                watch_copy.write_bytes(watch_raw)
+                watches = asm.build_watches(data, watch_copy, vehicle.wheel_radius_m)
+        except OSError as err:
+            raise AssemblyRefused([f"config_unreadable:watch_copy:{type(err).__name__}"]) from err
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
     replay = None
@@ -448,7 +498,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         refused.append("hil_start_not_zero")  # the odometry origin is the synthetic SLAM's identity (10.5)
     if refused:
         raise AssemblyRefused(refused)
-    urdf = chassis_model_path(paths.vehicle).parent / "forklift.urdf"
+    urdf = (chassis_p if chassis_p is not None else chassis_model_path(paths.vehicle)).parent / "forklift.urdf"
     urdf_src = urdf
     if site is not None:
         # the operating run: the chassis geometry parsed from the very bytes whose hash C6 compares (round 1 P2-2)
@@ -461,7 +511,15 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     try:
         geometry = mission_geometry(urdf_src, cfg.pallet_depth_m, cfg.pallet_width_m)
         axle_to_tip, rear_offset, carriage = chassis_reference(urdf_src)
-        layer_cfg = yaml.safe_load(Path(paths.layer).read_text())
+        def bound_yaml(path, name):
+            # the operating run: parsed from the very bytes whose hash the assembly's judgement binds -- a file
+            # replaced and put back while preparing cannot leave its middle version here (Codex U3e-2 P2-1)
+            data = Path(path).read_bytes()
+            if site is not None and hashlib.sha256(data).hexdigest() != hashes_at_start.get(name):
+                raise AssemblyRefused([f"files_changed_while_preparing:{name}"])
+            return yaml.safe_load(data.decode("utf-8"))
+
+        layer_cfg = bound_yaml(paths.layer, "layer")
         if replay is not None:
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
         elif not paths.hil:
@@ -472,7 +530,13 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                 raise AssemblyRefused(["files_changed_while_preparing:lidar"])
             real_lidar = lidar_config_from(yaml.safe_load(lidar_bytes.decode("utf-8")))
             layer_cfg = real_layer_cfg(layer_cfg, real_lidar)
-        budget = yaml.safe_load(Path(paths.budget).read_text())
+        budget = bound_yaml(paths.budget, "budget")
+        if site is not None:
+            from forklift_core.live.real_preconditions import budget_reasons
+
+            bad_ = budget_reasons(budget)  # the judgement's own rule, on the bytes parsed (Codex U3e-2 rounds 1-2)
+            if bad_:
+                raise AssemblyRefused(bad_)
         budget_s = float(budget["latency_budget"]["seconds"])
         overdue_end_s = float(budget["overdue_end"]["seconds"])
     except AssemblyRefused:
@@ -504,7 +568,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     odo = layer_cfg.get("odometry_age") if isinstance(layer_cfg, dict) else None
     hashes["odometry_age"] = _sha_or_none(REPO / odo) if odo else None
-    hashes["chassis_params"] = _sha_or_none(chassis_model_path(paths.vehicle))
+    hashes["chassis_params"] = _sha_or_none(chassis_p if chassis_p is not None else chassis_model_path(paths.vehicle))
     hashes["chassis_urdf"] = _sha_or_none(urdf)
     moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:
@@ -937,8 +1001,8 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     out = []
     client = sources.client
     if client is Client.REAL:
-        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal -- with
-        # precondition:unlock_incomplete until the unlock's last PR, so it is refused whatever the record says
+        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal (the lock that
+        # refused whatever the record said was removed by U3e-2)
         judged = real_preconditions(prep, sources.host, sources.transport)
         prep.judgement = list(judged)  # the list the assembly judged on; the run's grant takes this one (U3e-1)
         out += judged
@@ -1036,7 +1100,7 @@ def real_preconditions(prep, host, transport) -> list:
                           settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
                           vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
     except rp.GATHER_ERRORS as err:
-        return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+        return [f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
     # the corridor end the run will drive is the one prep built from the chassis it loaded, not a second reading
     # (Codex unlock U1 review round 3 P1)
     facts.inserted_offset_m = float(prep.geometry.inserted_offset_m)

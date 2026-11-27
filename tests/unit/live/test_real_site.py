@@ -334,3 +334,58 @@ def test_a_rotated_grid_origin_is_a_structured_refusal(tmp_path):
     paths.registry.write_text(yaml.safe_dump({"bundles": [p["row"]]}))
     [why] = refused(paths)
     assert why.startswith("precondition:site_bundle:bundle_grid:")
+
+
+@pytest.mark.parametrize("name", ["layer", "budget", "s10a", "settings", "watch", "vehicle"])
+def test_the_operating_files_are_parsed_from_the_bytes_hashed(tmp_path, monkeypatch, name):
+    """Codex U3e-2 rounds 1-2: a file replaced and put back while preparing -- the hashes at both ends see A, the one
+    read the run parses sees B -- refuses the run instead of leaving B's values in the prep (a check of the parse
+    itself: the hash function is left alone)."""
+    paths, _ = make_site(tmp_path)
+    target = Path(getattr(paths, name)).resolve()
+    real_read = Path.read_bytes
+    seen = {"n": 0}
+
+    def file_sha(path):  # the hashes at both ends: the file as it is (A)
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    def read_bytes(self):  # every read for parsing: B
+        data = real_read(self)
+        if Path(self).resolve() == target:
+            seen["n"] += 1
+            return data + b"\n# replaced while preparing\n"
+        return data
+
+    monkeypatch.setattr(rr, "_sha", file_sha)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    reasons = refused(paths)
+    assert seen["n"] >= 1 and f"files_changed_while_preparing:{name}" in reasons, reasons
+
+
+def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
+    """Codex U3e-2 P2-3: a .nan (or non-positive) overdue_end would hold layer_overdue for good."""
+    import yaml
+
+    import dataclasses
+
+    paths, _ = make_site(tmp_path)
+    b = yaml.safe_load(Path(paths.budget).read_text())
+    b["overdue_end"]["seconds"] = float("nan")
+    budget = tmp_path / "budget_nan.yaml"  # a copy: the repository's own file is never written
+    budget.write_text(yaml.safe_dump(b))
+    assert "precondition:C13:budget:overdue_end:invalid" in refused(dataclasses.replace(paths, budget=str(budget)))
+
+
+def test_a_vehicle_file_given_through_a_link_finds_its_chassis_beside_the_target(tmp_path):
+    """Codex U3e-2 round 4 P2-2: the chassis model a vehicle.yaml names is relative to the file it really is, on the
+    operating path as in the loaders (a link elsewhere does not move it)."""
+    import dataclasses
+
+    paths, _ = make_site(tmp_path)
+    links = tmp_path / "links"
+    links.mkdir()
+    link = links / "vehicle.yaml"
+    link.symlink_to(Path(paths.vehicle).resolve())
+    prep = prepare(dataclasses.replace(paths, vehicle=str(link)))
+    assert prep is not None

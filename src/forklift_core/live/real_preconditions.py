@@ -9,11 +9,11 @@ placement, the scan image -- so a later change voids it. The settings themselves
 the vehicle, layer and watch values) are read directly, never copied into the record.
 
 Every file is parsed from the very bytes its sha256 is taken of; a loader that reads a path itself (the S10-A config,
-the vehicle, the LiDAR validator) is bracketed by the file's hash before and after, and a change is a reason
-(``files_changed``). The assembly also compares these hashes with the ones ``prepare_run`` loaded.
+the vehicle with its chassis model, the LiDAR validator) is built from those same bytes (U3e-2); ``files_changed`` stays
+for a change the caller reports. The assembly also compares these hashes with the ones ``prepare_run`` loaded.
 
-``UNLOCK_INCOMPLETE`` stays in the list until the last unlock PR (U3) removes it: until then the operating assembly is
-refused whatever the record says (plan 2.4, 6).
+The unlock's lock (``precondition:unlock_incomplete``, plan 2.4) was removed by its last PR (U3e-2): an empty list now
+lets the operating assembly go on.
 
 IMU qualification (C7) is not an assembly refusal: it is returned apart (``imu_qualified``) for the runtime readiness
 (``imu:unqualified``, bypassable for the session, plan 2.7); the watch's ``imu`` provenance is C7's, not C13's."""
@@ -32,8 +32,9 @@ import yaml
 REPO = Path(__file__).resolve().parents[3]
 RECORD_YAML = REPO / "config" / "real" / "s10_preconditions.yaml"
 SCHEMA = "s10_preconditions/1"
-UNLOCK_INCOMPLETE = "precondition:unlock_incomplete"
 STATUSES = ("pass", "approved_limited")
+# items a limited approval cannot stand in for: C2's safety measurements must pass (S10 procedure, Codex U3e-2 P1)
+PASS_ONLY = frozenset({"s5_safety", "iwdg_evidence"})
 CORRIDOR_HALF_M = 0.10  # plan 2.4: the approved corridor's half width (the coverage record is bound to it)
 APPROVED_CASES = ["A"]  # S10: case A only (plan 2.4)
 
@@ -103,6 +104,7 @@ class Facts:
     changed: list = field(default_factory=list)  # files that changed while gathered
     board: dict = field(default_factory=dict)  # usb_serial, usb_product, drive_refusal (None: none), first STATE seen
     layer_permission: dict = field(default_factory=dict)  # obstacle_layer_real.yaml permission: (the stop model, C13)
+    budget: dict = field(default_factory=dict)  # obstacle_layer.yaml as parsed (the latency budget, C13)
 
 
 def _read(path) -> tuple:
@@ -171,11 +173,14 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
            vehicle_path, watch_path, repo=REPO, board=None) -> Facts:
     """The facts for ``operating_preconditions`` (the paths are the run's; ``board`` the first STATE's facts). Raises
     on an unreadable settings file (``GATHER_ERRORS``): the caller turns it into a reason."""
-    from forklift_core.live.real_autonomy import load_s10a
-    from forklift_core.plant.real_vehicle import load_real_vehicle
-    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
     record, record_error = load_record(record_path)
+    # the vehicle file a link points at, fixed once before it is read: its bytes and the chassis beside it come from
+    # the same directory (Codex U3e-2 round 5 P2)
+    try:
+        vehicle_path = Path(vehicle_path).resolve()
+    except RuntimeError as err:  # a link loop: unreadable like any other OSError (round 6 P3: never the alias)
+        raise OSError(f"vehicle path: {err}") from err
     paths = {"s10a": s10a_path, "settings": settings_path, "vehicle": vehicle_path, "watch": watch_path,
              "layer": layer_path, "budget": budget_path, "lidar": lidar_path, "imu": imu_path}
     parsed, hashes = {}, {}
@@ -183,35 +188,40 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
         _data, hashes[name], parsed[name] = _read(p)
     changed = []
 
-    def bracketed(name, loader):
-        value = loader(paths[name])
-        if _sha(paths[name]) != hashes[name]:
-            changed.append(name)
-        return value
+    # parsed from the very bytes hashed above (U3e-2 Codex round 3 P2-1: a re-read could judge a middle version)
+    from forklift_core.live.real_autonomy import s10a_from_mapping
+    from forklift_core.plant.real_vehicle import real_vehicle_from_mapping
+    from forklift_core.sensors.lidar_cfg import lidar_config_from
 
-    s10a = bracketed("s10a", load_s10a)
+    from forklift_core.plant.real_vehicle import chassis_path_from
+
+    s10a = s10a_from_mapping(parsed["s10a"])
+    hashes["chassis_params"] = None  # filled only from the bytes parsed (round 5 P3); unread: a missing fact
+    try:  # one chassis path, from the vehicle bytes hashed, for its parameters and its URDF (Codex U3e-2 r4 P2-1)
+        params = chassis_path_from(vehicle_path, parsed["vehicle"])
+    except (ValueError, TypeError):
+        params = None
     try:
-        calib = bracketed("vehicle", load_real_vehicle).calibration_id
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        calib = None
+        chassis_raw = params.read_bytes()
+        hashes["chassis_params"] = hashlib.sha256(chassis_raw).hexdigest()
+        calib = real_vehicle_from_mapping(parsed["vehicle"], yaml.safe_load(chassis_raw.decode("utf-8"))).calibration_id
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError):
+        calib = None  # params None (no chassis named) lands here too
     try:
-        bracketed("lidar", load_lidar_config)
+        lidar_config_from(parsed["lidar"])
         lidar_error = None
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
         lidar_error = f"{type(err).__name__}"
     inserted = None
     try:
         from forklift_core.live.real_run import mission_geometry
-        from forklift_core.plant.real_vehicle import chassis_model_path
 
-        params = chassis_model_path(vehicle_path)
         urdf = params.parent / "forklift.urdf"
-        hashes["chassis_params"] = _sha_or_none(params)
-        hashes["chassis_urdf"] = _sha_or_none(urdf)
+        hashes["chassis_urdf"] = None  # unread: a missing fact, never compared away
+        urdf_raw = urdf.read_bytes()  # hashed and parsed once (U3e-2 Codex round 3)
+        hashes["chassis_urdf"] = hashlib.sha256(urdf_raw).hexdigest()
         if s10a.pallet_depth_m is not None and s10a.pallet_width_m is not None:
-            inserted = float(mission_geometry(urdf, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
-            if _sha(urdf) != hashes["chassis_urdf"]:
-                changed.append("chassis_urdf")
+            inserted = float(mission_geometry(urdf_raw, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError):
         inserted = None
     layer = parsed["layer"] if isinstance(parsed["layer"], dict) else {}
@@ -228,10 +238,16 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
                  stop_files=stop, provenance=prov, vehicle_calibration_id=calib, inserted_offset_m=inserted,
                  file_hashes=hashes, changed=changed, board=dict(board or {}),
                  layer_permission=dict((layer.get("permission") or {}) if isinstance(layer.get("permission"), dict)
-                                       else {}))
+                                       else {}),
+                 budget=parsed["budget"] if isinstance(parsed["budget"], dict) else {})
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
+def _named(v) -> bool:
+    """A decision id: a non-blank string (Codex U3e-1 P2-5 for exceptions, U3e-2 P2-2 for C4 and C11)."""
+    return isinstance(v, str) and bool(v.strip())
+
+
 def _finite(*vals) -> bool:
     try:
         return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
@@ -344,9 +360,9 @@ def _item_reasons(f: Facts, name: str) -> list:
     item = (f.record.get("items") or {}).get(name)
     if item is None or item.get("status") is None:
         return [f"{tag}:unset"]
-    if item.get("status") not in STATUSES:
+    if item.get("status") not in STATUSES or (name in PASS_ONLY and item.get("status") != "pass"):
         return [f"{tag}:status"]
-    if item.get("status") == "approved_limited" and not item.get("decision_id"):
+    if item.get("status") == "approved_limited" and not _named(item.get("decision_id")):
         return [f"{tag}:decision_id"]
     if not _inside_repo(f, item.get("evidence")):
         return [f"{tag}:evidence"]
@@ -480,7 +496,7 @@ def _lift_checks(f: Facts, lift: dict) -> list:
             out.append("precondition:C11:lift:hold_no_worst_height")
         if any(r["sag_cm_after_60s"] > limit for r in rows):
             out.append("precondition:C11:lift:sag_over_limit")
-    if not lift.get("sag_limit_decision_id"):
+    if not _named(lift.get("sag_limit_decision_id")):
         out.append("precondition:C11:lift:sag_limit_decision_id")
     org = lift.get("origin") or {}
     floor, tape, at_target = (org.get("state_lift_m_at_floor"), org.get("tape_cm_at_target"),
@@ -531,10 +547,22 @@ def _stop_model_values(f: Facts) -> list:
     return out
 
 
+def budget_reasons(budget: dict) -> list:
+    """C13 (Codex U3e-2 rounds 1-2): the latency budget and the overdue end each a finite positive number as written
+    (a bool is not one; a .nan or non-positive end would never end a sustained overdue). One rule for the judgement
+    and the operating preparation."""
+    out = []
+    for key in ("latency_budget", "overdue_end"):
+        node = budget.get(key) if isinstance(budget, dict) else None
+        v = node.get("seconds") if isinstance(node, dict) else None
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v) and float(v) > 0.0):
+            out.append(f"precondition:C13:budget:{key}:invalid")
+    return out
+
+
 def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
-    out = [UNLOCK_INCOMPLETE]
-    out += [f"precondition:files_changed:{name}" for name in f.changed]
+    out = [f"precondition:files_changed:{name}" for name in f.changed]
     # every file the judgement binds must have been read (a missing hash is never compared away)
     out += [f"precondition:facts_missing:{name}" for name in REQUIRED_HASHES if not f.file_hashes.get(name)]
     out += _c1_board(f)
@@ -553,10 +581,11 @@ def operating_preconditions(f: Facts) -> list:
             out.append("precondition:record:limits_malformed")
     out += _provenance_reasons(f)
     out += _stop_model_values(f)
+    out += budget_reasons(f.budget)
     if f.stop_files.get("odometry_age") is None:
         out.append("precondition:C13:odometry_age:missing")
     return out
 
 
-__all__ = ["Facts", "GATHER_ERRORS", "HASHED", "ITEMS", "image_commit", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather",
+__all__ = ["Facts", "GATHER_ERRORS", "HASHED", "ITEMS", "image_commit", "RECORD_YAML", "SCHEMA", "STOP_FILES", "gather",
            "imu_qualified", "load_record", "operating_preconditions"]

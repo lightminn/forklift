@@ -62,7 +62,8 @@ class LidarConfig:
         document; and it names the source it holds for."""
         if self.first_beam_err_s is None or self.timing_basis not in BASES:
             return False
-        if self.timing_basis == "engineering" and not (self.timing_decision and self.timing_doc):
+        if self.timing_basis == "engineering" and not (str(self.timing_decision or "").strip()
+                                                       and str(self.timing_doc or "").strip()):
             return False
         return {k for k, _ in self.applies_to} == set(APPLIES_KEYS)
 
@@ -115,7 +116,8 @@ def _timing_basis(t: dict, err) -> dict:
     if err is None:
         raise ValueError("lidar config: timing.basis needs timing.first_beam_err_s")
     decision, doc = t.get("decision_id"), t.get("basis_doc")
-    if basis == "engineering" and not (isinstance(decision, str) and decision and isinstance(doc, str) and doc):
+    if basis == "engineering" and not (isinstance(decision, str) and decision.strip() and isinstance(doc, str)
+                                       and doc.strip()):  # a blank decision is none (Codex U3e-2 round 2 P2-3)
         raise ValueError("lidar config: an engineering basis needs timing.decision_id and timing.basis_doc")
     applies = t.get("applies_to")
     if not isinstance(applies, dict) or set(applies) != set(APPLIES_KEYS):

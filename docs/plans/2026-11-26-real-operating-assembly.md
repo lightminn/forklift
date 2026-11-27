@@ -145,10 +145,10 @@
   - 첫 `STATE` 의 보드 사실과 USB 제품 문자열.
   - 사람이 확인하는 항목의 기록 `config/real/s10_preconditions.yaml`.
 - **기록 형식**(`schema: s10_preconditions/1`): 항목마다 다음을 둔다.
-  - `status`: `pass` | `approved_limited` | `null`
+  - `status`: `pass` | `approved_limited` | `null` — C2(`s5_safety`·`iwdg_evidence`)는 `pass` 만(U3e-2, S10 절차의 'S5 안전 대책 실측 통과')
   - `evidence`: 저장소 안 문서 경로, 필수
   - `date`
-  - `decision_id`: `approved_limited` 이면 필수
+  - `decision_id`: `approved_limited` 이면 필수(공백뿐인 문자열은 없는 것으로 본다)
   - `binds`: 그 확인이 성립하는 대상
 
   `binds` 의 대상과 조립 때 대조하는 것은 다음과 같다. 어긋나면 그 항목이 무효다(Codex 2 회차 P1-4·P1-5).
@@ -394,6 +394,8 @@ lift:
 - **U3** — 실차 준비 판정과 콘솔(2.5·2.6·2.7·2.9), 끝까지 도는 시험, 운영 빌드의 `FW_VEHICLE_HEADER` 덮어쓰기 금지(2.4, 펌웨어 교차 시험 fixture 포함), 펌웨어 제품 문자열에 태그와 무관한 커밋 약어를 늘 넣기(`git describe --long` 이나 별도 칸 — 태그 이름이 긴 형식처럼 보여도 커밋을 오인하지 않게, Codex U1 4 회차), `unlock_incomplete` 제거.
 - 각 PR 은 Codex 를 수렴할 때까지 돌리고, HIL 4 CPU 와 전체 pytest 를 최종 트리에서 한 번 돌린다. U3 머지가 송신을 여는 유일한 지점이다. 그래도 설정이 비어 있으면 거부된다.
 - **U3e 나눔**(총괄 동의 2026-11-27): U3e-1 = 실행 도구의 REAL 조립·실행 경로 + 끝까지 도는 시험(잠금 유지, 시험에서만 판정 주입), U3e-2 = `unlock_incomplete` 제거만(머지 전 총괄이 사용자에게 알림, 머지 요청에 '저장소 기본값으로 어느 관문에서 거부되는지' 표).
+- **U3e-1b**(#658): U3e-1 의 끝까지 도는 시험이 드러낸 D5 경로 끝 정체 수정(`docs/plans/2026-11-27-real-path-end-hold.md`). 총괄 지시로 U3e-2 앞에 머지.
+- **U3e-2**: 판정에서 `precondition:unlock_incomplete` 와 그 상수를 없앴다. 이제 판정이 비면 운영 조립이 진행된다. 저장소 설정 그대로면 S10 선행 조건 자체(C1 보드·C2–C14 기록·C12/C13 잠정값 등)가 거부한다. 끝까지 도는 시험의 경우 1 은 '잠금만으로 거부' 대신 '저장소의 잠정 C13 정지 모델만 남은 사이트가 그 두 사유로 거부되고 장치 바이트 0' 이 됐고, 시험용 자식의 `drop_lock` 은 없앴다.
 
 ### 6.1 U3e-1 설계
 

@@ -14,8 +14,8 @@ MCU's AUTO waits for S10's preconditions. The loaders, the geometry and the chec
 
 ``--run --client real --device D`` (the operating unlock U1, docs/plans/2026-11-26-real-operating-assembly.md 2.1,
 2.4): the real board opened with the executor lock on its fd, its USB identity read and its first STATE waited for --
-nothing is ever written -- then S10's operating preconditions judged and printed. Until the unlock's last PR the list
-always holds ``precondition:unlock_incomplete`` and the run exits 2 without assembling."""
+nothing is ever written -- then S10's operating preconditions judged and printed (``--precheck``); without it, the
+operating run (plan 6.1) assembles and runs only when that list is empty."""
 
 from __future__ import annotations
 
@@ -185,7 +185,7 @@ def run_real_precheck(args) -> int:
             record["refused"] = rp.operating_preconditions(facts)
             record["imu_qualified"] = rp.imu_qualified(facts)
         except rp.GATHER_ERRORS as err:
-            record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+            record["refused"] = [f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
         written = _write(record, args.out, exclusive=True)
         return 2 if record["refused"] or not written else 0
     finally:
@@ -1057,7 +1057,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-assemble", action="store_true")
-    mode.add_argument("--run", action="store_true", help="the wall-clock run: --hil only (a device is refused)")
+    mode.add_argument("--run", action="store_true",
+                      help="the wall-clock run: --hil (the model; --replay replays a record on it) or --client real "
+                           "on the operating board")
     ap.add_argument("--hil", action="store_true", help="run on the MCU model behind this process's own pty")
     ap.add_argument("--hil-model", default=None, help="the mcu_model executable")
     ap.add_argument("--hil-model-arg", action="append", default=None,
