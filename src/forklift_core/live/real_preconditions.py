@@ -9,8 +9,8 @@ placement, the scan image -- so a later change voids it. The settings themselves
 the vehicle, layer and watch values) are read directly, never copied into the record.
 
 Every file is parsed from the very bytes its sha256 is taken of; a loader that reads a path itself (the S10-A config,
-the vehicle, the LiDAR validator) is bracketed by the file's hash before and after, and a change is a reason
-(``files_changed``). The assembly also compares these hashes with the ones ``prepare_run`` loaded.
+the vehicle with its chassis model, the LiDAR validator) is built from those same bytes (U3e-2); ``files_changed`` stays
+for a change the caller reports. The assembly also compares these hashes with the ones ``prepare_run`` loaded.
 
 The unlock's lock (``precondition:unlock_incomplete``, plan 2.4) was removed by its last PR (U3e-2): an empty list now
 lets the operating assembly go on.
@@ -173,9 +173,6 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
            vehicle_path, watch_path, repo=REPO, board=None) -> Facts:
     """The facts for ``operating_preconditions`` (the paths are the run's; ``board`` the first STATE's facts). Raises
     on an unreadable settings file (``GATHER_ERRORS``): the caller turns it into a reason."""
-    from forklift_core.live.real_autonomy import load_s10a
-    from forklift_core.plant.real_vehicle import load_real_vehicle
-    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
     record, record_error = load_record(record_path)
     paths = {"s10a": s10a_path, "settings": settings_path, "vehicle": vehicle_path, "watch": watch_path,
@@ -185,19 +182,22 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
         _data, hashes[name], parsed[name] = _read(p)
     changed = []
 
-    def bracketed(name, loader):
-        value = loader(paths[name])
-        if _sha(paths[name]) != hashes[name]:
-            changed.append(name)
-        return value
+    # parsed from the very bytes hashed above (U3e-2 Codex round 3 P2-1: a re-read could judge a middle version)
+    from forklift_core.live.real_autonomy import s10a_from_mapping
+    from forklift_core.plant.real_vehicle import real_vehicle_from_mapping
+    from forklift_core.sensors.lidar_cfg import lidar_config_from
 
-    s10a = bracketed("s10a", load_s10a)
+    s10a = s10a_from_mapping(parsed["s10a"])
     try:
-        calib = bracketed("vehicle", load_real_vehicle).calibration_id
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        from forklift_core.plant.real_vehicle import chassis_model_path as _cmp
+
+        chassis_raw = _cmp(vehicle_path).read_bytes()
+        hashes["chassis_params"] = hashlib.sha256(chassis_raw).hexdigest()
+        calib = real_vehicle_from_mapping(parsed["vehicle"], yaml.safe_load(chassis_raw.decode("utf-8"))).calibration_id
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError):
         calib = None
     try:
-        bracketed("lidar", load_lidar_config)
+        lidar_config_from(parsed["lidar"])
         lidar_error = None
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
         lidar_error = f"{type(err).__name__}"
@@ -208,12 +208,12 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
 
         params = chassis_model_path(vehicle_path)
         urdf = params.parent / "forklift.urdf"
-        hashes["chassis_params"] = _sha_or_none(params)
-        hashes["chassis_urdf"] = _sha_or_none(urdf)
+        hashes.setdefault("chassis_params", _sha_or_none(params))
+        hashes["chassis_urdf"] = None  # unread: a missing fact, never compared away
+        urdf_raw = urdf.read_bytes()  # hashed and parsed once (U3e-2 Codex round 3)
+        hashes["chassis_urdf"] = hashlib.sha256(urdf_raw).hexdigest()
         if s10a.pallet_depth_m is not None and s10a.pallet_width_m is not None:
-            inserted = float(mission_geometry(urdf, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
-            if _sha(urdf) != hashes["chassis_urdf"]:
-                changed.append("chassis_urdf")
+            inserted = float(mission_geometry(urdf_raw, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError):
         inserted = None
     layer = parsed["layer"] if isinstance(parsed["layer"], dict) else {}

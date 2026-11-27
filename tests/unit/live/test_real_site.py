@@ -336,7 +336,7 @@ def test_a_rotated_grid_origin_is_a_structured_refusal(tmp_path):
     assert why.startswith("precondition:site_bundle:bundle_grid:")
 
 
-@pytest.mark.parametrize("name", ["layer", "budget", "s10a", "settings", "watch"])
+@pytest.mark.parametrize("name", ["layer", "budget", "s10a", "settings", "watch", "vehicle"])
 def test_the_operating_files_are_parsed_from_the_bytes_hashed(tmp_path, monkeypatch, name):
     """Codex U3e-2 rounds 1-2: a file replaced and put back while preparing -- the hashes at both ends see A, the one
     read the run parses sees B -- refuses the run instead of leaving B's values in the prep (a check of the parse

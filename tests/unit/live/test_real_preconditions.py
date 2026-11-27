@@ -456,12 +456,16 @@ def test_a_corrupt_urdf_is_a_structured_reason(site, monkeypatch):
 
 
 def test_an_unreadable_chassis_file_is_a_missing_fact_never_compared_away(site, monkeypatch):
-    real = rp._sha_or_none
+    from pathlib import Path as P
 
-    def fake(path):
-        return None if str(path).endswith("forklift.urdf") else real(path)
+    real = P.read_bytes
 
-    monkeypatch.setattr(rp, "_sha_or_none", fake)
+    def fake(self):  # the URDF is read once for its hash and its parse (U3e-2): that read fails
+        if str(self).endswith("forklift.urdf"):
+            raise PermissionError("unreadable")
+        return real(self)
+
+    monkeypatch.setattr(P, "read_bytes", fake)
     out = rp.operating_preconditions(site.facts())
     assert "precondition:facts_missing:chassis_urdf" in out
 
@@ -608,3 +612,19 @@ def test_the_judgement_refuses_a_nan_overdue_end(site):
     f = site.facts()
     f.budget = {"latency_budget": {"seconds": 0.1}, "overdue_end": {"seconds": float("nan")}}
     assert rp.operating_preconditions(f) == ["precondition:C13:budget:overdue_end:invalid"]
+
+
+def test_the_judgement_builds_s10a_vehicle_and_lidar_from_the_bytes_it_hashed(site, monkeypatch):
+    """U3e-2 (Codex round 3 P2-1/P2-2): no loader re-reads a path after its hash -- C9's speed and C12's calibration
+    come from the bytes hashed."""
+    from forklift_core.live import real_autonomy as ra_
+    from forklift_core.plant import real_vehicle as rv_
+    from forklift_core.sensors import lidar_cfg as lc_
+
+    def reread(*a, **k):
+        raise AssertionError("a path re-read after its hash")
+
+    monkeypatch.setattr(ra_, "load_s10a", reread)
+    monkeypatch.setattr(rv_, "load_real_vehicle", reread)
+    monkeypatch.setattr(lc_, "load_lidar_config", reread)
+    assert rp.operating_preconditions(site.facts()) == []

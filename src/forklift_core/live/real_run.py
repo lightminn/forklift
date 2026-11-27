@@ -119,11 +119,12 @@ def map_occupancy(grid):
                          np.asarray(grid.occupied()).T)
 
 
-def read_settings(path) -> dict:
+def read_settings(path, raw: bytes | None = None) -> dict:
+    """``raw``: the file's bytes already read (the operating run parses the bytes it hashes, U3e-2)."""
     import yaml
 
     try:
-        data = yaml.safe_load(Path(path).read_text())
+        data = yaml.safe_load(Path(path).read_text() if raw is None else raw.decode("utf-8"))
         for key in ("lift_target_m", "lift_rate_mps", "drive_acceleration_mps2", "withdraw_speed_mps", "speeds",
                     "mission_stages"):
             if key not in data:
@@ -133,12 +134,20 @@ def read_settings(path) -> dict:
     return data
 
 
-def read_vehicle(path):
+def read_vehicle(path, raw: bytes | None = None, chassis_raw: bytes | None = None):
+    """``raw``·``chassis_raw``: vehicle.yaml's and its chassis model's bytes already read (the operating run parses the
+    bytes it hashes, U3e-2 Codex round 3 P2-2); None: read from ``path``."""
+    import yaml
+
     from forklift_core.plant.kinematics import RealKinematics
-    from forklift_core.plant.real_vehicle import load_real_vehicle
+    from forklift_core.plant.real_vehicle import load_real_vehicle, real_vehicle_from_mapping
 
     try:
-        vehicle = load_real_vehicle(path)
+        if raw is None:
+            vehicle = load_real_vehicle(path)
+        else:
+            vehicle = real_vehicle_from_mapping(yaml.safe_load(raw.decode("utf-8")),
+                                                yaml.safe_load(chassis_raw.decode("utf-8")))
         return vehicle, RealKinematics(vehicle)
     except Exception as err:  # noqa: BLE001 -- any malformed vehicle file is a structural refusal
         raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
@@ -390,30 +399,45 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     except (OSError, ValueError, TypeError, yaml.YAMLError):
         pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
     operating_ = paths.replay is None and not paths.hil
-    with tempfile.TemporaryDirectory(prefix="forklift-prep-") as snap_:
-        s10a_p, settings_p, watch_p = paths.s10a, paths.settings, paths.watch
-        if operating_:
-            # the operating run: the S10-A, settings and watch files parsed from the very bytes hashed here (a file
-            # replaced and put back while preparing cannot leave its middle version in the run -- Codex U3e-2 r2 P2-1)
-            def snapshot(path, name):
-                try:
-                    data_ = Path(path).read_bytes()
-                except OSError as err:
-                    raise AssemblyRefused([f"config_unreadable:{name}:{type(err).__name__}"]) from err
-                hashes_at_start[name] = hashlib.sha256(data_).hexdigest()
-                copy = Path(snap_) / f"{name}{Path(path).suffix}"
-                copy.write_bytes(data_)
-                return copy
-
-            s10a_p, settings_p, watch_p = (snapshot(paths.s10a, "s10a"), snapshot(paths.settings, "settings"),
-                                           snapshot(paths.watch, "watch"))
+    if not operating_:
         try:
-            cfg = ra.load_s10a(s10a_p)
+            cfg = ra.load_s10a(paths.s10a)
         except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
             raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
-        data = read_settings(settings_p)
+        data = read_settings(paths.settings)
         vehicle, kin = read_vehicle(paths.vehicle)
-        watches = asm.build_watches(data, watch_p, vehicle.wheel_radius_m)
+        watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
+    else:
+        # the operating run: S10-A, settings, vehicle (with its chassis model) and watch parsed from the very bytes
+        # hashed here -- a file replaced and put back while preparing cannot leave its middle version in the run
+        # (Codex U3e-2 rounds 2-3); the end comparison then refuses any file that differs from these bytes
+        def bound(path, name):
+            try:
+                data_ = Path(path).read_bytes()
+            except OSError as err:
+                raise AssemblyRefused([f"config_unreadable:{name}:{type(err).__name__}"]) from err
+            hashes_at_start[name] = hashlib.sha256(data_).hexdigest()
+            return data_
+
+        try:
+            cfg = ra.s10a_from_mapping(yaml.safe_load(bound(paths.s10a, "s10a").decode("utf-8")))
+        except (ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
+        data = read_settings(paths.settings, raw=bound(paths.settings, "settings"))
+        vehicle_raw = bound(paths.vehicle, "vehicle")
+        try:  # the chassis model the bytes just read name (relative to the file, as chassis_model_path)
+            chassis_p = (Path(paths.vehicle).parent / yaml.safe_load(vehicle_raw.decode("utf-8"))["chassis_model"]).resolve()
+        except (ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
+        vehicle, kin = read_vehicle(paths.vehicle, raw=vehicle_raw, chassis_raw=bound(chassis_p, "chassis_params"))
+        watch_raw = bound(paths.watch, "watch")
+        try:
+            with tempfile.TemporaryDirectory(prefix="forklift-prep-") as snap_:
+                watch_copy = Path(snap_) / "safety_watch.yaml"  # the watch loaders take a path: these bytes' copy
+                watch_copy.write_bytes(watch_raw)
+                watches = asm.build_watches(data, watch_copy, vehicle.wheel_radius_m)
+        except OSError as err:
+            raise AssemblyRefused([f"config_unreadable:watch_copy:{type(err).__name__}"]) from err
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
     replay = None

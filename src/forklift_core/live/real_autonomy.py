@@ -544,6 +544,12 @@ def load_s10a(path) -> S10AConfig:
 
     with open(path) as f:
         d = yaml.safe_load(f)
+    return s10a_from_mapping(d)
+
+
+def s10a_from_mapping(d) -> S10AConfig:
+    """``load_s10a`` on an already parsed mapping (U3e-2: the operating run and its judgement parse the bytes they
+    hash)."""
     return S10AConfig(map_id=d.get("map_id"), start_rear=tuple(d["start_rear"]), bounds=tuple(d["bounds"]),
                       pallet_id=str(d["pallet"]["id"]), pallet_kind=str(d["pallet"]["kind"]),
                       pallet_depth_m=d["pallet"].get("depth_m"), pallet_width_m=d["pallet"].get("width_m"),
