@@ -6,7 +6,8 @@ Modes (the welcome and the stream it sends every 100 ms with a tick):
   hil         welcome backend real (HIL) + real_status
   isaac       welcome backend isaac + state
 Every message the page sends is appended to --log as JSONL. --welcome-delay-s holds the welcome after the hello;
---close-after-s closes the control socket after that long (the page then reconnects); --epoch fixes the session epoch.
+--close-after-s closes the control socket after that long (the page then reconnects); --epoch fixes the session epoch;
+--board-mode sets the bench board's mode (FAULT opens the clear); --mute-stop leaves a STOP unanswered.
 """
 
 import argparse
@@ -26,6 +27,8 @@ def main():
     ap.add_argument("--welcome-delay-s", type=float, default=0.0)
     ap.add_argument("--close-after-s", type=float, default=None)
     ap.add_argument("--duration-s", type=float, default=30.0)
+    ap.add_argument("--board-mode", default="DISARMED", help="the bench_state board mode (FAULT opens the clear)")
+    ap.add_argument("--mute-stop", action="store_true", help="a STOP is recorded, never answered")
     a = ap.parse_args()
     log = open(a.log, "a", encoding="utf-8")
     state = {"lease_holder": None, "control_gen": 3, "seq": 0}
@@ -51,7 +54,7 @@ def main():
             return {"t": "bench_state", "session_epoch": a.epoch, "mode": "PAUSED", "control_gen": state["control_gen"],
                     "stops": 0, "lease": None if holder is None else {"client_id": holder, "remaining_s": 3.0},
                     "product": "forklift-mcu commission OPEN scripted rec=0 lim=lr1 bench5", "ready": True,
-                    "not_ready": None, "reopen": "go", "board": {"mode": "DISARMED", "boot_id": 1, "arm_gen": 0,
+                    "not_ready": None, "reopen": "go", "board": {"mode": a.board_mode, "boot_id": 1, "arm_gen": 0,
                     "duty_e4": [0, 0, 0, 0], "current_ma": [0, 0, 0, 0], "driver_status": ["C0"] * 4,
                     "fault_flags": [], "reject_reason": "NONE", "steering_rad": 0.0, "lift_m": 0.0, "invalid": [],
                     "wheel_count": [0, 0]}, "bench": None, "run": None, "clear": None, "last_result": None}
@@ -66,27 +69,14 @@ def main():
         first = json.loads(await ws.recv())
         record("control", first)
         client = first.get("client_id")
-        if a.welcome_delay_s:
-            await asyncio.sleep(a.welcome_delay_s)
-        await ws.send(json.dumps(welcome()))
-        t0 = time.monotonic()
+        welcomed = asyncio.Event()
 
-        async def pump():
-            k = 0
-            while True:
-                k += 1
-                await ws.send(json.dumps({"t": "tick", "session_epoch": a.epoch, "state_seq": k, "token": f"k{k}"}))
-                await ws.send(json.dumps(stream()))
-                await asyncio.sleep(0.1)
-                if a.close_after_s is not None and time.monotonic() - t0 > a.close_after_s:
-                    await ws.close()
-                    return
-
-        task = asyncio.create_task(pump())
-        try:
+        async def reader():
+            # read from the hello on, so what the page sends before its welcome is recorded at the time it came
             async for raw in ws:
                 msg = json.loads(raw)
-                record("control", msg)
+                msg_at = dict(msg)
+                record("control", {**msg_at, "_before_welcome": not welcomed.is_set()})
                 t = msg.get("t")
                 rid = msg.get("request_id")
                 if t == "lease_request":
@@ -95,10 +85,31 @@ def main():
                                               "lease_timeout_s": 3.0, "control_gen": state["control_gen"]}))
                 elif t in ("bench_run", "bench_stop", "bench_disarm", "clear_faults") and a.mode == "bench-mute":
                     pass  # recorded, never answered (the ACK lost)
+                elif t == "stop" and a.mute_stop:
+                    pass  # recorded, never answered: the page keeps sending it
                 elif rid:
                     await ws.send(json.dumps({"t": "ack", "of": t, "request_id": rid}))
+
+        rtask = asyncio.create_task(reader())
+        try:
+            if a.welcome_delay_s:
+                await asyncio.sleep(a.welcome_delay_s)
+            welcomed.set()
+            await ws.send(json.dumps(welcome()))
+            t0 = time.monotonic()
+            k = 0
+            while not rtask.done():
+                k += 1
+                await ws.send(json.dumps({"t": "tick", "session_epoch": a.epoch, "state_seq": k, "token": f"k{k}"}))
+                await ws.send(json.dumps(stream()))
+                await asyncio.sleep(0.1)
+                if a.close_after_s is not None and time.monotonic() - t0 > a.close_after_s:
+                    await ws.close()
+                    break
+        except Exception:  # noqa: BLE001 -- the page went away
+            pass
         finally:
-            task.cancel()
+            rtask.cancel()
 
     async def media(ws):
         async for raw in ws:

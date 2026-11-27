@@ -1,0 +1,4 @@
+{"at": 1795799005.5304039, "mode": "bench-mute", "epoch": 5151, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795799005.722119, "mode": "bench-mute", "epoch": 5151, "conn": "control", "msg": {"t": "stop", "request_id": "54ed8f02-5b38-4569-9d81-304197fa5624", "source": "bench", "session_epoch": 4242, "_before_welcome": true}}
+{"at": 1795799007.2189126, "mode": "bench-mute", "epoch": 5151, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795799008.539031, "mode": "bench-mute", "epoch": 5151, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
