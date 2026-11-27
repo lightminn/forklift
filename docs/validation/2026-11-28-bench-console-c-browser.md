@@ -27,7 +27,7 @@
    - 같은 epoch(4242) — `r2_same_a.jsonl` → `r2_same_b.jsonl`
      - welcome 전에 받은 것은 `stop`(A 의 그 id) 하나뿐이다.
      - 연결 B 전체에서 `bench_run`·`clear_faults` 는 0 건이다.
-     - STOP 은 같은 id 로 계속 재전송된다. lease 는 새 토큰으로 다시 요청된다.
+     - STOP 은 같은 id 로 재전송된다. lease 는 B 에서 다시 요청된다(스크립트가 epoch 로 토큰을 정해 A·B 의 토큰은 같다).
    - 바뀐 epoch(5151) — `r2_epoch_a.jsonl` → `r2_epoch_b.jsonl`
      - welcome 전에 받은 것은 같은 id 의 `stop` 하나뿐이다.
      - 연결 B 전체에서 `bench_run`·`clear_faults` 는 0 건이다.
