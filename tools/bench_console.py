@@ -1252,59 +1252,74 @@ def main(argv=None) -> int:
     from console.live.server import LiveServer, MediaStore
     from real_mcu_link import BenchTtyLink, ReconnectingLink
 
+    import signal
+
+    def _terminate(signum, frame):  # noqa: ARG001 -- SIGTERM ends the loop the way Ctrl-C does: the finally runs
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _terminate)
     holder = {}
     gate = lambda f, w: holder["c"].gate(f, w)  # noqa: E731 -- bound at every opening, a reopening too
-    if args.model:
-        dev = ModelDevice(args.model, gate)
-        console = BenchConsole(dev, runs_root=Path(args.runs_root))
-        holder["c"] = console
-        end_wait = time.monotonic() + 3.0
-        while console.host.state is None and time.monotonic() < end_wait:
-            console.cycle()
-            time.sleep(CYCLE_S)
-    else:
-        dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
-                               link_factory=lambda fd: BenchTtyLink(fd, gate=gate))
-        console = BenchConsole(dev, runs_root=Path(args.runs_root))
-        holder["c"] = console
-        try:
-            dev.open_first(console.host, time.monotonic_ns())
-        except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
-            print(f"refused: {exc}", file=sys.stderr)
-            return 2
-    product = console.host.usb_product
-    if bl.any_bench_image(product) and not bl.bench_image(product):
-        print(f"refused: {product!r} is another bench generation than '{' '.join(bl.BENCH_SUFFIX)}'", file=sys.stderr)
-        return 2
-    if not bl.bench_image(product):
-        print(f"refused: {product!r} is not the bench image (no product ending '{' '.join(bl.BENCH_SUFFIX)}')",
-              file=sys.stderr)
-        return 2
-    hosts = ("127.0.0.1", "localhost") + ((args.console_origin_host,) if args.console_lan else ())
-    server = LiveServer(console.channels, MediaStore(), welcome(console.epoch, product), host=args.host,
-                        port=args.port, web_root=Path(args.web_root), origin_hosts=hosts)
-    console.channels.notify = lambda: server.handle.wake() if server.handle is not None else None
-    port = server.start()
-    print(json.dumps({"t": "started", "port": port, "product": product, "runs_root": str(console.runs_root),
-                      "console_lan": bool(args.console_lan)}), flush=True)
-    end = None if args.duration_s is None else time.monotonic() + args.duration_s
+    dev = None
+    server = None
     try:
-        while end is None or time.monotonic() < end:
-            console.cycle()
-            time.sleep(CYCLE_S)
-    except KeyboardInterrupt:
-        pass
+        if args.model:
+            dev = ModelDevice(args.model, gate)  # the child exists from here: the finally below ends it
+            console = BenchConsole(dev, runs_root=Path(args.runs_root))
+            holder["c"] = console
+            end_wait = time.monotonic() + 3.0
+            while console.host.state is None and time.monotonic() < end_wait:
+                console.cycle()
+                time.sleep(CYCLE_S)
+            if console.host.state is None:
+                print("refused: the model sent no STATE within 3 s", file=sys.stderr)
+                return 2
+        else:
+            dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
+                                   link_factory=lambda fd: BenchTtyLink(fd, gate=gate))
+            console = BenchConsole(dev, runs_root=Path(args.runs_root))
+            holder["c"] = console
+            try:
+                dev.open_first(console.host, time.monotonic_ns())
+            except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
+                print(f"refused: {exc}", file=sys.stderr)
+                return 2
+        product = console.host.usb_product
+        if bl.any_bench_image(product) and not bl.bench_image(product):
+            print(f"refused: {product!r} is another bench generation than '{' '.join(bl.BENCH_SUFFIX)}'",
+                  file=sys.stderr)
+            return 2
+        if not bl.bench_image(product):
+            print(f"refused: {product!r} is not the bench image (no product ending '{' '.join(bl.BENCH_SUFFIX)}')",
+                  file=sys.stderr)
+            return 2
+        hosts = ("127.0.0.1", "localhost") + ((args.console_origin_host,) if args.console_lan else ())
+        server = LiveServer(console.channels, MediaStore(), welcome(console.epoch, product), host=args.host,
+                            port=args.port, web_root=Path(args.web_root), origin_hosts=hosts)
+        console.channels.notify = lambda: server.handle.wake() if server.handle is not None else None
+        port = server.start()
+        print(json.dumps({"t": "started", "port": port, "product": product, "runs_root": str(console.runs_root),
+                          "console_lan": bool(args.console_lan)}), flush=True)
+        end = None if args.duration_s is None else time.monotonic() + args.duration_s
+        try:
+            while end is None or time.monotonic() < end:
+                console.cycle()
+                time.sleep(CYCLE_S)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if console.run is not None and console.run.cancel is None:
+                console.run.cancel = "tool_exit"
+            stop_end = time.monotonic() + STOP_WAIT_S + 1.0
+            while console.run is not None and time.monotonic() < stop_end:
+                console.cycle()
+                time.sleep(CYCLE_S)
     finally:
-        if console.run is not None and console.run.cancel is None:
-            console.run.cancel = "tool_exit"
-        stop_end = time.monotonic() + STOP_WAIT_S + 1.0
-        while console.run is not None and time.monotonic() < stop_end:
-            console.cycle()
-            time.sleep(CYCLE_S)
-        server.stop()
+        if server is not None:
+            server.stop()
         if isinstance(dev, ModelDevice):
             dev.close()
-        elif dev.link is not None:
+        elif dev is not None and dev.link is not None:
             dev.link.close()
     return 0
 
