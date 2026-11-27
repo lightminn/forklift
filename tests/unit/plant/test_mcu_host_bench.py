@@ -87,3 +87,30 @@ def test_a_bench_state_counts_only_right_after_its_state():
     assert r.host.bench_state.result_run_id == 5
     r.host.disconnected(r.now)
     assert r.host.bench_state is None
+
+
+def test_the_first_state_of_the_connection_decides_the_image():
+    r = bench_rig(allow_locked=True)
+    r.feed(flags=CB | StateFlag.HIL_PLANT)  # the first STATE says a HIL plant
+    r.feed()  # a later one looks fine
+    assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: outputs_locked_or_hil"
+    r.host.disconnected(r.now)  # a new connection judges again
+    r.host.usb_product = BENCH5
+    r.feed()
+    assert r.host.bench_set(1, ASK, r.now) is None
+
+
+def test_a_queued_bench_set_never_reaches_another_boot():
+    from test_mcu_host_commission import BOOT
+
+    r = bench_rig()
+    r.feed()
+    assert r.host.bench_set(1, ASK, r.now) is None
+    r.t_us += 10_000
+    r.now += 10 * MS
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason
+
+    other = McuState(r.t_us, BOOT + 1, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
+                     float("nan"), 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, CB)
+    r.host.on_bytes(encode(other, 1), r.now)
+    assert r.sent() == []

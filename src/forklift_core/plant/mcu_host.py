@@ -179,7 +179,9 @@ class McuLinkHost:
         # before it, and that STATE's seq; only a commission-mode host on a bench5 image sends bench commands
         self.bench_state: BenchState | None = None
         self.bench_state_rx_ns: int | None = None
+        self.bench_state_boot: int | None = None  # the boot of the accepted STATE it came with
         self._last_state_seq: int | None = None
+        self._conn_first_flags: StateFlag | None = None  # the build bits of this connection's first valid STATE
 
     # ---------------------------------------------------------------- state
     @property
@@ -264,7 +266,8 @@ class McuLinkHost:
             events.append(HostEvent("authorization_revoked" if self.authorized else "arm_failed", {"reason": reason}))
         self._auth, self._arm = _NONE, None
         self._auth_gen += 1
-        self._drop(lambda o: o.kind in _MOTION or o.kind in ("ARM", "BENCH_ARM"), f"revoked: {reason}")
+        # a BENCH_SET too: one queued before a boot change or a revoke never reaches the next boot (A1a-2 P2)
+        self._drop(lambda o: o.kind in _MOTION or o.kind in ("ARM", "BENCH_ARM", "BENCH_SET"), f"revoked: {reason}")
 
     # ---------------------------------------------------------------- receive
     def on_bytes(self, data: bytes, now_ns: int) -> list[HostEvent]:
@@ -272,20 +275,29 @@ class McuLinkHost:
         before = self._decoder.errors
         events: list[HostEvent] = []
         states = []
+        pairs = []  # (STATE, its BENCH_STATE)
+        last_state = None
         for rec in self._decoder.feed(bytes(data), now_ns):
             if isinstance(rec.message, McuState):
                 states.append(rec.message)
-                self._last_state_seq = rec.seq
+                self._last_state_seq, last_state = rec.seq, rec.message
+                if self._conn_first_flags is None and rec.message.boot_id != 0:
+                    self._conn_first_flags = rec.message.flags
             elif isinstance(rec.message, BenchState):
                 # its STATE came right before it (one write on the board, contract 8.5): any other is not a pair
-                if self._last_state_seq is not None and rec.message.pair_seq == self._last_state_seq:
-                    self.bench_state, self.bench_state_rx_ns = rec.message, now_ns
-                self._last_state_seq = None
+                if last_state is not None and rec.message.pair_seq == self._last_state_seq:
+                    pairs.append((last_state, rec.message))
+                self._last_state_seq, last_state = None, None
         if self.cfg.gap_clock == "mcu":
             self._on_read_mcu(states, now_ns, events)
         else:
             for s in states:
                 self._on_state(s, now_ns, events)
+        # a BENCH_STATE counts only with the STATE this host accepted as its latest (never one it refused as out of
+        # order or invalid), so a late or older pair never overwrites the record (A1a-2 P2)
+        for st, bs in pairs:
+            if st is self._state:
+                self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = bs, now_ns, st.boot_id
         if self._decoder.errors != before:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
@@ -510,7 +522,8 @@ class McuLinkHost:
     def disconnected(self, now_ns: int) -> list[HostEvent]:
         """The adapter lost the device: forget the link, drop everything queued."""
         self.usb_product, self.estop_waived = None, False
-        self.bench_state, self.bench_state_rx_ns, self._last_state_seq = None, None, None
+        self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = None, None, None
+        self._last_state_seq, self._conn_first_flags = None, None
         events: list[HostEvent] = []
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
@@ -534,12 +547,14 @@ class McuLinkHost:
             return "not_commission_host"
         if not bl.bench_image(self.usb_product):
             return "not_bench5_image"
-        if s is None:
+        if s is None or self._conn_first_flags is None:
             return "no_state"
-        if not s.flags & StateFlag.COMMISSION_BUILD:
-            return "not_commission_build"
-        if s.flags & (StateFlag.OUTPUTS_LOCKED | StateFlag.HIL_PLANT):
-            return "outputs_locked_or_hil"
+        # this connection's first valid STATE and the latest both (plan A1a 1: the first STATE decides the image)
+        for flags in (self._conn_first_flags, s.flags):
+            if not flags & StateFlag.COMMISSION_BUILD:
+                return "not_commission_build"
+            if flags & (StateFlag.OUTPUTS_LOCKED | StateFlag.HIL_PLANT):
+                return "outputs_locked_or_hil"
         return None
 
     def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1) -> Blocked | None:

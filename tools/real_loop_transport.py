@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 from forklift_core.mcu_link.framing import cobs_decode
-from forklift_core.mcu_link.messages import TYPE_BENCH_ARM, TYPE_BENCH_SET, LinkDecoder, McuState, StateFlag
+from forklift_core.mcu_link.messages import LinkDecoder, McuState, StateFlag
 
 POISON = bytes([0x01]) * 96 + b"\x00"
 READ_CAP = 4096
@@ -60,19 +60,26 @@ def hil_bits_ok(state: McuState) -> bool:
     return bool(f & StateFlag.HIL_PLANT) and bool(f & StateFlag.OUTPUTS_LOCKED) and not f & StateFlag.COMMISSION_BUILD
 
 
-_BENCH_TYPES = (TYPE_BENCH_SET, TYPE_BENCH_ARM)
+_BENCH_TYPES = (0x06, 0x07, 0x08)  # BENCH_SET, the reserved BENCH_HOLD (A1b), BENCH_ARM (contract 8)
+_BENCH_KINDS = ("BENCH_SET", "BENCH_HOLD", "BENCH_ARM")
 
 
 def _bench_frame(f) -> bool:
-    """A bench command by its kind or by the type byte of its own bytes (a frame mislabelled still counts)."""
-    if getattr(f, "kind", None) in ("BENCH_SET", "BENCH_ARM"):
+    """A bench command by its kind, or by the type byte of any frame in its bytes (a frame mislabelled, or a buffer
+    holding more than one, still counts). Bytes that do not read as frames are refused too: fail closed."""
+    if getattr(f, "kind", None) in _BENCH_KINDS:
         return True
     data = bytes(getattr(f, "data", b"") or b"")
-    try:
-        body = cobs_decode(data[:-1] if data.endswith(b"\x00") else data)
-    except Exception:  # noqa: BLE001 -- not a frame this transport can read: not a bench one either
-        return False
-    return len(body) >= 2 and body[1] in _BENCH_TYPES
+    for piece in data.split(b"\x00"):
+        if not piece:
+            continue
+        try:
+            body = cobs_decode(piece)
+        except Exception:  # noqa: BLE001 -- not a frame this transport can tell: never written
+            return True
+        if len(body) < 2 or body[1] in _BENCH_TYPES:
+            return True
+    return False
 
 
 class LoopTtyTransport:

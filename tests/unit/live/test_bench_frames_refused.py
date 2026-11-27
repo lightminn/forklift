@@ -21,10 +21,25 @@ def frame(kind, msg, seq=5):
     return SimpleNamespace(kind=kind, seq=seq, data=encode(msg, seq))
 
 
+def hold_bytes(seq=5):
+    """A frame of the reserved BENCH_HOLD type 0x07 (A1b) built from an ARM's bytes: only its type byte differs."""
+    from forklift_core.mcu_link.framing import cobs_decode, cobs_encode, crc16_ccitt_false
+
+    body = bytearray(cobs_decode(encode(Arm(7, 1000), seq)[:-1])[:-2])
+    body[1] = 0x07
+    body += crc16_ccitt_false(bytes(body)).to_bytes(2, "little")
+    return cobs_encode(bytes(body)) + b"\x00"
+
+
 @pytest.mark.parametrize("granted", [False, True])
 @pytest.mark.parametrize("f", [frame("BENCH_SET", SET), frame("BENCH_ARM", BenchArm(7, 1000, 9)),
                                frame("ARM", BenchArm(7, 1000, 9)),  # mislabelled: the type byte still tells
-                               frame("BENCH_SET", Arm(7, 1000))])   # labelled: the kind tells
+                               frame("BENCH_SET", Arm(7, 1000)),    # labelled: the kind tells
+                               SimpleNamespace(kind="BENCH_HOLD", seq=5, data=encode(Arm(7, 1000), 5)),
+                               SimpleNamespace(kind="ARM", seq=5, data=hold_bytes()),  # the reserved 0x07
+                               SimpleNamespace(kind="ARM", seq=5,  # a buffer holding a bench frame second
+                                               data=encode(Arm(7, 1000), 5) + encode(BenchArm(7, 1000, 9), 6)),
+                               SimpleNamespace(kind="ARM", seq=5, data=b"\x05\x01\x02\x00")])  # not a frame
 def test_a_bench_frame_never_leaves_the_real_transport(f, granted):
     m, t = make()
     feed(m, t, state())

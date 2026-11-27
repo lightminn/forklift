@@ -39,12 +39,13 @@ def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
     assert kinds.index("BENCH_SET") < kinds.index("BENCH_ARM")
     assert max(abs(s.state.duty_e4[2]) for s in b.samples) == 2000  # 0.2 > the image's 0.15
     run = res["bench_run"]
-    assert run["drove"] and run["stop_reason"] == "end_zero" and run["run_id"] == taken["run_id"]
-    assert run["mcu_bypass"] == 0  # the run is over: its bypass has ended with its arming
+    assert run["confirmed"] and run["stop_reason"] == "end_zero" and run["run_id"] == taken["run_id"]
+    assert b.host.bench_state.mcu_bypass == 0  # the run is over: its bypass ended with its arming
     assert res["not_for_gate"] and "bench:steer_range" in res["bypassed"]
     assert res["bench"] == {"bypass": ["steer_range"], "duty_max": 0.25, "time_max_s": 5.0}
     (bs,) = [r for r in rows(b) if r["t"] == "bench_set"]
     assert bs["seq"] == taken["seq"]
+    assert taken["seq"] != 0  # a fresh boot's last_rx_seq is 0: the BENCH_SET never takes that number (P2)
 
 
 def test_a_wheel_run_on_the_defaults_ends_with_one_zero_and_the_boards_own_stop(model):
@@ -90,6 +91,7 @@ def test_another_bench_generation_is_refused_for_every_run(model, product):
     (dict(bench_duty_max=1.5), "bench-duty-max"),
     (dict(bench_time_max=1.0, seconds=0.8), "seconds must be in"),
     (dict(bench_bypass="steer_range", single_axis=True, motor_detached=True), "a plain run only"),
+    (dict(bench_bypass="steer_range", bench_duty_max=0.5, duty=0.35), "watch VCC"),
 ])
 def test_bench_argument_refusals(model, kw, why):
     b = model("--bench", "1")
@@ -116,3 +118,47 @@ def test_a_plain_arm_is_never_sent_to_the_bench_image(model):
 
     blocked = b.host.request_arm(time.monotonic_ns())
     assert blocked is not None and blocked.reason == "bench_image_arms_with_bench_arm"
+
+
+def test_steering_above_0_3_runs_with_the_vcc_watch_confirmed(model):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.35, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.5,
+                               vcc_watched=True, observed="none"), b)
+    assert res["result"] == "ok", res
+
+
+def test_the_next_run_recovers_the_last_runs_record_before_its_arm(model):
+    """A run's record stays on the board until the next run is consumed: the next run writes it down first (a CLI
+    that ended before recording it, same boot)."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    first = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert first["result"] == "ok", first
+    second = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert second["result"] == "ok", second
+    prev = [r for r in rows(b) if r["t"] == "bench_previous_result"]
+    assert prev and prev[-1]["run_id"] == first["bench_set"]["run_id"] and prev[-1]["stop_reason"] == "end_zero"
+
+
+def test_a_run_the_board_ended_by_expiry_is_not_ok(model, monkeypatch):
+    """The end zero never sent: the board ends the run by the command expiry, and the board's first cause decides."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+
+    def late_end(self):
+        self.b.run_until(lambda: self.b.state.mode != Mode.ARMED, 1.0)  # no zero: the commands expire
+
+    monkeypatch.setattr(bringup.CommissionSession, "end_bench_run", late_end)
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert res["result"] != "ok" and res["aborted"] == "bench_stop_command_timeout", res
+    assert res["bench_run"]["stop_reason"] == "command_timeout"
+
+
+def test_a_cpr_on_the_bench_image_keeps_no_official_pass():
+    out = {"valid": True, "counts_per_rev": [4096, 4096]}
+    bringup._mark_diagnostic_cpr(out, BENCH5)
+    assert out["valid"] is None and out["computed_valid"] is True and out["not_for_gate"]
+    plain = {"valid": True}
+    bringup._mark_diagnostic_cpr(plain, LR1)
+    assert plain == {"valid": True}
