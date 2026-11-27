@@ -1061,8 +1061,10 @@ class BenchConsole:
         last = c.clear_seq if c.clear_seq is not None and c.clear_seq in self.written else c.disarm_seq
         sent = last is not None and last in self.written
         # the state after the attempt: only one received after its last frame (Codex C round 5 P2-2); before any
-        # frame went out, the state as it is
-        after = None if st is None or (sent and not self._seen_after(last)) else _latch_view(st)
+        # frame went out, the state as it is. An unconfirmed clear has none: a STATE received after the CLEAR may
+        # have been made before the board read it (round 6 P2)
+        after = None if st is None or result == "unconfirmed" or (sent and not self._seen_after(last)) \
+            else _latch_view(st)
         out = {"t": "clear_result", "request_id": c.request_id, "clear": c.rec.dir.name, "result": result,
                "why": why, "cause": c.cause, "before": c.before, "after": after}
         self.host.drop_frames(("CLEAR_FAULTS",) if result == "cleared" else ("CLEAR_FAULTS", "DISARM"),
@@ -1081,6 +1083,15 @@ class BenchConsole:
         w = self.written.get(seq)
         return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and st.boot_id == c.binding.boot_id
                 and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
+
+    def _left_latch(self, c: Clear) -> bool:
+        """This CLEAR taken, seen without its echo: in one boot only a taken CLEAR moves the board out of FAULT or
+        ESTOP (to BOOT, then DISARMED), so a STATE after the CLEAR went out showing another mode is its reply even when
+        a later frame has already replaced ``last_rx_seq`` (Codex C round 6 P2)."""
+        st = self.host.state
+        return (self._seen_after(c.clear_seq) and self.written[c.clear_seq][0] == "CLEAR_FAULTS"
+                and st.boot_id == c.binding.boot_id and self.conn == c.binding.conn
+                and st.mcu_time_us > c.floor_us and st.mode not in (Mode.FAULT, Mode.ESTOP))
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
@@ -1124,15 +1135,16 @@ class BenchConsole:
                 # still unsent and the bits changed: refused for good, the frame out of the queue (round 3 P2-3)
                 self._clear_done(c, "refused", now, "the fault bits changed before the CLEAR: ask again")
                 return
-            if self._echoed(c.clear_seq, "CLEAR_FAULTS", c):
+            if self._echoed(c.clear_seq, "CLEAR_FAULTS", c) or self._left_latch(c):
                 c.phase, c.phase_ns = "ready", now
             elif now - c.phase_ns > CLEAR_ECHO_S * 1e9:
+                # no reply of this CLEAR: a refusal leaves no echo of its own (reject_reason is the board's last one,
+                # last_rx_seq unchanged), so nothing says what the board did with it (round 6 P2)
                 if not self._seen_after(c.clear_seq):
-                    # no STATE since the CLEAR went out (or it never went whole): nothing says what the board did
                     self._clear_done(c, "unconfirmed", now, "no STATE after the CLEAR")
                 else:
-                    why = st.reject_reason.name
-                    self._clear_done(c, "not_cleared", now, f"the CLEAR was not taken (reject {why})")
+                    self._clear_done(c, "unconfirmed", now, f"no reply to the CLEAR (the board still {st.mode.name}, "
+                                                            f"its last reject {st.reject_reason.name})")
         elif c.phase == "ready":
             if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY:
                 self._clear_done(c, "cleared", now)
@@ -1272,7 +1284,7 @@ def shutdown(console: "BenchConsole", *, wait_s: float = STOP_WAIT_S + 1.0, slee
         console._clear_done(console.clear, "unconfirmed", int(console.clock()), "the tool was stopped")
     if console.run is not None:
         r = console.run
-        r.aborted = r.aborted or "unconfirmed_at_exit"
+        r.aborted = r.aborted or "unconfirmed_at_exit"  # the first cause stays (tool_exit once a cycle ran)
         console._close(r, int(console.clock()), None)
 
 
