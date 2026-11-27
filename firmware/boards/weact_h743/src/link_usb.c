@@ -80,6 +80,7 @@ void link_init(void)
 #if defined(FW_BENCH_IMAGE)
 static void conn_event_from_isr(void);
 static volatile bool g_otg_in_isr; /* the tick (priority 2) may preempt this interrupt (3) mid-way */
+static volatile uint32_t g_otg_isr_seq; /* bumped at every OTG interrupt entry: tells one held-up call from two */
 
 static uint32_t usb_dev_addr(void)
 {
@@ -94,6 +95,7 @@ void OTG_FS_IRQHandler(void)
     /* A bus reset handled in this interrupt zeroes the device address (TinyUSB handle_bus_reset): an address that
        was set before and is 0 after is a connection change, counted here whatever TinyUSB's event queue does
        (Codex A1a rounds 5-6). While this runs, the tick reads no byte (link_read). */
+    g_otg_isr_seq++;
     g_otg_in_isr = true;
     if ((USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
         conn_event_from_isr(); /* before TinyUSB clears it and waits on the FIFO flushes (round 8) */
@@ -189,12 +191,21 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
     static uint8_t in_isr_ticks;
+    static uint32_t in_isr_seq;
     if (g_link_stats.usb_started && (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
         conn_event_from_tick();
     }
     /* An OTG interrupt is a few microseconds: one still mid-way at two ticks in a row is held up (e.g. in
        TinyUSB's reset FIFO flushes); the arming ends rather than waiting for it (round 8). */
-    in_isr_ticks = g_otg_in_isr ? (uint8_t)(in_isr_ticks < 255u ? in_isr_ticks + 1u : 255u) : 0u;
+    uint32_t seq = g_otg_isr_seq;
+    if (!g_otg_in_isr) {
+        in_isr_ticks = 0u;
+    } else if (in_isr_ticks == 0u || seq != in_isr_seq) {
+        in_isr_ticks = 1u; /* a new call (two short calls in a row are not one held-up call) */
+    } else if (in_isr_ticks < 255u) {
+        in_isr_ticks++;
+    }
+    in_isr_seq = seq;
     if (in_isr_ticks == 2u) {
         conn_event_from_tick();
     }
@@ -213,7 +224,7 @@ uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
         if (tick_pending) {
             since = earlier(since, g_since_tick);
         }
-        if (main_pending) {
+        if (main_pending || end != g_conn_observed) { /* incl. a settled change the tick has not seen yet */
             since = earlier(since, g_since_main);
         }
     } else {
