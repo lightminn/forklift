@@ -89,7 +89,11 @@ void SPI2_IRQHandler(void)
     gpio_set(GPIOD, cs_pin[axis]);
     if (ok) {
         g_generation[axis]++;
+#if defined(FW_BENCH_IMAGE)
         stamped_put(&g_slot[axis], slot_pack(g_generation[axis], rx), timebase_now_us());
+#else
+        g_slot[axis].slot = slot_pack(g_generation[axis], rx); /* one 32-bit write, as before */
+#endif
     }
     if (g_stage == STAGE_STEER) {
         g_stage = STAGE_LIFT;

@@ -2945,7 +2945,7 @@ static void bench_cut_and_an_other_axis_fault_in_the_same_tick(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
     CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_FAULT); /* the existing fault judgement first */
     CHECK_EQ_I(s.cut_position - ref, 40);              /* the end position from this tick's frame */
-    CHECK(s.end_evidence_age_ms <= 1u);
+    CHECK_EQ_U(s.end_evidence_age_ms, 0);              /* the same frame: acquired in this tick */
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         CHECK(out.duty[ch] == 0.0f);
     }
