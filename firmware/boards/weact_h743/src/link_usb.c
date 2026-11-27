@@ -77,8 +77,19 @@ void link_init(void)
     g_link_stats.usb33rdy = (PWR->CR3 & PWR_CR3_USB33RDY) != 0u;
 }
 
+#if defined(FW_BENCH_IMAGE)
+static void conn_event_from_isr(void);
+#endif
+
 void OTG_FS_IRQHandler(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    /* A bus reset is a connection change from the moment the controller reports USBRST, before TinyUSB clears
+       it and long before its BUS_RESET event (at ENUMDNE) (Codex A1a round 4). */
+    if ((USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        conn_event_from_isr();
+    }
+#endif
     tud_int_handler(BOARD_TUD_RHPORT);
 }
 
@@ -131,15 +142,20 @@ static bool conn_idle(void)
     return g_conn_events == g_conn_handled && g_conn_begin == g_conn_end && g_conn_end == g_conn_observed;
 }
 
+static void conn_event_from_isr(void)
+{
+    if (conn_idle()) {
+        g_conn_since = timebase_now_us();
+    }
+    g_conn_events++;
+}
+
 void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 {
     (void)rhport;
     if (in_isr && (eventid == DCD_EVENT_BUS_RESET || eventid == DCD_EVENT_UNPLUGGED ||
                    eventid == DCD_EVENT_SUSPEND)) {
-        if (conn_idle()) {
-            g_conn_since = timebase_now_us();
-        }
-        g_conn_events++;
+        conn_event_from_isr();
     }
 }
 
@@ -148,7 +164,9 @@ uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
     uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    *busy = events != handled || begin != end;
+    /* A USBRST still pending (the tick preempted the OTG interrupt) counts as a change in progress. */
+    bool reset_pending = (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u;
+    *busy = events != handled || begin != end || reset_pending;
     *since_us = g_conn_since;
     if (!*busy) {
         g_conn_observed = end;
@@ -160,14 +178,15 @@ uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 static void lifecycle(void)
 {
 #if defined(FW_BENCH_IMAGE)
+    /* With the OTG interrupt off: the event snapshot, the start stamp and the begin mark cannot interleave with
+       an interrupt's own stamp (Codex A1a round 4), and the CDC receive FIFO, which that interrupt writes in
+       place (DWC2 slave), is cleared on whole indices (round 1). */
+    dcd_int_disable(0);
     uint32_t events = g_conn_events;
     if (conn_idle()) {
         g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
     }
     g_conn_begin = g_conn_end + 1u;
-    /* The OTG interrupt writes the CDC receive FIFO in place (DWC2 slave): clear it with that interrupt off,
-       so a packet never lands on half-reset indices (Codex A1a P2). */
-    dcd_int_disable(0);
     tud_cdc_read_flush();
     dcd_int_enable(0);
 #endif

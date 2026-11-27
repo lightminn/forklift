@@ -726,7 +726,12 @@ void drive_begin(drive *d, const drive_inputs *in)
         bool expired = d->has_deadline && d->time_us > d->deadline_us;
         bool over = cm_over;
         if (expired || over) {
-            bench_end(d, expired ? DRIVE_BENCH_STOP_COMMAND_TIMEOUT : DRIVE_BENCH_STOP_TIME_LIMIT);
+#if defined(FW_CORE_BENCH)
+            /* Both past in one tick: the one that passed first is the run's first cause. */
+            bool limit_earlier = over && (!expired || d->cm_on_since_us + (uint64_t)d->cm_on_limit_ms * US_PER_MS <
+                                                          d->deadline_us);
+            bench_end(d, limit_earlier ? DRIVE_BENCH_STOP_TIME_LIMIT : DRIVE_BENCH_STOP_COMMAND_TIMEOUT);
+#endif
             enter_stopping(d, (expired ? DRIVE_FAULT_COMMAND_TIMEOUT : 0u) |
                                   (over ? DRIVE_FAULT_COMMISSION_TIME_LIMIT : 0u));
         }

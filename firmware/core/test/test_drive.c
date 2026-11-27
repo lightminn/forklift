@@ -2507,6 +2507,25 @@ static void bench_change_versus_time_limit(void)
     CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
 }
 
+/* Codex A1a round 4: limit -> change -> deadline, all before the applying tick: the limit is still the first cause. */
+static void bench_limit_change_deadline_order(void)
+{
+    boot_with(mod_bench);
+    link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+    b.time_ms[DRIVE_CH_M] = 30;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 1, echo_now()));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 40, echo_now())); /* deadline <= 40 ms */
+    ticks(25);
+    uint32_t t_change = in.now_us + 8000u; /* after the limit (~5 ms from now), before the deadline (~15 ms) */
+    in.now_us += 19000; /* the applying tick is past both */
+    drive_note_link_change(&d, t_change, true);
+    tick_msgs(NULL, 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
+}
+
 /* Codex A1a round 2: another axis's request is not counted as blocked in DISARMED either. */
 static void bench_blocked_other_axis_after_disarm(void)
 {
@@ -2593,6 +2612,7 @@ int main(void)
     bench_change_brake_is_full_length();
     bench_change_versus_expiry_order();
     bench_change_versus_time_limit();
+    bench_limit_change_deadline_order();
     bench_blocked_other_axis_after_disarm();
     return FW_TEST_RESULT();
 }
