@@ -827,3 +827,26 @@ def test_a_closed_clears_partly_written_disarm_loses_its_leave(rig):
         assert c.clear is None and 4322 not in c.cleanup_seqs and not c.frame_allowed(frame)
     finally:
         link._cur, link._off = saved
+
+
+def test_the_next_run_records_the_previous_result_whole_and_again_before_its_arm(rig):
+    """bench6 (plan 4.2 A1b-1 decision 7): a run recovering the board's last result records every result field (a CLI
+    distance run's confirmation, cut and flags included) and the last one seen again right before its BENCH_ARM."""
+    c, b, run_until = rig()
+    b.send("bench_run", **RUN)
+    assert run_until(lambda: len(b.results) == 1, 6.0), b.replies
+    first = b.results[-1]
+    assert run_until(lambda: c.run is None and c.host.state.mode == Mode.DISARMED, 3.0)
+    b.send("bench_run", **RUN)
+    assert run_until(lambda: len(b.results) == 2, 6.0), b.replies
+    rows = record_rows(b.results[-1])
+    prev = [r for r in rows if r.get("t") == "bench_previous_result"]
+    final = [r for r in rows if r.get("t") == "bench_previous_result_final"]
+    assert len(prev) == 1 and len(final) == 1, rows
+    for row in (prev[0], final[0]):
+        assert row["run_id"] == first["run_id"] and row["stop_reason"] == "end_zero"
+        assert {"distance_confirm", "cut_position", "distance_ref", "run_flags", "end_evidence_age_ms",
+                "source"} <= set(row)
+    i_final = rows.index(final[0])
+    i_arm = next(i for i, r in enumerate(rows) if r.get("t") == "written" and r.get("kind") == "BENCH_ARM")
+    assert i_final < i_arm

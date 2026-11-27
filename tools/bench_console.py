@@ -770,8 +770,12 @@ class BenchConsole:
                 self._refuse(r, "no_bench_state_with_the_current_state", now)
             return
         if p.result_run_id != 0:
+            # every result field (a CLI distance run's confirmation, cut and flags too: plan 4.2 A1b-1 decision 7)
             prev = {"t": "bench_previous_result", "boot_id": p.boot_id, "run_id": p.result_run_id,
                     "stop_reason": _stop_name(p.stop_reason)}
+            bst = self.host.bench_state
+            if bst is not None and bst.result_run_id == p.result_run_id:
+                prev.update(bringup.result_fields(bst))
             r.previous_result = prev
             self._emit(r, prev)
             if r.cancel is not None:  # the next ARM clears the board's copy: never before it is written down
@@ -816,6 +820,11 @@ class BenchConsole:
         self._emit(r, {"t": "bench_set_sent", "seq": r.set_seq, "run_id": r.run_id,
                        "bypass": list(r.ask.bench.names), "duty_max_e4": list(r.ask.bench.duty_max_e4()),
                        "time_ms": list(r.ask.bench.time_ms()), "overrides": r.ask.bench.overrides()})
+        prev, bst = r.previous_result, self.host.bench_state
+        if prev is not None and bst is not None and bst.result_run_id == prev["run_id"]:
+            # the confirmation may change until this ARM clears it: the last one seen is the final record
+            self._emit(r, {"t": "bench_previous_result_final", "boot_id": prev["boot_id"],
+                           **bringup.result_fields(bst)})
         blocked = self.host.request_bench_arm(r.run_id, now)
         if blocked is not None:
             self._refuse(r, f"arm_blocked:{blocked.reason}", now)
