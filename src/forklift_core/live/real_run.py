@@ -399,6 +399,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     except (OSError, ValueError, TypeError, yaml.YAMLError):
         pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
     operating_ = paths.replay is None and not paths.hil
+    chassis_p = None  # the operating run: the chassis path its vehicle bytes named, kept for the URDF and the end
     if not operating_:
         try:
             cfg = ra.load_s10a(paths.s10a)
@@ -425,8 +426,10 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
             raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
         data = read_settings(paths.settings, raw=bound(paths.settings, "settings"))
         vehicle_raw = bound(paths.vehicle, "vehicle")
-        try:  # the chassis model the bytes just read name (relative to the file, as chassis_model_path)
-            chassis_p = (Path(paths.vehicle).parent / yaml.safe_load(vehicle_raw.decode("utf-8"))["chassis_model"]).resolve()
+        try:  # the chassis model the bytes just read name (relative to the file it really is, Codex U3e-2 r4 P2-2)
+            from forklift_core.plant.real_vehicle import chassis_path_from
+
+            chassis_p = chassis_path_from(paths.vehicle, yaml.safe_load(vehicle_raw.decode("utf-8")))
         except (ValueError, KeyError, TypeError, yaml.YAMLError) as err:
             raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
         vehicle, kin = read_vehicle(paths.vehicle, raw=vehicle_raw, chassis_raw=bound(chassis_p, "chassis_params"))
@@ -491,7 +494,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         refused.append("hil_start_not_zero")  # the odometry origin is the synthetic SLAM's identity (10.5)
     if refused:
         raise AssemblyRefused(refused)
-    urdf = chassis_model_path(paths.vehicle).parent / "forklift.urdf"
+    urdf = (chassis_p if chassis_p is not None else chassis_model_path(paths.vehicle)).parent / "forklift.urdf"
     urdf_src = urdf
     if site is not None:
         # the operating run: the chassis geometry parsed from the very bytes whose hash C6 compares (round 1 P2-2)
@@ -561,7 +564,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     odo = layer_cfg.get("odometry_age") if isinstance(layer_cfg, dict) else None
     hashes["odometry_age"] = _sha_or_none(REPO / odo) if odo else None
-    hashes["chassis_params"] = _sha_or_none(chassis_model_path(paths.vehicle))
+    hashes["chassis_params"] = _sha_or_none(chassis_p if chassis_p is not None else chassis_model_path(paths.vehicle))
     hashes["chassis_urdf"] = _sha_or_none(urdf)
     moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:

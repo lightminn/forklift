@@ -187,15 +187,19 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     from forklift_core.plant.real_vehicle import real_vehicle_from_mapping
     from forklift_core.sensors.lidar_cfg import lidar_config_from
 
-    s10a = s10a_from_mapping(parsed["s10a"])
-    try:
-        from forklift_core.plant.real_vehicle import chassis_model_path as _cmp
+    from forklift_core.plant.real_vehicle import chassis_path_from
 
-        chassis_raw = _cmp(vehicle_path).read_bytes()
+    s10a = s10a_from_mapping(parsed["s10a"])
+    try:  # one chassis path, from the vehicle bytes hashed, for its parameters and its URDF (Codex U3e-2 r4 P2-1)
+        params = chassis_path_from(vehicle_path, parsed["vehicle"])
+    except (ValueError, TypeError):
+        params = None
+    try:
+        chassis_raw = params.read_bytes()
         hashes["chassis_params"] = hashlib.sha256(chassis_raw).hexdigest()
         calib = real_vehicle_from_mapping(parsed["vehicle"], yaml.safe_load(chassis_raw.decode("utf-8"))).calibration_id
     except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError):
-        calib = None
+        calib = None  # params None (no chassis named) lands here too
     try:
         lidar_config_from(parsed["lidar"])
         lidar_error = None
@@ -204,9 +208,7 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     inserted = None
     try:
         from forklift_core.live.real_run import mission_geometry
-        from forklift_core.plant.real_vehicle import chassis_model_path
 
-        params = chassis_model_path(vehicle_path)
         urdf = params.parent / "forklift.urdf"
         hashes.setdefault("chassis_params", _sha_or_none(params))
         hashes["chassis_urdf"] = None  # unread: a missing fact, never compared away

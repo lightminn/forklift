@@ -375,3 +375,17 @@ def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
     budget = tmp_path / "budget_nan.yaml"  # a copy: the repository's own file is never written
     budget.write_text(yaml.safe_dump(b))
     assert "precondition:C13:budget:overdue_end:invalid" in refused(dataclasses.replace(paths, budget=str(budget)))
+
+
+def test_a_vehicle_file_given_through_a_link_finds_its_chassis_beside_the_target(tmp_path):
+    """Codex U3e-2 round 4 P2-2: the chassis model a vehicle.yaml names is relative to the file it really is, on the
+    operating path as in the loaders (a link elsewhere does not move it)."""
+    import dataclasses
+
+    paths, _ = make_site(tmp_path)
+    links = tmp_path / "links"
+    links.mkdir()
+    link = links / "vehicle.yaml"
+    link.symlink_to(Path(paths.vehicle).resolve())
+    prep = prepare(dataclasses.replace(paths, vehicle=str(link)))
+    assert prep is not None

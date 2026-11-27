@@ -214,6 +214,14 @@ def real_vehicle_from_mapping(data: dict, chassis: dict) -> RealVehicleConfig:
                              _calibration_id(partial.resolved_values()), control, teleop)
 
 
+def chassis_path_from(path: str | Path, data) -> Path:
+    """The chassis model ``data`` (vehicle.yaml already parsed) names, resolved relative to the file ``path`` really
+    is (a link's target directory, as ``chassis_model_path``) -- for callers that parse the bytes they hashed (U3e-2)."""
+    if not isinstance(data, dict) or not isinstance(data.get("chassis_model"), str):
+        raise ValueError("vehicle config must name its chassis_model file")
+    return (Path(path).resolve().parent / data["chassis_model"]).resolve()
+
+
 def chassis_model_path(path: str | Path) -> Path:
     """The chassis model file a vehicle.yaml names, resolved relative to that file (absolute paths kept)."""
     import yaml

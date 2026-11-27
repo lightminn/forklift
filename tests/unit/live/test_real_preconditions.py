@@ -627,4 +627,5 @@ def test_the_judgement_builds_s10a_vehicle_and_lidar_from_the_bytes_it_hashed(si
     monkeypatch.setattr(ra_, "load_s10a", reread)
     monkeypatch.setattr(rv_, "load_real_vehicle", reread)
     monkeypatch.setattr(lc_, "load_lidar_config", reread)
+    monkeypatch.setattr(rv_, "chassis_model_path", reread)  # round 4 P2-1: the chassis path from the bytes too
     assert rp.operating_preconditions(site.facts()) == []
