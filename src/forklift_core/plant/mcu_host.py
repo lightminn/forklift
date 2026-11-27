@@ -131,6 +131,8 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 class McuLinkHost:
     pre_bench_arm = None  # bench tools: called right before a BENCH_ARM's first byte; False drops it
+    on_accepted = None  # bench tools: (STATE, received ns) for every STATE this host accepted, in order
+    on_pair = None  # bench tools: (STATE, BENCH_STATE, received ns) for every pair whose STATE it accepted
 
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
                  allow_locked: bool = False, commission: bool = False,
@@ -320,6 +322,8 @@ class McuLinkHost:
             if id(st) in self._accepted_ids:
                 self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = bs, now_ns, st.boot_id
                 self.bench_state_of = st
+                if self.on_pair is not None:
+                    self.on_pair(st, bs, now_ns)
         if self._decoder.errors != before:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
@@ -360,6 +364,8 @@ class McuLinkHost:
         self._accepted_ids.add(id(s))
         if self._on_state_cb is not None:
             self._on_state_cb(s, now_ns)
+        if self.on_accepted is not None:
+            self.on_accepted(s, now_ns)
         if prev is None:
             events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
         if self._stale_reported:

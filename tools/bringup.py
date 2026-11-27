@@ -1024,79 +1024,72 @@ class CommissionSession(Session):
 
     def _first_nonzero_answered(self, duty_e4: int, bound: int | None) -> bool:
         """A distance run's first non-zero COMMISSION goes out once (plan 4.2 A1b-1 decision 3): no other until it
-        is accepted or this run's result is latched. Refused (sensor_invalid) or unanswered within its own deadline
-        plus two STATE periods (and a host-clock bound when nothing comes at all): the run is closed, never retried."""
+        is accepted or this run's result is latched. The answer is read from the STATEs and pairs the host itself
+        accepted (its on_accepted / on_pair hooks), in receipt order, each made before the command's deadline plus
+        two STATE periods (MCU clock) and received before the echo's receipt plus the validity plus 50 ms (host
+        clock). Refused, or unanswered in time: the run is closed with a written zero, never retried (Codex A1b-1b
+        rounds 1-4)."""
         b = self.b
         conn0 = b.conn
         echo_rx_ns = b.host.state_rx_ns  # the STATE the command echoes was received then (the host-clock bound)
-        i0 = len(b.samples)  # every accepted STATE from here on, in receipt order (impl r3 P2-1)
+        states: list = []  # (STATE, received ns) the host accepted, in order
+        pairs: list = []  # (STATE, BENCH_STATE, received ns) the host accepted, in order
+        b.host.on_accepted = lambda st, rx: states.append((st, rx))
+        b.host.on_pair = lambda st, bs, rx: pairs.append((st, bs, rx))
+        try:
+            return self._first_nonzero_wait(duty_e4, bound, conn0, echo_rx_ns, states, pairs)
+        finally:
+            b.host.on_accepted = None
+            b.host.on_pair = None
+
+    def _first_nonzero_wait(self, duty_e4, bound, conn0, echo_rx_ns, states, pairs) -> bool:
+        b = self.b
         seq = self.send_duty(duty_e4, bound)
         if seq is None:
             self.aborted = "bench_start_not_queued"
             return False
         seq16 = seq & 0xFFFF
-        refused, accepted = {"why": None}, {"yes": False}
+        verdict = {"v": None}  # accepted / refused:<why> / confirmed, from the first evidence in time
+        lim = {}
 
         def write():
             return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq16
                          and w.conn == conn0), None)
 
-        def evidence():
-            # the host's accepted STATE, received after this command's last byte, of its boot and arming generation,
-            # made after the STATE it echoed: an older STATE naming the same seq is never its answer (impl r1 P1-1)
-            w, s, rx = write(), b.host.state, b.host.state_rx_ns
-            if (w is None or s is None or rx is None or rx < w.done_ns or s.boot_id != w.boot_id
-                    or s.arm_gen != w.arm_gen or w.echo_mcu_time_us is None or s.mcu_time_us <= w.echo_mcu_time_us):
-                return None, w
-            return s, w
-
-        deadline = {}
-
-        def in_time(mcu_us: int | None, rx_ns: int | None) -> bool:
-            # made before the command's own deadline plus two STATE periods, received before the host-clock bound
-            return (mcu_us is not None and rx_ns is not None and "mcu_us" in deadline
-                    and mcu_us <= deadline["mcu_us"] and rx_ns <= deadline["host_ns"])
-
-        def in_time_samples(pred) -> bool:
-            # any accepted STATE of this connection received after the write, of its boot and arming, made after the
-            # echo and in time: a later STATE of the same read never hides an earlier one (impl r3 P2-1)
+        def judge() -> bool:
+            """True once judged: the first in-time evidence in receipt order, or a deadline passed."""
+            if verdict["v"] is not None:
+                return True
             w = write()
-            if w is None or w.echo_mcu_time_us is None:
+            if w is None or w.echo_mcu_time_us is None or w.valid_ms is None:
                 return False
-            for k in range(i0, len(b.samples)):
-                smp, st = b.samples[k], b.samples[k].state
-                if (b.sample_conn[k] == conn0 and smp.host_ns >= w.done_ns and st.boot_id == w.boot_id
-                        and st.arm_gen == w.arm_gen and st.mcu_time_us > w.echo_mcu_time_us
-                        and in_time(st.mcu_time_us, smp.host_ns) and pred(st)):
+            if not lim:
+                lim["mcu_us"] = w.echo_mcu_time_us + w.valid_ms * 1000 + int(FIRST_NONZERO_SLACK_S * 1e6)
+                lim["host_ns"] = (echo_rx_ns or w.done_ns) + w.valid_ms * 1_000_000 + 50_000_000
+
+            def ours(st, rx) -> bool:
+                return (rx >= w.done_ns and st.boot_id == w.boot_id and st.arm_gen == w.arm_gen
+                        and st.mcu_time_us > w.echo_mcu_time_us)
+
+            def in_time(st, rx) -> bool:
+                return st.mcu_time_us <= lim["mcu_us"] and rx <= lim["host_ns"]
+
+            for st, bs, rx in pairs:  # this run's result in a pair made and received in time: it drove
+                if ours(st, rx) and in_time(st, rx) and bs.result_run_id == self.run_id:
+                    verdict["v"] = "confirmed"
                     return True
-            return False
-
-        def result_in_time() -> bool:
-            # this run's result latched, and the board's own stop (out of ARMED) seen in time: it drove
-            if not (self.bench_result() or {}).get("confirmed"):
-                return False
-            return in_time_samples(lambda st: st.mode != Mode.ARMED)
-
-        def answered() -> bool:
-            if result_in_time():
-                return True
-            s, w = evidence()
-            if s is None:
-                return False
-            if "mcu_us" not in deadline and w.valid_ms is not None:
-                deadline["mcu_us"] = w.echo_mcu_time_us + w.valid_ms * 1000 + int(FIRST_NONZERO_SLACK_S * 1e6)
-                deadline["host_ns"] = (echo_rx_ns or w.done_ns) + w.valid_ms * 1_000_000 + 50_000_000
-            if in_time_samples(lambda st: st.last_rx_seq == seq16):
-                accepted["yes"] = True
-                return True
-            if not in_time(s.mcu_time_us, b.host.state_rx_ns):
-                return True  # past a deadline: judged now, on what came in time
-            if s.reject_reason != RejectReason.NONE and refused["why"] is None:
-                refused["why"] = s.reject_reason.name.lower()  # kept: a refused command is never taken later
-            # the command's own deadline plus two STATE periods passed on the MCU's clock (impl r1 P2-1)
-            return refused["why"] is not None or (
-                w.valid_ms is not None
-                and s.mcu_time_us > w.echo_mcu_time_us + w.valid_ms * 1000 + FIRST_NONZERO_SLACK_S * 1e6)
+            for st, rx in states:
+                if not ours(st, rx):
+                    continue
+                if not in_time(st, rx):
+                    return True  # past a deadline, nothing in time before it (receipt order)
+                if st.last_rx_seq == seq16:
+                    verdict["v"] = "accepted"
+                    return True
+                if st.reject_reason != RejectReason.NONE:
+                    verdict["v"] = f"refused:{st.reject_reason.name.lower()}"
+                    return True
+            return time.monotonic_ns() > lim["host_ns"]
 
         w0 = None
         for _ in range(20):  # the write's record (its validity) first: the host-clock bound needs it
@@ -1107,16 +1100,17 @@ class CommissionSession(Session):
         valid_ms = (w0.valid_ms if w0 is not None and w0.valid_ms is not None else b.host.cfg.cap_ms)
         host_bound_s = max(0.0, ((echo_rx_ns or time.monotonic_ns()) + valid_ms * 1_000_000 + 50_000_000
                                  - time.monotonic_ns()) / 1e9)
-        b.run_until(answered, host_bound_s)
-        br = self.bench_result() or {}
-        if result_in_time():
+        b.run_until(judge, host_bound_s + 0.05)
+        judge()
+        v = verdict["v"]
+        if v == "confirmed":
             self.bench_start = "confirmed_by_result"  # it drove: the board's own end follows
-            self.board_ended = br.get("stop_reason")
-        elif accepted["yes"] and refused["why"] is None:
+            self.board_ended = (self.bench_result() or {}).get("stop_reason")
+        elif v == "accepted":
             self.bench_start = "accepted"
-        elif refused["why"] is not None:
+        elif v is not None and v.startswith("refused:"):
             self.bench_start = "refused"
-            self.aborted = f"bench_start_refused_{refused['why']}"
+            self.aborted = f"bench_start_refused_{v.split(':', 1)[1]}"
         else:
             self.bench_start = "unconfirmed"
             self.aborted = "bench_start_unconfirmed"

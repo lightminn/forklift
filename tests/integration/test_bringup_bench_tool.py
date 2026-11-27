@@ -338,5 +338,5 @@ def test_a_short_distance_run_waits_for_the_boards_result(model):
     b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=0.1, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
-    assert res["aborted"] != "bench_end_zero_not_queued", res
-    assert res["distance"]["result"] in ("reached", "missed"), res
+    assert res.get("aborted") != "bench_end_zero_not_queued", res
+    assert res["result"] != "refused" and res["distance"]["result"] in ("reached", "missed"), res
