@@ -257,6 +257,15 @@ class Bench:
         except (OSError, ValueError):
             self.record_errors += 1
 
+    def flush_record(self) -> bool:
+        """Push the record out of this process's buffer now (a row that must exist before the next step)."""
+        try:
+            self.out.flush()
+            return True
+        except (OSError, ValueError):
+            self.record_errors += 1
+            return False
+
     def cycle(self) -> None:
         now = time.monotonic_ns()
         for e in self.link.service(self.host, now):
@@ -781,15 +790,23 @@ class CommissionSession(Session):
         b = self.b
         ask = self.bench or bl.BenchAsk(self.axis, (), None, None)
         conn0, disc0 = b.conn, b.host.disconnects
+        self._boot0 = boot0 = b.state.boot_id  # the DISARMED STATE's boot, kept to the BENCH_ARM (A1a-2 r3)
 
         def same_link() -> bool:
-            return b.conn == conn0 and b.host.disconnects == disc0
+            return (b.conn == conn0 and b.host.disconnects == disc0 and b.state is not None
+                    and b.state.boot_id == boot0)
 
         # the board's record of the last run first (a CLI that ended before writing it down, same boot): recovered
         # here, before this run's BENCH_ARM clears it (contract 8.3; A1a-2 P2)
-        if not b.run_until(lambda: not same_link() or (b.host.bench_state is not None and b.state is not None
-                                                        and b.host.bench_state_boot == b.state.boot_id), 1.0):
-            raise Refused("bench: no BENCH_STATE from the bench image on this connection")
+        def stopped_pair() -> bool:
+            # a pair that came with the latest accepted STATE, in a stopped mode: an older pair (an empty record seen
+            # while the last run drove) never stands for the board's record now (A1a-2 r3)
+            st = b.host.bench_state_of
+            return (st is not None and st is b.host.state
+                    and st.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP))
+
+        if not b.run_until(lambda: not same_link() or stopped_pair(), 1.0):
+            raise Refused("bench: no BENCH_STATE with the board's current STATE on this connection")
         if not same_link():
             raise Refused("the link reconnected before the ARM: run it again to confirm")
         prev = b.host.bench_state
@@ -799,6 +816,7 @@ class CommissionSession(Session):
                     "stop_reason": BenchStop(prev.stop_reason).name.lower() if prev.stop_reason <= max(BenchStop)
                     else prev.stop_reason, "axis": "LRMH"[prev.result_axis] if prev.result_axis < 4 else None,
                     "blocked": prev.blocked})
+            b.flush_record()  # out of this process before the BENCH_ARM can clear the board's copy
             if b.record_errors != errors0:
                 # the next ARM clears the board's record: never before it is written down (A1a-2 r2)
                 raise Refused("bench: the last run's board record could not be written: nothing is armed")
@@ -838,6 +856,8 @@ class CommissionSession(Session):
         if self.bench_image:
             if self.b.conn > 1 or self.b.host.disconnects:
                 raise Refused("the link reconnected before the ARM: run it again to confirm")
+            if self.b.state is None or self.b.state.boot_id != self._boot0:
+                raise Refused("the board rebooted before the ARM: run it again to confirm")
             return self.b.host.request_bench_arm(self.run_id, now_ns)
         return self.b.host.request_arm(now_ns)
 

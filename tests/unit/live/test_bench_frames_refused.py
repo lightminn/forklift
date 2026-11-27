@@ -96,3 +96,23 @@ def test_a_refused_bench_frame_is_dropped_and_the_disarm_behind_it_goes_out():
     t.transmit(host, 0, lambda f, write: (write(), True)[1])
     assert host.refused == [("DISARM", "bench_frame_on_this_transport")]
     assert host.written == ["DISARM"] and host.unsent == []
+
+
+def test_a_bench_frame_is_dropped_before_the_operating_gate_so_a_disarm_still_goes():
+    """The operating gate refuses a motion frame without the permission before any write: a bench frame must not reach
+    it and come back to the queue head, or the DISARM behind it would wait forever."""
+    from forklift_core.mcu_link.messages import Disarm
+
+    m, t = make()
+    feed(m, t, state())
+    host = _Host([SimpleNamespace(kind="BENCH_ARM", seq=5, data=encode(BenchArm(7, 1000, 9), 5)),
+                  SimpleNamespace(kind="DISARM", seq=6, data=encode(Disarm(), 6))])
+
+    def gate(f, write):  # the operating gate's shape: only a DISARM passes without the permission
+        if f.kind != "DISARM":
+            return False
+        write()
+        return True
+
+    t.transmit(host, 0, gate)
+    assert host.refused == [("BENCH_ARM", "bench_frame_on_this_transport")] and host.written == ["DISARM"]

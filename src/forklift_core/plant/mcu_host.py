@@ -182,6 +182,8 @@ class McuLinkHost:
         self.bench_state_boot: int | None = None  # the boot of the accepted STATE it came with
         self._last_state_seq: int | None = None
         self._pair_state: McuState | None = None
+        self._accepted_ids: set = set()  # the STATEs this host accepted during the current on_bytes call
+        self.bench_state_of: McuState | None = None  # the accepted STATE the kept BENCH_STATE came with
         self._conn_first_flags: StateFlag | None = None  # the build bits of this connection's first valid STATE
 
     # ---------------------------------------------------------------- state
@@ -277,6 +279,7 @@ class McuLinkHost:
         events: list[HostEvent] = []
         states = []
         pairs = []  # (STATE, its BENCH_STATE)
+        self._accepted_ids = {id(self._state)} if self._state is not None else set()
         for rec in self._decoder.feed(bytes(data), now_ns):
             if isinstance(rec.message, McuState):
                 states.append(rec.message)
@@ -286,7 +289,9 @@ class McuLinkHost:
                     self._conn_first_flags = rec.message.flags
             elif isinstance(rec.message, BenchState):
                 # its STATE came right before it (one write on the board, contract 8.5): any other is not a pair
-                if self._pair_state is not None and rec.message.pair_seq == self._last_state_seq:
+                # its header seq is the STATE's + 1 too (the two came out of one write, contract 8.5)
+                if (self._pair_state is not None and rec.message.pair_seq == self._last_state_seq
+                        and rec.seq == (self._last_state_seq + 1) & 0xFFFF):
                     pairs.append((self._pair_state, rec.message))
                 self._last_state_seq, self._pair_state = None, None
             else:
@@ -298,9 +303,11 @@ class McuLinkHost:
                 self._on_state(s, now_ns, events)
         # a BENCH_STATE counts only with the STATE this host accepted as its latest (never one it refused as out of
         # order or invalid), so a late or older pair never overwrites the record (A1a-2 P2)
+        # the latest completed pair whose STATE was accepted, even when a newer STATE came in the same read
         for st, bs in pairs:
-            if st is self._state:
+            if id(st) in self._accepted_ids:
                 self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = bs, now_ns, st.boot_id
+                self.bench_state_of = st
         if self._decoder.errors != before:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
@@ -338,6 +345,7 @@ class McuLinkHost:
         # that arrives after a stale gap must not hide it (Codex P0-7 round 2 P1).
         self._expire(now_ns, events)
         self._state, self._state_rx_ns = s, now_ns
+        self._accepted_ids.add(id(s))
         if self._on_state_cb is not None:
             self._on_state_cb(s, now_ns)
         if prev is None:
@@ -413,6 +421,7 @@ class McuLinkHost:
                 self._revoke("arm_timeout", events)
             first = False
             self._state, self._state_rx_ns, self._state_delay_s = s, rx, d
+            self._accepted_ids.add(id(s))
             self._state_delay_terms = d_terms
             if self._on_state_cb is not None:
                 self._on_state_cb(s, rx)
@@ -527,6 +536,7 @@ class McuLinkHost:
         self.usb_product, self.estop_waived = None, False
         self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = None, None, None
         self._last_state_seq, self._pair_state, self._conn_first_flags = None, None, None
+        self.bench_state_of = None
         events: list[HostEvent] = []
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")

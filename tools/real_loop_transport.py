@@ -190,6 +190,11 @@ class LoopTtyTransport:
                 if not self._poison_out():
                     return
         while (f := host.next_frame(now_ns)) is not None:
+            if _bench_frame(f):
+                # refused for good here, before any gate: never requeued, so it can block nothing behind it (a DISARM)
+                self._event({"t": "tx_bench_refused", "seq": int(f.seq) & 0xFFFF, "kind": getattr(f, "kind", None)})
+                host.frame_refused(f, now_ns, "bench_frame_on_this_transport")
+                continue
             state = {}
 
             def write(f=f, *, judged_ns=None):

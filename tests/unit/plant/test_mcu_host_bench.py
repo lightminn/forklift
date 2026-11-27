@@ -126,3 +126,37 @@ def test_a_pair_split_across_two_reads_still_counts():
     assert r.host.bench_state is None
     r.host.on_bytes(whole[cut:], r.now)
     assert r.host.bench_state is not None and r.host.bench_state.result_run_id == 8
+
+
+def test_a_pair_followed_by_the_next_state_in_one_read_still_counts():
+    """S1 | B1+S2 | B2+S3: each read ends a pair and starts the next STATE; every completed pair is kept."""
+    r = bench_rig()
+    seq = 1
+    chunks, run = [], 20
+    for _ in range(4):
+        r.t_us += 10_000
+        chunks.append((encode_state(r.t_us, seq), encode(_bench_state(seq, run_id=run), (seq + 1) & 0xFFFF)))
+        seq += 2
+        run += 1
+    reads = [chunks[0][0]] + [chunks[i][1] + chunks[i + 1][0] for i in range(3)]
+    for data in reads:
+        r.now += 10 * MS
+        r.host.on_bytes(data, r.now)
+    assert r.host.bench_state is not None and r.host.bench_state.result_run_id == 22
+    assert r.host.bench_state_of is not None
+
+
+def test_a_pair_whose_header_seq_does_not_follow_the_state_is_not_one():
+    r = bench_rig()
+    r.t_us += 10_000
+    r.now += 10 * MS
+    r.host.on_bytes(state(r.t_us) + encode(_bench_state(1, run_id=9), 8), r.now)  # pair_seq right, header seq not
+    assert r.host.bench_state is None
+
+
+def encode_state(t_us, seq):
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason
+    from test_mcu_host_commission import BOOT
+
+    return encode(McuState(t_us, BOOT, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
+                           float("nan"), 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, CB), seq)
