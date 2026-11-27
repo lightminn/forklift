@@ -1,0 +1,171 @@
+"""The bench console's pure rules (docs/plans/2026-11-27-bench-console.md 3, 3.1 B1): what the one writer does on a
+stop by the board's drive state, what a reopened host may do by the first sample after the connection boundary, the
+clear-faults request bound to the state it was asked on, the run's first verdict, and the window stop with the two
+bypass bits. No I/O: the tool feeds it the latest STATE with its BENCH_STATE (``Pair``)."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from forklift_core.mcu_link.messages import BenchDriveState, FaultFlag, Mode
+
+
+@dataclass(frozen=True)
+class Pair:
+    """One accepted STATE with the BENCH_STATE that came with it (the board's connection generation is only in the
+    latter)."""
+
+    boot_id: int
+    conn_gen: int
+    arm_gen: int
+    mode: Mode
+    last_rx_seq: int
+    drive_state: BenchDriveState
+    run_id: int
+    result_run_id: int
+    stop_reason: int
+    fault_flags: FaultFlag
+    duty_e4: tuple
+    mcu_time_us: int
+
+
+def pair_of(state, bench) -> Pair | None:
+    """The host's kept pair (``bench_state_of``, ``bench_state``); None until one was seen."""
+    if state is None or bench is None:
+        return None
+    return Pair(boot_id=state.boot_id, conn_gen=bench.conn_gen, arm_gen=state.arm_gen, mode=state.mode,
+                last_rx_seq=state.last_rx_seq, drive_state=bench.drive_state, run_id=bench.run_id,
+                result_run_id=bench.result_run_id, stop_reason=bench.stop_reason, fault_flags=state.fault_flags,
+                duty_e4=tuple(state.duty_e4), mcu_time_us=state.mcu_time_us)
+
+
+def seq_reached(last_rx_seq: int, seq: int) -> bool:
+    """Whether ``last_rx_seq`` is ``seq`` or after it -- the firmware's 16-bit modular comparison (plan 3, 10th round
+    P1): ``(int16)(last_rx_seq - seq) >= 0``."""
+    d = (int(last_rx_seq) - int(seq)) & 0xFFFF
+    return d < 0x8000
+
+
+def stop_action(*, arm_sent: bool, zero_seq: int | None, zero_link: tuple | None, p: Pair | None,
+                arming: bool = False, after_arm: bool = True, after_zero: bool = True) -> str:
+    """The one stop rule (plan 3, 8th-10th rounds), for ``bench_stop``, the shared STOP, a lost lease or connection:
+
+    - ``cancel``: no BENCH_ARM sent yet -- the run is only dropped;
+    - ``send_zero``: armed (accepted or not), no zero sent yet;
+    - ``resend_zero``: the zero sent but this sample does not show it taken while armed;
+    - ``send_disarm``: this sample shows the zero taken (same link and arming, ``last_rx_seq`` at or after it) and the
+      run still preparing -- the zero did not end a drive;
+    - ``wait``: driving or stopping after the zero (the board stops itself; a DISARM is never sent), or a sample of
+      another link or arming;
+    - ``closed`` (DISARMED) / ``closed_latched`` (FAULT, ESTOP).
+
+    ``zero_link``: (boot_id, conn_gen, arm_gen) of the sample the zero was sent against. ``arming``: the host's arming
+    exchange is still open (plan 3.1, Codex B1 design P1-3): wait for its outcome -- no zero can be queued and no
+    sample closes. ``after_arm``: ``p`` was received after the BENCH_ARM's last byte; an older sample (a late DISARMED
+    pair) never closes the run. ``after_zero``: ``p`` was received after the stop zero's last byte and made after the
+    STATE it echoed (Codex B1 design round 2 P1-3): the 16-bit comparison alone cannot tell an old 'prep' pair kept by
+    the host from a new one, so an older sample is never evidence for or against the zero."""
+    if not arm_sent:
+        return "cancel"
+    if p is not None and not after_arm:
+        p = None  # a sample from before the ARM went out: no evidence of anything since
+    if arming:
+        return "closed_latched" if p is not None and p.mode in (Mode.FAULT, Mode.ESTOP) else "wait"
+    if p is not None and p.mode == Mode.DISARMED:
+        return "closed"
+    if p is not None and p.mode in (Mode.FAULT, Mode.ESTOP):
+        return "closed_latched"
+    if zero_seq is None:
+        return "send_zero" if p is None or p.mode == Mode.ARMED else "wait"
+    if p is None or not after_zero or zero_link is None or (p.boot_id, p.conn_gen, p.arm_gen) != tuple(zero_link):
+        return "wait"
+    if p.mode == Mode.STOPPING:
+        return "wait"
+    taken = seq_reached(p.last_rx_seq, zero_seq)
+    if p.mode == Mode.ARMED and not taken:
+        return "resend_zero"
+    if p.mode == Mode.ARMED and p.drive_state == BenchDriveState.PREP:
+        return "send_disarm"
+    return "wait"
+
+
+def after_boundary(last_seen: tuple | None, p: Pair) -> bool:
+    """Whether ``p`` comes after a connection boundary the host must wait for (plan 3, 7th round P1-2, 8th round P2):
+    a first host takes the first pair; otherwise another boot, or the same boot with another connection
+    generation. ``last_seen``: (boot_id, conn_gen) of the last pair seen before the reopening."""
+    if last_seen is None:
+        return True
+    return (p.boot_id, p.conn_gen) != tuple(last_seen)
+
+
+def reopen_action(p: Pair) -> str:
+    """What a reopened host does on the first pair after the boundary -- never a DISARM (the board ended its arming
+    at the boundary itself): ``boot_wait`` (initialising: no arming until DISARMED), ``go`` (DISARMED), ``wait_brake``
+    (ARMED/STOPPING: wait for DISARMED, FAULT or ESTOP within the brake grace + 1 s) or ``latched`` (FAULT/ESTOP:
+    reported, a clear may be asked)."""
+    if p.mode == Mode.BOOT:
+        return "boot_wait"
+    if p.mode == Mode.DISARMED:
+        return "go"
+    if p.mode in (Mode.ARMED, Mode.STOPPING):
+        return "wait_brake"
+    return "latched"
+
+
+@dataclass(frozen=True)
+class ClearBinding:
+    """A clear-faults request kept with the link, boot and fault bits it was asked on (plan 3, 9th/10th round P2):
+    checked before its DISARM and again right before the CLEAR_FAULTS frame."""
+
+    conn: int
+    boot_id: int
+    fault_flags: FaultFlag
+
+    def holds(self, conn: int, boot_id: int, fault_flags) -> bool:
+        return conn == self.conn and boot_id == self.boot_id and FaultFlag(fault_flags) == self.fault_flags
+
+
+def run_verdict(*, closed: str, stop_reason: str | None, aborted: str | None, cleanup_confirmed: bool,
+                last: Pair | None, record_errors: int, unexpected_faults=()) -> dict:
+    """Verdict ① (plan 3): the run and its cleanup -- ended by the run's own zero (the board's first cause
+    ``end_zero``), no abort, the cleanup confirmed by the board's end sample then DISARMED, no fault outside the bench's
+    ordinary ones, every axis at zero duty, no record row lost. ``closed``: ``ended`` (a run that drove, its result
+    read) or ``no_drive`` (closed before driving: never a pass)."""
+    why = []
+    if closed != "ended":
+        why.append(closed)
+    elif stop_reason != "end_zero":
+        why.append(f"stop_reason:{stop_reason}")
+    if aborted:
+        why.append(f"aborted:{aborted}")
+    if not cleanup_confirmed:
+        why.append("cleanup_unconfirmed")
+    if last is None:
+        why.append("no_last_sample")
+    else:
+        if last.mode != Mode.DISARMED:
+            why.append(f"last_mode:{last.mode.name}")
+        if any(int(d) != 0 for d in last.duty_e4):
+            why.append("duty_not_zero")
+    if record_errors:
+        why.append(f"record_errors:{record_errors}")
+    if unexpected_faults:
+        why.append("faults:" + ",".join(unexpected_faults))
+    return {"ok": not why, "why": why}
+
+
+def window_stop(value: float, window: tuple, *, kth_invalid_bypass: bool, range_off: bool) -> str | None:
+    """The drive-time window stop of a steering or lift run (plan 3, the two bypass bits' table): none with the range
+    off; with the KTH-invalid bypass an invalid (NaN) sample is skipped, a valid one outside still stops; without it an
+    invalid sample counts as outside (the board faults on it too)."""
+    if range_off:
+        return None
+    lo, hi = window
+    if not math.isfinite(value):
+        return None if kth_invalid_bypass else "window"
+    return None if lo <= value <= hi else "window"  # the CLI's inclusive bounds (bringup early_stop)
+
+
+__all__ = ["ClearBinding", "Pair", "after_boundary", "pair_of", "reopen_action", "run_verdict", "seq_reached",
+           "stop_action", "window_stop"]

@@ -160,3 +160,27 @@ def encode_state(t_us, seq):
 
     return encode(McuState(t_us, BOOT, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
                            float("nan"), 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, CB), seq)
+
+
+
+def test_drop_frames_removes_only_the_named_kinds():
+    """The bench console's cancelled run (plan 2026-11-27 3.1): its queued BENCH_SET goes, a DISARM queued after it
+    stays, and nothing of the dropped frame is written later."""
+    r = bench_rig()
+    r.feed()
+    assert r.host.bench_set(9, ASK, r.now) is None
+    r.host._enqueue_disarm(r.now)  # a DISARM behind it, as the stop rule's would be
+    r.host.drop_frames(("BENCH_SET", "BENCH_ARM"), "bench_cancelled")
+    assert [type(m).__name__ for m in r.sent()] == ["Disarm"]
+
+
+def test_drop_frames_can_keep_the_arming_zero():
+    """A bench stop right after the ARM was answered keeps the host's own arming zero (plan 3.1 round 3 P1-2)."""
+    r = bench_rig()
+    r.feed()
+    assert r.host.request_bench_arm(5, r.now) is None
+    r.sent()
+    r.feed(mode=Mode.ARMED, gen=1)  # the arming zero is queued now
+    r.host.drop_frames(("COMMISSION",), "bench_cancelled", keep_arming_zero=True)
+    (zero,) = r.sent()
+    assert zero.duty_e4 == 0 and zero.axis == 0
