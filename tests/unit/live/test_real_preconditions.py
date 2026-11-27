@@ -1,6 +1,6 @@
 """The operating unlock U1 (docs/plans/2026-11-26-real-operating-assembly.md 2.4, 2.10, 3): S10's operating
 preconditions -- refused on today's settings, every item bound to what it was measured on so a later change voids it,
-and, with everything filled in, only ``precondition:unlock_incomplete`` left until the unlock's last PR."""
+and, with everything filled in, nothing left (the unlock's lock was removed by U3e-2)."""
 
 import copy
 import shutil
@@ -135,7 +135,7 @@ def test_todays_settings_are_refused_with_their_reasons():
                   budget_path=REAL / "obstacle_layer.yaml", vehicle_path=REAL / "vehicle.yaml",
                   watch_path=REAL / "safety_watch.yaml")
     out = rp.operating_preconditions(f)
-    assert out[0] == rp.UNLOCK_INCOMPLETE
+    assert out and "precondition:unlock_incomplete" not in out  # U3e-2: what refuses is S10's own judgement
     for reason in ("precondition:C1:board:no_state", "precondition:C5:lidar:first_beam_err_s",
                    "precondition:C5:lidar:mount_unmeasured", "precondition:C2:s5_safety:unset",
                    "precondition:C11:lift:unset", "precondition:C12:vehicle:wheel_radius:unmeasured",
@@ -145,8 +145,8 @@ def test_todays_settings_are_refused_with_their_reasons():
     assert not any("teleop_speed_limit" in r or ":watch:tilt:" in r for r in out)
 
 
-def test_everything_met_leaves_only_the_unlock_lock(site):
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+def test_everything_met_leaves_nothing(site):
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("board,reason", [
@@ -199,6 +199,13 @@ def test_lift_and_pallet_settings_are_bound(site):
     (lambda r: r["items"].update(port_review=None), "precondition:C4:port_review:unset"),
     (lambda r: r["items"]["port_review"].update(status="approved_limited"), "precondition:C4:port_review:decision_id"),
     (lambda r: r["items"]["port_review"].update(status="maybe"), "precondition:C4:port_review:status"),
+    # Codex U3e-2: a blank decision is none; C2's safety measurements take no limited approval
+    (lambda r: r["items"]["port_review"].update(status="approved_limited", decision_id="  "),
+     "precondition:C4:port_review:decision_id"),
+    (lambda r: r["items"]["s5_safety"].update(status="approved_limited", decision_id="D-9"),
+     "precondition:C2:s5_safety:status"),
+    (lambda r: r["items"]["iwdg_evidence"].update(status="approved_limited", decision_id="D-9"),
+     "precondition:C2:iwdg_evidence:status"),
     (lambda r: r["items"]["s5_safety"].update(evidence="docs/missing.md"), "precondition:C2:s5_safety:evidence"),
     (lambda r: r["items"]["s5_safety"].update(evidence="/etc/passwd"), "precondition:C2:s5_safety:evidence"),
     (lambda r: r["items"]["s5_safety"].update(evidence="../outside.md"), "precondition:C2:s5_safety:evidence"),
@@ -277,6 +284,7 @@ def _hold(r, rows=None, **kw):
                               {"raised_cm": 20.0, "sag_cm_after_60s": 0.1}]),
      "precondition:C11:lift:sag_over_limit"),
     (lambda r: _hold(r, sag_limit_decision_id=None), "precondition:C11:lift:sag_limit_decision_id"),
+    (lambda r: _hold(r, sag_limit_decision_id=" "), "precondition:C11:lift:sag_limit_decision_id"),  # U3e-2
     (lambda r: _hold(r, rows=[{"raised_cm": 8.0, "sag_cm_after_60s": 0.1, "worst": True, "worst_reason": "x"},
                               {"raised_cm": 60.0, "sag_cm_after_60s": 0.1}]),
      "precondition:C11:lift:hold_no_target_height"),
@@ -298,7 +306,7 @@ def test_a_whole_range_self_locking_document_replaces_the_worst_height_row(site)
     def change(r):
         _hold(r, rows=[{"raised_cm": 20.0, "sag_cm_after_60s": 0.1}], self_locking_evidence="docs/evidence.md")
 
-    assert site.change_record(change) == [rp.UNLOCK_INCOMPLETE]
+    assert site.change_record(change) == []
 
 
 def test_an_unmeasured_value_needs_a_lead_exception(site):
@@ -311,7 +319,7 @@ def test_an_unmeasured_value_needs_a_lead_exception(site):
     assert "precondition:C12:vehicle:wheel_radius:unmeasured" in rp.operating_preconditions(site.facts())
     rec["config_exceptions"] = [{"file": "vehicle", "key": "wheel_radius", "decision_id": "D-3"}]
     site.write_record(rec)
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("text,why", [
@@ -382,7 +390,7 @@ def test_the_imu_watch_provenance_is_c7_not_an_assembly_refusal(site):
     d["imu"]["provenance"]["measured"] = False
     watch.write_text(yaml.safe_dump(d, sort_keys=False))
     site.write_record(site.full_record())
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 def test_an_invalid_lidar_file_is_refused_by_its_own_loader(site):
@@ -448,12 +456,16 @@ def test_a_corrupt_urdf_is_a_structured_reason(site, monkeypatch):
 
 
 def test_an_unreadable_chassis_file_is_a_missing_fact_never_compared_away(site, monkeypatch):
-    real = rp._sha_or_none
+    from pathlib import Path as P
 
-    def fake(path):
-        return None if str(path).endswith("forklift.urdf") else real(path)
+    real = P.read_bytes
 
-    monkeypatch.setattr(rp, "_sha_or_none", fake)
+    def fake(self):  # the URDF is read once for its hash and its parse (U3e-2): that read fails
+        if str(self).endswith("forklift.urdf"):
+            raise PermissionError("unreadable")
+        return real(self)
+
+    monkeypatch.setattr(P, "read_bytes", fake)
     out = rp.operating_preconditions(site.facts())
     assert "precondition:facts_missing:chassis_urdf" in out
 
@@ -534,7 +546,7 @@ def test_each_stop_model_value_needs_its_own_measurement_or_exception(site):
     assert f"precondition:C13:layer:{LAT}:unmeasured" not in out and f"precondition:C13:layer:{DEC}:unmeasured" in out
     rec["config_exceptions"].append({"file": "layer", "key": DEC, "decision_id": "D-10"})
     site.write_record(rec)
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("decision", ["", "   ", None, 7])
@@ -573,7 +585,7 @@ def test_the_stop_models_values_are_checked_whatever_their_provenance(site, key,
 
 def test_a_zero_latency_is_a_valid_value(site):
     _layer(site, lambda d: d["permission"].update(latency_s=0.0))
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 def test_the_stop_model_approval_is_bound_to_the_lidar_file(site):
@@ -583,3 +595,64 @@ def test_the_stop_model_approval_is_bound_to_the_lidar_file(site):
     d["timing"]["scan_period_s"] = float(d["timing"]["scan_period_s"]) * 1.5
     lid.write_text(yaml.safe_dump(d, sort_keys=False))
     assert "precondition:C13:stop_model:lidar_sha256" in rp.operating_preconditions(site.facts())
+
+
+@pytest.mark.parametrize("seconds,ok", [(1.0, True), (1, True), (float("nan"), False), (0.0, False), (-1.0, False),
+                                        (True, False), ("1.0", False), (None, False), (float("inf"), False)])
+def test_the_budget_takes_a_finite_positive_number_as_written(seconds, ok):
+    """Codex U3e-2 rounds 1-2: one rule for the judgement and the operating preparation (a bool is not a number)."""
+    budget = {"latency_budget": {"seconds": 0.1}, "overdue_end": {"seconds": seconds}}
+    assert (rp.budget_reasons(budget) == []) is ok
+    if not ok:
+        assert rp.budget_reasons(budget) == ["precondition:C13:budget:overdue_end:invalid"]
+
+
+def test_the_judgement_refuses_a_nan_overdue_end(site):
+    site.facts_over = None
+    f = site.facts()
+    f.budget = {"latency_budget": {"seconds": 0.1}, "overdue_end": {"seconds": float("nan")}}
+    assert rp.operating_preconditions(f) == ["precondition:C13:budget:overdue_end:invalid"]
+
+
+def test_the_judgement_builds_s10a_vehicle_and_lidar_from_the_bytes_it_hashed(site, monkeypatch):
+    """U3e-2 (Codex round 3 P2-1/P2-2): no loader re-reads a path after its hash -- C9's speed and C12's calibration
+    come from the bytes hashed."""
+    from forklift_core.live import real_autonomy as ra_
+    from forklift_core.plant import real_vehicle as rv_
+    from forklift_core.sensors import lidar_cfg as lc_
+
+    def reread(*a, **k):
+        raise AssertionError("a path re-read after its hash")
+
+    monkeypatch.setattr(ra_, "load_s10a", reread)
+    monkeypatch.setattr(rv_, "load_real_vehicle", reread)
+    monkeypatch.setattr(lc_, "load_lidar_config", reread)
+    monkeypatch.setattr(rv_, "chassis_model_path", reread)  # round 4 P2-1: the chassis path from the bytes too
+    assert rp.operating_preconditions(site.facts()) == []
+
+
+def test_the_judgement_reads_the_vehicle_and_its_chassis_files_once_each(site, monkeypatch):
+    """U3e-2 (Codex round 5): vehicle.yaml, the chassis parameters and the URDF are each read once -- hashed and
+    parsed from that read."""
+    from pathlib import Path as P
+
+    counts: dict = {}
+    real_bytes, real_text = P.read_bytes, P.read_text
+
+    def note(self):
+        name = P(self).name
+        if name in ("vehicle.yaml", "parameters.yaml", "forklift.urdf"):
+            counts[name] = counts.get(name, 0) + 1
+
+    def read_bytes(self):
+        note(self)
+        return real_bytes(self)
+
+    def read_text(self, *a, **k):
+        note(self)
+        return real_text(self, *a, **k)
+
+    monkeypatch.setattr(P, "read_bytes", read_bytes)
+    monkeypatch.setattr(P, "read_text", read_text)
+    site.facts()
+    assert counts == {"vehicle.yaml": 1, "parameters.yaml": 1, "forklift.urdf": 1}, counts

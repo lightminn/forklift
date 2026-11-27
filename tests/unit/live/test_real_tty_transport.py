@@ -190,7 +190,7 @@ def test_grant_needs_the_lock_a_first_state_an_empty_judgement_and_the_current_b
         feed(m, t, state(boot=8, flags=StateFlag.OUTPUTS_LOCKED if why == "locked_outputs_seen" else StateFlag(0)))
     if why == "locked_outputs_seen":
         feed(m, t, state(boot=8))  # a good STATE after a bad one in the same session does not clear it
-    judgement = ["precondition:unlock_incomplete"] if why == "judgement" else []
+    judgement = ["precondition:C1:board:no_state"] if why == "judgement" else []
     boot = 7 if why == "other_boot" else 8
     assert t.grant(judgement, boot) is False and t.real_operating is False
     os.close(m)
