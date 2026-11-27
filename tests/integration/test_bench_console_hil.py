@@ -509,19 +509,26 @@ def test_the_result_carries_the_peak_current_from_the_runs_states(rig):
 @pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
 def test_ctrl_c_or_sigterm_ends_the_model_console_cleanly(mcu_model, tmp_path, sig):  # noqa: F811
     """Both signals only ask (Codex C round 4 P1): the loop ends at a cycle boundary, exit 0, the model child gone."""
-    proc = subprocess.Popen([sys.executable, str(REPO / "tools" / "bench_console.py"), "--model", str(mcu_model),
-                             "--port", "0", "--runs-root", str(tmp_path / "runs")],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            env={**os.environ, "PYTHONPATH": f"{REPO / 'src'}:{REPO}"})
-    try:
-        line = proc.stdout.readline()
-        assert '"t": "started"' in line, (line, proc.stderr.read() if proc.poll() is not None else "")
-        time.sleep(0.5)
-        proc.send_signal(sig)
-        assert proc.wait(timeout=10) == 0
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+    import select
+
+    log = tmp_path / "err.txt"
+    with open(log, "w") as err:
+        proc = subprocess.Popen([sys.executable, str(REPO / "tools" / "bench_console.py"), "--model", str(mcu_model),
+                                 "--port", "0", "--runs-root", str(tmp_path / "runs")],
+                                stdout=subprocess.PIPE, stderr=err, text=True,
+                                env={**os.environ, "PYTHONPATH": f"{REPO / 'src'}:{REPO}"})
+        try:
+            ready, _, _ = select.select([proc.stdout], [], [], 10.0)  # the start, bounded
+            line = proc.stdout.readline() if ready else ""
+            assert '"t": "started"' in line, (line, log.read_text())
+            time.sleep(0.5)
+            proc.send_signal(sig)
+            assert proc.wait(timeout=10) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            proc.stdout.close()
     out = subprocess.run(["pgrep", "-f", f"{mcu_model} --link"], capture_output=True, text=True)
     assert out.stdout.strip() == ""
 
@@ -549,3 +556,31 @@ def test_a_model_ending_after_its_first_state_is_one_lost_device(mcu_model, tmp_
         assert events.count("disconnected") == 1 and c.not_ready() is not None
     finally:
         dev.close()
+
+
+def test_an_exit_while_driving_with_the_board_silent_still_records_the_run(rig):
+    """The tool stopped mid-drive and the board went silent (a terminal Ctrl-C can end both): the run is closed at the
+    exit deadline with a record, never left without one (Codex C round 5 P2-1)."""
+    c, b, run_until = rig()
+    b.send("bench_run", **{**RUN, "seconds": 1.4})
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written, 4.0)
+    record = c.run.rec.dir
+    c.dev.receive = lambda host, now: host.tick(now)  # nothing more comes from the board
+    bench_console.shutdown(c, wait_s=0.5)
+    assert c.run is None
+    res = json.loads((record / "result.json").read_text())
+    assert res["aborted"] in ("tool_exit", "unconfirmed_at_exit") and not res["verdict"]["run_cleanup"]["ok"], res
+
+
+def test_a_clear_with_no_state_after_its_clear_is_unconfirmed_not_refused(rig):
+    """CLEAR sent, then not one STATE: the clear closes 'unconfirmed', its 'after' empty -- never 'not_cleared' from a
+    sample made before the CLEAR (Codex C round 5 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None and c.clear.clear_seq is not None
+                     and c.clear.clear_seq in c.written, 4.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent from the CLEAR on
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
