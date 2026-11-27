@@ -64,11 +64,11 @@
     - 쓰이지 않은 SET 은 만료되고, DISARM·FAULT·실행 종료에서 기본값으로 돌아간다.
     - 시험: 같은 부팅에서 `SET → 호스트 종료 → 새 세션`, `우회 실행 → 기본 실행`.
 - **옮기는 것:**
-  - 펌웨어: BENCH_SET(0x06, DISARMED 에서만, 우회 비트 `steer_range`·`lift_range`, 축별 듀티·연속 시간 상한), KTH 이동량 카운터(STATE `kth_alt_crc_errors` 칸), BENCH_HOLD(PI + 감쇠 D + 최소 듀티 + 데드밴드).
+  - 펌웨어: BENCH_SET(0x06, DISARMED 에서만, 우회 비트 `steer_range`·`lift_range`, 축별 듀티·연속 시간 상한), KTH 이동량 카운터(진단의 STATE `kth_alt_crc_errors` 칸에서 `BENCH_STATE` 로 옮김), BENCH_HOLD(PI + 감쇠 D + 최소 듀티 + 데드밴드).
   - **원천 일반화(0.1):** BENCH_HOLD 와 펌웨어 쪽 정지 조건이 원천을 받는다.
     - `kth` 는 이동량 카운터를 쓴다.
     - `mt` 는 그 축의 LPTIM 바퀴 카운트(이미 STATE `wheel_count_left/right` 로 보냄)를 시작 시점 기준 상대값으로 쓴다.
-    - BENCH_HOLD 메시지에 `source` 와 축을 넣는다. 골든 벡터 갱신이 필요하니 메시지 세대를 올린다.
+    - BENCH_HOLD 메시지에 `source` 와 축을 넣는다(위 벤치 wire 계약). 벤치 고정 벡터는 `bench5` 로 새로 만든다.
     - 펌웨어는 축과 원천의 짝을 검사한다(M·H↔kth, L·R↔mt). 맞지 않는 짝은 거부한다.
     - 원천 손실은 KTH 는 `BENCH_KTH_LOST`, MT 는 같은 규칙의 진행·방향 감시(아래)가 맡는다. 손실이면 그 축을 세운다. **정지는 모두 MCU 가 하고**, 호스트는 `BENCH_STATE` 의 정지 사유를 기록·판정만 한다.
   - **H 의 KTH 카운터와 손실 표식(Codex 2 회차 P1-2):** 진단 펌웨어는 M(`abs_frame[0]`)만 누적하고, STATE `kth_alt_crc_errors[0:2]` 는 M 카운터 하나의 하위·상위 16비트이며 `BENCH_KTH_LOST` 도 하나다. bench5 에서 이렇게 바꾼다.
