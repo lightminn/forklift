@@ -109,10 +109,32 @@ static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_
    the ring and marks the next opening for a resynchronising delimiter (link_tx_pump), so the
    only old bytes a reopened port sees are TinyUSB's FIFO plus one packet in the controller's TX
    FIFO, even when the poll never saw the port closed (Codex B3 review 3). */
+#if defined(FW_BENCH_IMAGE)
+/* Bench image (contract 8): the connection generation. The main loop bumps begin first, empties TinyUSB's
+   receive FIFO, then settles end; the control tick (TIM6, which preempts the main loop) reads nothing while
+   they differ and, once settled on a new value, drops what the receive ring still holds. The send FIFO is
+   left alone: a DWC2 IN transfer reads it in place (board design 5.1). */
+static volatile uint32_t g_conn_begin, g_conn_end;
+
+uint32_t link_conn_gen(bool *busy)
+{
+    uint32_t begin = g_conn_begin, end = g_conn_end;
+    *busy = begin != end;
+    return end;
+}
+#endif
+
 static void lifecycle(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    g_conn_begin = g_conn_end + 1u;
+    tud_cdc_read_flush();
+#endif
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
     g_resync = true;
+#if defined(FW_BENCH_IMAGE)
+    g_conn_end = g_conn_begin;
+#endif
 }
 
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)

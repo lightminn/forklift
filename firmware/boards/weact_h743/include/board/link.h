@@ -28,5 +28,8 @@ void link_poll(void);
 /* Control tick. */
 size_t link_read(uint8_t *buf, size_t cap);
 bool link_write_frame(const uint8_t *frame, size_t len);
+/* Bench image only (mcu-link contract 8, USB build): the connection generation, bumped when a connection
+   change starts and settled when it is done; *busy in between. The control tick reads it (core app.c). */
+uint32_t link_conn_gen(bool *busy);
 
 #endif
