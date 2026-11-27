@@ -1666,7 +1666,7 @@ class MissionCore:
         # only (approach and insert with a pocket check) -- elsewhere the layer's 0 may not reach the output
         end_slack_ = (self._end_slack(trackers.get(ms.phase), rear)
                       if (self._real_vehicle() and bool(options.pocket_check) and ms.phase in ("approach", "insert")
-                          and pocket.get("check") is not None) else 0.0)
+                          and pocket.get("check") is not None) else {})
         allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(
             layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps), end_slack_)
         if direction is None:
@@ -6789,7 +6789,7 @@ class MissionCore:
         in the simulation, so its caps stay as before."""
         return float(self.state.get("command_speed", 0.0)) if self._real_vehicle() else 0.0
 
-    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float, end_slack_m: float = 0.0):
+    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float, end_kw: dict | None = None):
         """The layer's limit ``limit_fn(direction, cap)`` over the motion directions a safety check covers (4d-1).
         Returns ``(allowed, why, hold, driving, unsure)``.
 
@@ -6825,7 +6825,7 @@ class MissionCore:
         for d_ in motion:
             if d_ == direction:
                 continue  # the asked direction: the permission's own limit
-            covered, w_ = self._motion_covered(limit_fn, d_, motion, end_slack_m)  # U3e-1b: D5 stages' end slack
+            covered, w_ = self._motion_covered(limit_fn, d_, motion, end_kw)  # U3e-1b: D5 stages' end slack
             if not covered:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
         if hold and isinstance(getattr(self, "state", None), dict):
@@ -6860,18 +6860,20 @@ class MissionCore:
     # 0.021 m/s at a 27.8 ms delay bound) above the end creep (0.02) held the truck 11 mm short for good.
     POCKET_END_SLACK_M = 0.008
 
-    def _end_slack(self, tracker, rear) -> float:
-        """The end slack left at ``rear`` (U3e-1b plan 3): ``POCKET_END_SLACK_M`` less how far the truck already is past
-        its leg's end along that end's heading and the leg's direction -- a layer snapshot installed past the end
-        clips its path there (``leg_ahead``), so its ``path_left`` cannot say it (Codex round 4 P1). None, no leg: 0."""
+    def _end_slack(self, tracker, rear) -> dict:
+        """The layer keywords of the D5 stages' end slack (U3e-1b plan 3): ``path_end_slack_m`` and
+        ``path_end_ahead_m``, the signed distance from ``rear`` to the current leg's end pose along its heading and the
+        leg's direction (negative past it). The layer's own ``path_left`` counts from the progress its snapshot was
+        asked at -- before this tick's progress, or clipped at the end when asked past it -- so the stop is measured
+        from the nearer of the two (Codex rounds 4 P1, 5 P2). No leg: {} (no slack, as before)."""
         if tracker is None:
-            return 0.0
+            return {}
         poses, d_ = tracker.leg_ahead()
         if not len(poses):
-            return 0.0
+            return {}
         ex, ey, eyaw = (float(v) for v in poses[-1])
         ahead = (1 if d_ >= 0 else -1) * ((ex - float(rear[0])) * math.cos(eyaw) + (ey - float(rear[1])) * math.sin(eyaw))
-        return max(0.0, self.POCKET_END_SLACK_M + min(0.0, ahead))
+        return {"path_end_slack_m": self.POCKET_END_SLACK_M, "path_end_ahead_m": float(ahead)}
 
     def _output_motion(self) -> dict:
         """The real loop's own outputs that may still act, by direction: the command in effect and the unconfirmed
@@ -6886,13 +6888,13 @@ class MissionCore:
                 out[int(d_)] = max(out.get(int(d_), 0.0), float(v_))
         return out
 
-    def _motion_covered(self, limit_fn, d_, motion: dict, end_slack_m: float) -> tuple[bool, str]:
+    def _motion_covered(self, limit_fn, d_, motion: dict, end_kw: dict | None) -> tuple[bool, str]:
         """Whether the layer covers the possible motion in direction ``d_``. Without an end slack: one question at
         ``motion[d_]``, as before. With it (U3e-1b, the D5 stages): the loop's own outputs and the command in effect
         at no slack -- a command is held to the path end (Codex round 4 P2: else a 0 request kept slewing on an
         unexpired output) -- and the whole possible motion, the reading's bound included, at the slack."""
         v_ = motion.get(d_, 0.0)
-        if end_slack_m <= 0.0:
+        if not end_kw:
             a_, w_ = limit_fn(d_, v_)
             return (a_ >= v_), w_
         o_ = self._output_motion().get(d_, 0.0)
@@ -6901,7 +6903,7 @@ class MissionCore:
             if a_ < o_:
                 return False, w_
         if v_ > o_:
-            a_, w_ = limit_fn(d_, v_, path_end_slack_m=float(end_slack_m))
+            a_, w_ = limit_fn(d_, v_, **end_kw)
             if a_ < v_:
                 return False, w_
         return True, "ok"
@@ -6911,7 +6913,7 @@ class MissionCore:
     WRITE_MARGIN_S = 0.035
 
     def _pocket_query(self, t: float, rear, kappa: float, requested_speed: float, speed_: SafetySpeed, lift: float,
-                      allowed: float, why: str, layer_fn, end_slack_m: float = 0.0):
+                      allowed: float, why: str, layer_fn, end_kw: dict | None = None):
         """The real truck's pocket query (design 7.1 2-4): every possible direction asked at its own speed (the asked
         one at the larger of the request and its possible speed), at the write margin; a possible motion a direction
         does not allow holds (the asked one's layer asked again at its possible speed too). Returns (allowed, why,
@@ -6932,7 +6934,7 @@ class MissionCore:
                 hold_why = w_ if w_ != "ok" else ("residual_over_allowed" if d_ == req else "pocket_other_direction")
         if hold_why is None and req is not None and motion.get(req, 0.0) > 0.0:
             # outside the region: the asked direction's possible motion too (U3e-1b: with the D5 stages' end slack)
-            covered, lw_ = self._motion_covered(layer_fn, req, motion, end_slack_m)
+            covered, lw_ = self._motion_covered(layer_fn, req, motion, end_kw)
             if not covered:
                 hold_why = lw_ if lw_ != "ok" else "residual_over_allowed"
         if hold_why is not None:

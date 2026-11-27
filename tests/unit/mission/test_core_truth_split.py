@@ -139,7 +139,7 @@ class _Layer:
                                           config=SimpleNamespace(stopping=SimpleNamespace(decel_mps2=2.0)))
 
     def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None,
-              path_end_slack_m=0.0):  # U3e-1b: the real possible-motion check's end slack; same answer here
+              path_end_slack_m=0.0, path_end_ahead_m=None):  # U3e-1b: the D5 end slack; same answer here
         self.calls.append(direction)
         return (0.0, "occupied") if direction == self.blocked_direction else (min(cap_mps, 0.5), "ok")
 

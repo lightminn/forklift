@@ -136,6 +136,20 @@ def test_an_end_slack_moves_only_a_clear_ends_target():
     assert STOP.distance_m(left) - STOP.margin_m <= 0.0005 + 1e-12
 
 
+def test_the_nearer_of_path_left_and_the_callers_distance_counts():
+    """U3e-1b (Codex round 5 P2): the caller's own distance to the end, when nearer than this check's path_left."""
+    perm = DrivePermission(CONFIG)
+    perm.update(snapshot(), np.array([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]), FOOT, BODY, current_pose=(0, 0, 0))
+    near = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                              footprint=FOOT, own_footprint=BODY, speed_cap_mps=0.6, path_end_slack_m=0.008,
+                              path_end_ahead_m=0.004)[0]
+    far = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                             footprint=FOOT, own_footprint=BODY, speed_cap_mps=0.6, path_end_slack_m=0.008,
+                             path_end_ahead_m=0.02)[0]
+    assert math.isclose(near, STOP.speed_for(0.012 + STOP.margin_m))
+    assert math.isclose(far, STOP.speed_for(0.018 + STOP.margin_m))  # path_left 0.01 is the nearer
+
+
 def test_an_end_slack_leaves_a_blocked_or_unfinished_path_as_it_is():
     perm = DrivePermission(CONFIG)
     snap = snapshot()

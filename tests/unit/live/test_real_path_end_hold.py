@@ -78,10 +78,10 @@ class PermissionLayer:
         return self.permission.snapshot
 
     def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None,
-              path_end_slack_m=0.0):
+              path_end_slack_m=0.0, path_end_ahead_m=None):
         self.calls.append((direction, cap_mps, path_end_slack_m))
         ev = t if evidence_s is None else evidence_s
-        kw = {"path_end_slack_m": path_end_slack_m} if path_end_slack_m else {}
+        kw = {"path_end_slack_m": path_end_slack_m, "path_end_ahead_m": path_end_ahead_m} if path_end_slack_m else {}
         return self.permission.allowed_speed(ev, {"low": T}, current_pose=current_pose,
                                              curvature_inv_m=curvature_inv_m, direction=direction, footprint=FOOT,
                                              own_footprint=BODY, speed_cap_mps=cap_mps, **kw)
@@ -96,11 +96,30 @@ def grid(*occupied):
     return GridSnapshot(state, free, T, (0.0, 0.0, 0.0), 0, 1, {"low": T}, -1.0, -3.0, 0.05)
 
 
-def core_at_end(speed, *occupied, phase="insert", left=LEFT):
+class LegTo:
+    """A tracker stand-in whose current leg ends at ``end`` (the core's other reads: as test_core_truth_split's)."""
+
+    def __init__(self, end, direction=1):
+        self.end, self.direction = end, direction
+
+    def leg_ahead(self):
+        return np.array([self.end]), self.direction
+
+    def remaining_to_goal_m(self):
+        return 5.0
+
+    def progress_m(self):
+        return 1.0
+
+
+def core_at_end(speed, *occupied, phase="insert", left=LEFT, leg_left=None):
+    """The truck at the origin, the layer's path ``left`` long; the tracker's leg ends ``leg_left`` ahead (default:
+    the same end)."""
     perm = DrivePermission(CONFIG)
     path = np.array([[0.0, 0.0, 0.0], [left, 0.0, 0.0]])
     perm.update(grid(*occupied), path, FOOT, BODY, current_pose=(0.0, 0.0, 0.0), direction=1)
     c, _ = permission_core(speed, phase=phase, pocket_check=BypassPocketCheck((0.0, 0.0), 1.8, 0.8, 0.0))
+    c.trackers[phase] = LegTo((left if leg_left is None else leg_left, 0.0, 0.0))
     layer = PermissionLayer(perm)
     c.obstacle["layer"] = layer
     return c, layer, perm
@@ -216,30 +235,36 @@ def test_no_request_on_an_unexpired_output_holds():
 
 
 def test_a_forward_request_on_an_unexpired_reverse_output_holds():
-    c, _, _ = core_at_end(standing_speed(), (-0.30, 0.0))  # something behind, within a 0.03 reverse stop
+    c, _, _ = core_at_end(standing_speed())  # an empty grid: the output's own bound is what holds
     c.state.update(command_speed=-0.03, outstanding_motion={-1: 0.03})
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.requested_speed == 0.0 and out.obstacle_hold
 
 
-class LegTo:
-    def __init__(self, end, direction=1):
-        self.end, self.direction = end, direction
-
-    def leg_ahead(self):
-        return np.array([self.end]), self.direction
-
-
-def test_the_slack_is_what_is_left_of_it_past_the_leg_end():
-    """Codex U3e-1b round 4 P1: a snapshot installed past the end clips its path there, so the slack is measured from
-    the leg's end pose along its heading, not from the layer's path_left."""
+def test_the_distance_to_the_end_is_the_legs_end_pose_from_the_rear():
+    """Codex U3e-1b rounds 4 P1, 5 P2: the end's distance is measured from the leg's end pose along its heading and
+    the leg's direction (negative past it), not taken from the layer's path_left alone."""
     c, _, _ = core_at_end(standing_speed())
     slack = MissionCore.POCKET_END_SLACK_M
-    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (-0.02, 0.0, 0.0)) == slack  # before the end: all of it
-    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (0.005, 0.0, 0.0)) == pytest.approx(slack - 0.005)
-    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (0.009, 0.0, 0.0)) == 0.0
-    assert c._end_slack(LegTo((0.0, 0.0, 0.0), -1), (-0.005, 0.0, 0.0)) == pytest.approx(slack - 0.005)  # reversing
-    assert c._end_slack(None, (0.0, 0.0, 0.0)) == 0.0
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (-0.02, 0.0, 0.0)) == {"path_end_slack_m": slack,
+                                                                       "path_end_ahead_m": pytest.approx(0.02)}
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (0.005, 0.0, 0.0))["path_end_ahead_m"] == pytest.approx(-0.005)
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0), -1), (-0.005, 0.0, 0.0))["path_end_ahead_m"] == pytest.approx(-0.005)
+    assert c._end_slack(None, (0.0, 0.0, 0.0)) == {}
+
+
+def test_a_layer_path_left_older_than_the_pose_does_not_widen_the_slack():
+    """Codex U3e-1b round 5 P2: the snapshot's path_left (8.395 mm, asked before this tick's progress) is longer than
+    the truck's own distance to the insert end (8.100 mm). A standing width of about 0.0296 stops within 8.395 + 8 mm
+    but not within 8.100 + 8: held, measured from the nearer."""
+    speed = standing_speed(0.0438)
+    assert 0.0294 < speed.bound_mps < 0.0298
+    assert STOP.speed_for(0.008100 + 0.008 + STOP.margin_m) < speed.bound_mps < STOP.speed_for(0.008395 + 0.008 + STOP.margin_m)
+    c, _, _ = core_at_end(speed, left=0.008395, leg_left=0.0081)
+    out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert out.requested_speed == 0.0 and out.obstacle_hold
+    c, _, _ = core_at_end(speed, left=0.008395)  # the same path_left with the leg agreeing: it creeps on
+    assert not c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None).obstacle_hold
 
 
 def test_past_the_end_the_new_command_is_zero():
@@ -253,7 +278,8 @@ def test_past_the_end_the_new_command_is_zero():
 @pytest.mark.parametrize("slack", [MissionCore.POCKET_END_SLACK_M, 0.0])
 def test_the_bypassed_s10_reaches_the_lift_at_a_27_8_ms_delay_bound(slack, monkeypatch):
     """The real loop rig with the real layer at the operating stop model (scan period 0.12 -> latency 0.52 s), the
-    real encoder model's two directions (no direction evidence) and every STATE's delay bound 27.8 ms (run0's phase):
+    real encoder model's two directions (no direction evidence) and the delay bound the encoder speed adds fixed at
+    27.8 ms (``_speed_delay_s``, run0's phase):
     with the slack the bypassed S10 goes approach -> insert -> lift; without it (the code before U3e-1b) it stalls short
     of an end and ends in a pocket stop."""
     from forklift_core.live import real_autonomy as ra

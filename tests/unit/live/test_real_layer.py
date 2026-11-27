@@ -461,7 +461,9 @@ def test_the_path_end_slack_reaches_the_permission_after_the_layers_own_checks()
     kw = dict(current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.05)
     assert lay.limit(1.0, evidence_s=1.035, **kw) == (0.3, "ok") and "path_end_slack_m" not in seen[-1]
     assert lay.limit(1.0, evidence_s=1.035, path_end_slack_m=0.008, **kw) == (0.3, "ok")
-    assert seen[-1]["path_end_slack_m"] == 0.008
+    assert seen[-1]["path_end_slack_m"] == 0.008 and "path_end_ahead_m" not in seen[-1]
+    lay.limit(1.0, evidence_s=1.035, path_end_slack_m=0.008, path_end_ahead_m=0.005, **kw)
+    assert seen[-1]["path_end_ahead_m"] == 0.005
     n = len(seen)
     assert lay.limit(1.0, evidence_s=1.0 + lay.scan_max_age_s + 0.01, path_end_slack_m=0.008, **kw)[1] == "scan_stale"
     assert len(seen) == n
