@@ -1063,7 +1063,8 @@ class BenchConsole:
         # the state after the attempt: only one received after its last frame (Codex C round 5 P2-2); before any
         # frame went out, the state as it is. An unconfirmed clear has none: a STATE received after the CLEAR may
         # have been made before the board read it (round 6 P2)
-        after = None if st is None or result == "unconfirmed" or (sent and not self._seen_after(last)) \
+        moved = st is not None and (st.boot_id != c.binding.boot_id or self.conn != c.binding.conn)
+        after = None if st is None or moved or result == "unconfirmed" or (sent and not self._seen_after(last)) \
             else _latch_view(st)
         out = {"t": "clear_result", "request_id": c.request_id, "clear": c.rec.dir.name, "result": result,
                "why": why, "cause": c.cause, "before": c.before, "after": after}
@@ -1084,21 +1085,16 @@ class BenchConsole:
         return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and st.boot_id == c.binding.boot_id
                 and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
 
-    def _left_latch(self, c: Clear) -> bool:
-        """This CLEAR taken, seen without its echo: in one boot only a taken CLEAR moves the board out of FAULT or
-        ESTOP (to BOOT, then DISARMED), so a STATE after the CLEAR went out showing another mode is its reply even when
-        a later frame has already replaced ``last_rx_seq`` (Codex C round 6 P2)."""
-        st = self.host.state
-        return (self._seen_after(c.clear_seq) and self.written[c.clear_seq][0] == "CLEAR_FAULTS"
-                and st.boot_id == c.binding.boot_id and self.conn == c.binding.conn
-                and st.mcu_time_us > c.floor_us and st.mode not in (Mode.FAULT, Mode.ESTOP))
-
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
         conn_gen = None if self.host.bench_state is None else self.host.bench_state.conn_gen
         if self.conn != c.binding.conn or conn_gen != c.binding.conn_gen or st is None \
                 or st.boot_id != c.binding.boot_id:
-            self._clear_done(c, "refused", now, "the link or the boot changed: ask again")
+            if c.clear_seq is not None and self.fate.get(c.clear_seq) == "written":
+                # the CLEAR went out whole and its reply was not seen: the board may have taken it (round 7 P2-2)
+                self._clear_done(c, "unconfirmed", now, "the link or the boot changed after the CLEAR, no reply seen")
+            else:
+                self._clear_done(c, "refused", now, "the link or the boot changed: ask again")
             return
         if c.phase == "disarm":
             if c.disarm_seq is None:
@@ -1135,16 +1131,20 @@ class BenchConsole:
                 # still unsent and the bits changed: refused for good, the frame out of the queue (round 3 P2-3)
                 self._clear_done(c, "refused", now, "the fault bits changed before the CLEAR: ask again")
                 return
-            if self._echoed(c.clear_seq, "CLEAR_FAULTS", c) or self._left_latch(c):
+            if self._echoed(c.clear_seq, "CLEAR_FAULTS", c):
                 c.phase, c.phase_ns = "ready", now
             elif now - c.phase_ns > CLEAR_ECHO_S * 1e9:
-                # no reply of this CLEAR: a refusal leaves no echo of its own (reject_reason is the board's last one,
-                # last_rx_seq unchanged), so nothing says what the board did with it (round 6 P2)
+                # no echo of this CLEAR: a refusal leaves none of its own (reject_reason is the board's last one,
+                # last_rx_seq unchanged), and a board out of FAULT may be an old host's late CLEAR (contract 8.4), so
+                # this request is unconfirmed, what was seen only in its why (rounds 6 and 7 P2)
                 if not self._seen_after(c.clear_seq):
                     self._clear_done(c, "unconfirmed", now, "no STATE after the CLEAR")
-                else:
+                elif st.mode in (Mode.FAULT, Mode.ESTOP):
                     self._clear_done(c, "unconfirmed", now, f"no reply to the CLEAR (the board still {st.mode.name}, "
                                                             f"its last reject {st.reject_reason.name})")
+                else:
+                    self._clear_done(c, "unconfirmed", now, f"no echo of this CLEAR; the board is {st.mode.name} "
+                                                            "(a CLEAR worked, not shown to be this one)")
         elif c.phase == "ready":
             if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY:
                 self._clear_done(c, "cleared", now)
