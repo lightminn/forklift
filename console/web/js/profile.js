@@ -320,6 +320,14 @@ export const REJECT = {
   pose_ended: "출발 위치 확인이 끝났습니다 · 세션을 다시 시작하세요",
   // the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4)
   operator_placed_start: "운전자가 놓은 출발 위치입니다 · 자동 운행과 미션은 받지 않습니다(수동 운전만)",
+  // the bench console (docs/plans/2026-11-27-bench-console.md 3.1, B1): bench_run / clear_faults refusals
+  bench_refused: "벤치 실행 요청이 거부됐습니다 · 함께 온 사유를 보세요",
+  board_not_ready: "보드가 아직 준비되지 않았습니다(연결 직후·초기화 중이거나 벤치 이미지가 아님)",
+  busy_running: "이미 벤치 실행 중입니다 · 끝난 뒤 다시 보내세요",
+  busy_clearing: "고장 해제 중입니다 · 끝난 뒤 다시 보내세요",
+  stopped: "정지 확인을 기다리는 중입니다 · 보드가 멈춘 것이 확인되면 다시 보내세요",
+  record_unavailable: "실행 기록을 만들 수 없습니다(디스크·경로 확인) · 기록 없이는 실행하지 않습니다",
+  not_latched: "고장·비상정지 잠금 상태가 아닙니다 · 해제할 것이 없습니다",
   // the wall escape (standing-direction-rule design 4.2)
   escape_no_offer: "탈출 제안이 바뀌었습니다 · 지금 보이는 버튼을 다시 누르세요",
   escape_stale: "탈출 제안이 이전 세대입니다 · 다시 확인하세요",

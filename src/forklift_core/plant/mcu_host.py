@@ -168,6 +168,7 @@ class McuLinkHost:
         # the axis of a commissioning arming's zero COMMISSION: L, except on the bring-up tool's verified fw-single
         # path, which fixes the run's axis with it (partial-parts plan 2026-11-25 PR-B)
         self.commission_zero_axis = 0
+        self.arming_zero_seq: int | None = None  # the seq of the last commissioning arming zero queued
         self.estop_waived = False
         self._outbox: deque[Outgoing] = deque()
         self._auth = _NONE
@@ -228,6 +229,15 @@ class McuLinkHost:
         """Drop the queued DRIVEs (a control generation change). A frame already being written is finished by
         the adapter and tracked when written: cutting it is not a cancel (4a' design D4)."""
         self._drop(lambda o: o.kind in _MOTION, reason)
+
+    def drop_frames(self, kinds, reason: str, *, keep_arming_zero: bool = False) -> None:
+        """Drop the queued frames of these kinds (the bench console's cancelled run, plan 2026-11-27 3.1: its
+        BENCH_SET, BENCH_ARM or motion frames handed back unsent never go out later). ``keep_arming_zero``: the zero
+        this host made for an ARM already answered stays (it closes the arming exchange). The arming exchange is left as
+        it is: ``cancel_arm`` ends that."""
+        kinds = tuple(kinds)
+        self._drop(lambda o: o.kind in kinds and not (keep_arming_zero and o.kind in _MOTION and (
+            o.echo is not None or (self.arming_zero_seq is not None and o.seq == self.arming_zero_seq))), reason)
 
     def _mcu_rule(self) -> bool:
         return self.cfg.gap_clock == "mcu" and bool(self._freshness.rate_verified())
@@ -479,6 +489,7 @@ class McuLinkHost:
                                   s.arm_gen, s.boot_id, s.mcu_time_us)
                 self._auth = _ZERO_PENDING
                 self._enqueue("COMMISSION", zero, now_ns, expires_ns=now_ns + self.cfg.zero_valid_ms * 1_000_000)
+                self.arming_zero_seq = self.last_queued_seq  # the bench console lets it through a stop (plan 3.1)
                 events.append(HostEvent("zero_sent", {"arm_gen": s.arm_gen}))
             elif s.mode == Mode.ARMED and s.arm_gen not in (0, a["prev_gen"]):
                 if s.steering_rad != s.steering_rad or abs(s.steering_rad) == float("inf"):

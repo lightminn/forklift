@@ -274,6 +274,136 @@ class ObserveTtyLink(TtyLink):
             self.on_done(int(out.seq) & 0xFFFF, time.monotonic_ns())
 
 
+class BenchTtyLink(TtyLink):
+    """The bench console's link (docs/plans/2026-11-27-bench-console.md 3, partial writes; 3.1 B1). Every frame's first
+    byte and every continuation pass ``gate(frame, write)`` (the console's send boundary: ``write`` is called under it
+    only when no cancellation came in and the frame's own conditions hold; False = refused). A first byte refused goes back to the host untouched (``unsent``);
+    a continuation refused, or one not finished within ``CONTINUE_S``, is abandoned on this fd and the poison goes out
+    at once -- never a lone delimiter, which would complete the cancelled frame. A poison not out within
+    ``POISON_DEADLINE_S`` loses the link (``LinkLost``: the port is closed and the MCU stops by its command expiry).
+    The base ``TtyLink`` (every other tool) is unchanged."""
+
+    CONTINUE_S = 0.020
+    POISON_DEADLINE_S = 0.050
+
+    def __init__(self, fd: int, *, gate, clock=time.monotonic_ns, writer=os.write) -> None:
+        """``gate`` is required (Codex B1 design round 2 P1-4): a factory binds it at every opening, a reopening too."""
+        super().__init__(fd)
+        if not callable(gate):
+            raise TypeError("BenchTtyLink needs its gate")
+        self.gate = gate
+        self.clock, self._write = clock, writer
+        self._partial_since: int | None = None
+        self._poison_due = False  # an abandonment's poison: written at once, before anything else
+        self._poison_since: int | None = None
+        self.abandoned = 0
+        self.on_event = None  # (dict) -> None: the run record's sink
+
+    def _event(self, ev: dict) -> None:
+        if self.on_event is not None:
+            self.on_event(ev)
+
+    def _os_write(self, data: bytes) -> int | None:
+        """Bytes written, None on EAGAIN; a lost device raises LinkLost."""
+        while True:
+            try:
+                return self._write(self.fd, data)
+            except BlockingIOError:
+                return None
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                if exc.errno in _LOST:
+                    raise LinkLost(str(exc)) from exc
+                raise
+
+    def _passes(self, frame, write) -> bool:
+        return bool(self.gate(frame, write))
+
+    def _poison(self, deadline_ns: int | None = None) -> bool:
+        """The rest of the poison; True once it is all out. Past ``deadline_ns`` (an abandonment's 50 ms) the link is
+        lost before another byte is tried."""
+        while self._poison_at is not None:
+            if deadline_ns is not None and int(self.clock()) > deadline_ns:
+                raise LinkLost("poison_deadline")
+            n = self._os_write(POISON[self._poison_at:])
+            if not n:
+                return False
+            self._poison_at += n
+            if self._poison_at >= len(POISON):
+                self._poison_at = None
+        return True
+
+    def _abandon(self, host: McuLinkHost, now_ns: int, why: str) -> None:
+        host.frame_abandoned(self._cur, self._off, now_ns)
+        self._event({"t": "tx_abandoned", "kind": self._cur.kind, "seq": int(self._cur.seq) & 0xFFFF,
+                     "bytes": int(self._off), "why": why})
+        self._cur, self._off, self._partial_since = None, 0, None
+        self._poison_at, self._poison_due, self._poison_since = 0, True, int(self.clock())
+        self.abandoned += 1
+
+    def pump_writes(self, host: McuLinkHost, now_ns: int, clock=None) -> None:  # noqa: ARG002 -- own clock
+        while True:
+            if self._poison_due:
+                if not self._poison(self._poison_since + int(self.POISON_DEADLINE_S * 1e9)):
+                    return
+                self._poison_due, self._poison_since = False, None
+                self._event({"t": "tx_poison_done"})
+            if self._cur is not None and self._off > 0:
+                if int(self.clock()) - self._partial_since > self.CONTINUE_S * 1e9:
+                    self._abandon(host, now_ns, "continue_overdue")
+                    continue
+                got = {}
+
+                def rest():
+                    # judged again right before the write, under the boundary (round 2 P2-1)
+                    if int(self.clock()) - self._partial_since > self.CONTINUE_S * 1e9:
+                        got["overdue"] = True
+                        return
+                    got["n"] = self._os_write(self._cur.data[self._off:])
+
+                if not self._passes(self._cur, rest) or got.get("overdue"):
+                    self._abandon(host, now_ns, "continue_overdue" if got.get("overdue") else "cancelled")
+                    continue
+                if not got.get("n"):
+                    return  # EAGAIN: the next pass, within CONTINUE_S
+                self._off += got["n"]
+                if self._off == len(self._cur.data):
+                    host.frame_written(self._cur, self._cur_t)
+                    self._done(self._cur)
+                    self._cur, self._off, self._partial_since = None, 0, None
+                continue
+            if self._cur is None:
+                self._cur, self._off = host.next_frame(now_ns), 0
+                if self._cur is None:
+                    return
+            if self._poison_at is not None:
+                # the opening's poison, right before its first frame; the frame goes back untouched meanwhile
+                if not self._poison():
+                    host.unsent(self._cur, now_ns)
+                    self._cur = None
+                    return
+            got = {}
+
+            def first():
+                self._cur_t = int(self.clock())
+                got["n"] = self._os_write(self._cur.data)
+
+            if not self._passes(self._cur, first) or not got.get("n"):
+                host.unsent(self._cur, now_ns)  # not one byte out: judged again next time
+                self._cur = None
+                return
+            self._off = got["n"]
+            if self._off == len(self._cur.data):
+                host.frame_written(self._cur, self._cur_t)
+                self._done(self._cur)
+                self._cur, self._off = None, 0
+                continue
+            self._partial_since = int(self.clock())
+            self._event({"t": "tx_partial", "kind": self._cur.kind, "seq": int(self._cur.seq) & 0xFFFF,
+                         "bytes": int(self._off)})
+
+
 class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 

@@ -33,8 +33,13 @@ FLOWS = {
                                          frozenset({"pick", "retry"}))]),
     # 5c-1 (real safety wiring design 5): the real requests' answers from the loop, its bypass refusal and the core's
     # field recovery verdict
-    (ARBITER, "reason"): ("call", "real_request", [("src/forklift_core/live/real_loop.py",
-                                                    frozenset({"_real_request_"}))]),
+    (ARBITER, "reason"): [("call", "real_request", [("src/forklift_core/live/real_loop.py",
+                                                     frozenset({"_real_request_"}))]),
+                          # the bench console (plan 2026-11-27 3.1): its requests' answers from the tool
+                          ("call", "bench_request", [("tools/bench_console.py",
+                                                      frozenset({"_on_request", "_start_clear"}))])],
+    ("tools/bench_console.py", "self._start_clear(msg, now)"): (
+        "direct", None, [("tools/bench_console.py", frozenset({"_start_clear"}))]),
     ("src/forklift_core/live/real_loop.py", "refusal"): (
         "call", "_bypass_refusal", [("src/forklift_core/live/real_loop.py", frozenset({"_bypass_refusal"}))]),
     # 5c-2 (design 6, 5): the relocalization attempt's refusals
