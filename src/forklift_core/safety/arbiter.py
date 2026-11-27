@@ -34,6 +34,9 @@ RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request"
 # with ArbiterConfig.real_requests (off: not reliable -- no answer, as before), answered by ``real_request``
 REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass",
                "relocalize_confirm", "relocalize_declare")  # the last two: 5c-2 (real safety wiring design 6)
+# docs/plans/2026-11-27-bench-console.md 3.1 (B1): the bench session's requests, leased and reliable only with
+# ArbiterConfig.bench_requests (off: not reliable -- no answer, nothing sent), answered by ``bench_request``
+BENCH_LEASED = ("bench_run", "bench_stop", "bench_disarm", "clear_faults")
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
 RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_reset")
@@ -83,6 +86,8 @@ class ArbiterConfig:
     disarm_ignores_control_gen: bool = False
     # 5c-1 (real safety wiring design 5): the real console requests and recovery go to ``real_request``; off: as before
     real_requests: bool = False
+    # the bench console (plan 2026-11-27 3.1): the bench requests go to ``bench_request``; off: as before
+    bench_requests: bool = False
 
     def __post_init__(self):
         if self.auto_lease_loss not in ("continue", "stop"):
@@ -173,6 +178,8 @@ class Arbiter:
         # 5c-1: (kind, msg, now) -> (refusal reason or None, reply fields), set by the real loop (real_requests on)
         self.real_request = None
         self.real_rejected = None  # 5c-1: (kind, reason) of every refusal of a real request (real_status's last)
+        # the bench console (plan 2026-11-27 3.1): (kind, msg, now) -> (refusal reason or None, reply fields)
+        self.bench_request = None
         self.on_rearmed = None
         # docs/design/2026-11-19-real-loop.md 2.1 (the real executor; None: unused): stop_evidence(now) -> (fresh,
         # standing) read inside observe() when config.external_stop; on_disarm(now) told of every DISARM taken
@@ -329,6 +336,8 @@ class Arbiter:
             return self._reply(kind, request_id)
         if self.config.real_requests and kind in REAL_LEASED + ("recovery",) and "request_token" not in msg:
             return self._reply(kind, request_id, "token_required")  # 5c-1: through the ledger only, not stored
+        if self.config.bench_requests and kind in BENCH_LEASED and "request_token" not in msg:
+            return self._reply(kind, request_id, "token_required")  # one run per request: the ledger only
         if self.config.request_tokens or "request_token" in msg:
             return self._handle_ledger(client_id, kind, msg, now_mono, conn_id)
         # 1. Handled before: its original answer, without running it again or checking generations.
@@ -367,10 +376,12 @@ class Arbiter:
         return result
 
     def _reliable(self) -> tuple:
-        return RELIABLE + REAL_LEASED if self.config.real_requests else RELIABLE
+        return (RELIABLE + (REAL_LEASED if self.config.real_requests else ())
+                + (BENCH_LEASED if self.config.bench_requests else ()))
 
     def _leased(self) -> tuple:
-        return LEASED + REAL_LEASED if self.config.real_requests else LEASED
+        return (LEASED + (REAL_LEASED if self.config.real_requests else ())
+                + (BENCH_LEASED if self.config.bench_requests else ()))
 
     def _real(self, kind, request_id, msg, now_mono):
         """5c-1: the payload checked here (real_requests only -- the shared validate is unchanged), then the loop."""
@@ -382,6 +393,27 @@ class Arbiter:
         reply = self._reply(kind, request_id, reason)
         reply.update(fields or {})  # not unpacked into _reply: the reasons stay readable by the console's scan
         return reply
+
+    def _bench(self, kind, request_id, msg, now_mono):
+        """The bench console (plan 2026-11-27 3.1): the tool judges the payload and runs it."""
+        if self.bench_request is None:
+            return self._reply(kind, request_id, "unsupported")
+        reason, fields = self.bench_request(kind, msg, now_mono)
+        reply = self._reply(kind, request_id, reason)
+        reply.update(fields or {})
+        return reply
+
+    def _on_bench_run(self, client_id, request_id, msg, now_mono):
+        return self._bench("bench_run", request_id, msg, now_mono)
+
+    def _on_bench_stop(self, client_id, request_id, msg, now_mono):
+        return self._bench("bench_stop", request_id, msg, now_mono)
+
+    def _on_bench_disarm(self, client_id, request_id, msg, now_mono):
+        return self._bench("bench_disarm", request_id, msg, now_mono)
+
+    def _on_clear_faults(self, client_id, request_id, msg, now_mono):
+        return self._bench("clear_faults", request_id, msg, now_mono)
 
     def _on_pallet_register(self, client_id, request_id, msg, now_mono):
         return self._real("pallet_register", request_id, msg, now_mono)
@@ -719,6 +751,10 @@ class Arbiter:
 
     def _on_disarm(self, client_id, request_id, msg, now_mono):
         self._disarm(now_mono, "disarm")
+        if self.config.bench_requests:
+            # the bench console (plan 2026-11-27 3.1, Codex B1 design round 2 P1-1): a start request taken before
+            # this DISARM but handled after it carries the old generation and is refused stale
+            self._boundary(now_mono, "disarm")
         if self.on_disarm is not None:
             self.on_disarm(now_mono)  # the real executor's emergency DISARM (AUTO has no `armed` to drop)
         return self._reply("disarm", request_id)
@@ -1012,6 +1048,15 @@ class Arbiter:
 
     def _near_active(self) -> bool:
         return bool(((self.last_safety or {}).get("near") or {}).get("active"))
+
+    def release_stop(self, now_mono: float, reason: str) -> bool:
+        """The bench console (plan 2026-11-27 3.1): once the tool has confirmed a bench stop on the board itself (no
+        stop detector runs there), STOPPED -> PAUSED with one boundary, so the screen does not stay STOPPED. Only with
+        ``bench_requests``; True when it moved."""
+        if not self.config.bench_requests or self.mode != "STOPPED":
+            return False
+        self._set_mode("PAUSED", now_mono, reason)
+        return True
 
     def _on_rearm(self, client_id, request_id, msg, now_mono):
         if self.mode != "STOPPED":
