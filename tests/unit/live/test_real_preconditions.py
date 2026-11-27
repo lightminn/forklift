@@ -199,6 +199,13 @@ def test_lift_and_pallet_settings_are_bound(site):
     (lambda r: r["items"].update(port_review=None), "precondition:C4:port_review:unset"),
     (lambda r: r["items"]["port_review"].update(status="approved_limited"), "precondition:C4:port_review:decision_id"),
     (lambda r: r["items"]["port_review"].update(status="maybe"), "precondition:C4:port_review:status"),
+    # Codex U3e-2: a blank decision is none; C2's safety measurements take no limited approval
+    (lambda r: r["items"]["port_review"].update(status="approved_limited", decision_id="  "),
+     "precondition:C4:port_review:decision_id"),
+    (lambda r: r["items"]["s5_safety"].update(status="approved_limited", decision_id="D-9"),
+     "precondition:C2:s5_safety:status"),
+    (lambda r: r["items"]["iwdg_evidence"].update(status="approved_limited", decision_id="D-9"),
+     "precondition:C2:iwdg_evidence:status"),
     (lambda r: r["items"]["s5_safety"].update(evidence="docs/missing.md"), "precondition:C2:s5_safety:evidence"),
     (lambda r: r["items"]["s5_safety"].update(evidence="/etc/passwd"), "precondition:C2:s5_safety:evidence"),
     (lambda r: r["items"]["s5_safety"].update(evidence="../outside.md"), "precondition:C2:s5_safety:evidence"),
@@ -277,6 +284,7 @@ def _hold(r, rows=None, **kw):
                               {"raised_cm": 20.0, "sag_cm_after_60s": 0.1}]),
      "precondition:C11:lift:sag_over_limit"),
     (lambda r: _hold(r, sag_limit_decision_id=None), "precondition:C11:lift:sag_limit_decision_id"),
+    (lambda r: _hold(r, sag_limit_decision_id=" "), "precondition:C11:lift:sag_limit_decision_id"),  # U3e-2
     (lambda r: _hold(r, rows=[{"raised_cm": 8.0, "sag_cm_after_60s": 0.1, "worst": True, "worst_reason": "x"},
                               {"raised_cm": 60.0, "sag_cm_after_60s": 0.1}]),
      "precondition:C11:lift:hold_no_target_height"),

@@ -461,7 +461,15 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     try:
         geometry = mission_geometry(urdf_src, cfg.pallet_depth_m, cfg.pallet_width_m)
         axle_to_tip, rear_offset, carriage = chassis_reference(urdf_src)
-        layer_cfg = yaml.safe_load(Path(paths.layer).read_text())
+        def bound_yaml(path, name):
+            # the operating run: parsed from the very bytes whose hash the assembly's judgement binds -- a file
+            # replaced and put back while preparing cannot leave its middle version here (Codex U3e-2 P2-1)
+            data = Path(path).read_bytes()
+            if site is not None and hashlib.sha256(data).hexdigest() != hashes_at_start.get(name):
+                raise AssemblyRefused([f"files_changed_while_preparing:{name}"])
+            return yaml.safe_load(data.decode("utf-8"))
+
+        layer_cfg = bound_yaml(paths.layer, "layer")
         if replay is not None:
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
         elif not paths.hil:
@@ -472,9 +480,13 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                 raise AssemblyRefused(["files_changed_while_preparing:lidar"])
             real_lidar = lidar_config_from(yaml.safe_load(lidar_bytes.decode("utf-8")))
             layer_cfg = real_layer_cfg(layer_cfg, real_lidar)
-        budget = yaml.safe_load(Path(paths.budget).read_text())
+        budget = bound_yaml(paths.budget, "budget")
         budget_s = float(budget["latency_budget"]["seconds"])
         overdue_end_s = float(budget["overdue_end"]["seconds"])
+        if site is not None and not (math.isfinite(budget_s) and budget_s > 0.0
+                                     and math.isfinite(overdue_end_s) and overdue_end_s > 0.0):
+            # a .nan or non-positive limit would never end a sustained overdue (Codex U3e-2 P2-3)
+            raise AssemblyRefused(["precondition:C13:budget:values_invalid"])
     except AssemblyRefused:
         raise
     except Exception as err:  # noqa: BLE001 -- a malformed model or layer file is structural

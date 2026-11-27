@@ -424,7 +424,7 @@ def test_the_repository_stop_model_keeps_a_valid_site_closed_and_nothing_reaches
             "precondition:C13:layer:permission.stop_model.latency_s:unmeasured",
             "precondition:C13:layer:permission.stop_model.decel_mps2:unmeasured"], _explain(run)
         assert sum(w["n"] for w in run.writes()) == 0, run.writes()[:5]
-        assert run.port is None  # no console was served
+        assert '"console"' not in "".join(run.lines), _explain(run)  # no console start line (Codex U3e-2 P3)
 
 
 # --- the operator's steps on the REAL console ---------------------------------------------------------------------

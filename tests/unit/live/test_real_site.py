@@ -334,3 +334,34 @@ def test_a_rotated_grid_origin_is_a_structured_refusal(tmp_path):
     paths.registry.write_text(yaml.safe_dump({"bundles": [p["row"]]}))
     [why] = refused(paths)
     assert why.startswith("precondition:site_bundle:bundle_grid:")
+
+
+@pytest.mark.parametrize("name", ["layer", "budget"])
+def test_the_operating_layer_and_budget_are_parsed_from_the_bytes_hashed_at_the_start(tmp_path, monkeypatch, name):
+    """Codex U3e-2 P2-1: a layer or budget file replaced and put back while preparing (A hashed at the start, B parsed,
+    A at the end) refuses the run instead of leaving B's stop model in the prep."""
+    paths, _ = make_site(tmp_path)
+    real_sha = rr._sha  # noqa: SLF001
+    target = str(getattr(paths, name))
+    calls = {"n": 0}
+
+    def fake(path):
+        h = real_sha(path)
+        if str(path) == target:
+            calls["n"] += 1
+            return "0" * 64 if calls["n"] == 1 else h
+        return h
+
+    monkeypatch.setattr(rr, "_sha", fake)
+    assert f"files_changed_while_preparing:{name}" in refused(paths)
+
+
+def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
+    """Codex U3e-2 P2-3: a .nan (or non-positive) overdue_end would hold layer_overdue for good."""
+    import yaml
+
+    paths, _ = make_site(tmp_path)
+    b = yaml.safe_load(Path(paths.budget).read_text())
+    b["overdue_end"]["seconds"] = float("nan")
+    Path(paths.budget).write_text(yaml.safe_dump(b))
+    assert "precondition:C13:budget:values_invalid" in refused(paths)

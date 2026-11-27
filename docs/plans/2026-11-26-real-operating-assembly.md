@@ -145,10 +145,10 @@
   - 첫 `STATE` 의 보드 사실과 USB 제품 문자열.
   - 사람이 확인하는 항목의 기록 `config/real/s10_preconditions.yaml`.
 - **기록 형식**(`schema: s10_preconditions/1`): 항목마다 다음을 둔다.
-  - `status`: `pass` | `approved_limited` | `null`
+  - `status`: `pass` | `approved_limited` | `null` — C2(`s5_safety`·`iwdg_evidence`)는 `pass` 만(U3e-2, S10 절차의 'S5 안전 대책 실측 통과')
   - `evidence`: 저장소 안 문서 경로, 필수
   - `date`
-  - `decision_id`: `approved_limited` 이면 필수
+  - `decision_id`: `approved_limited` 이면 필수(공백뿐인 문자열은 없는 것으로 본다)
   - `binds`: 그 확인이 성립하는 대상
 
   `binds` 의 대상과 조립 때 대조하는 것은 다음과 같다. 어긋나면 그 항목이 무효다(Codex 2 회차 P1-4·P1-5).

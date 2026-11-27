@@ -33,6 +33,8 @@ REPO = Path(__file__).resolve().parents[3]
 RECORD_YAML = REPO / "config" / "real" / "s10_preconditions.yaml"
 SCHEMA = "s10_preconditions/1"
 STATUSES = ("pass", "approved_limited")
+# items a limited approval cannot stand in for: C2's safety measurements must pass (S10 procedure, Codex U3e-2 P1)
+PASS_ONLY = frozenset({"s5_safety", "iwdg_evidence"})
 CORRIDOR_HALF_M = 0.10  # plan 2.4: the approved corridor's half width (the coverage record is bound to it)
 APPROVED_CASES = ["A"]  # S10: case A only (plan 2.4)
 
@@ -231,6 +233,11 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
+def _named(v) -> bool:
+    """A decision id: a non-blank string (Codex U3e-1 P2-5 for exceptions, U3e-2 P2-2 for C4 and C11)."""
+    return isinstance(v, str) and bool(v.strip())
+
+
 def _finite(*vals) -> bool:
     try:
         return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
@@ -343,9 +350,9 @@ def _item_reasons(f: Facts, name: str) -> list:
     item = (f.record.get("items") or {}).get(name)
     if item is None or item.get("status") is None:
         return [f"{tag}:unset"]
-    if item.get("status") not in STATUSES:
+    if item.get("status") not in STATUSES or (name in PASS_ONLY and item.get("status") != "pass"):
         return [f"{tag}:status"]
-    if item.get("status") == "approved_limited" and not item.get("decision_id"):
+    if item.get("status") == "approved_limited" and not _named(item.get("decision_id")):
         return [f"{tag}:decision_id"]
     if not _inside_repo(f, item.get("evidence")):
         return [f"{tag}:evidence"]
@@ -479,7 +486,7 @@ def _lift_checks(f: Facts, lift: dict) -> list:
             out.append("precondition:C11:lift:hold_no_worst_height")
         if any(r["sag_cm_after_60s"] > limit for r in rows):
             out.append("precondition:C11:lift:sag_over_limit")
-    if not lift.get("sag_limit_decision_id"):
+    if not _named(lift.get("sag_limit_decision_id")):
         out.append("precondition:C11:lift:sag_limit_decision_id")
     org = lift.get("origin") or {}
     floor, tape, at_target = (org.get("state_lift_m_at_floor"), org.get("tape_cm_at_target"),
