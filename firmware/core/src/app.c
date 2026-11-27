@@ -24,6 +24,12 @@ bool fw_app_init(fw_app *app, const fw_hal *hal, const drive_config *cfg, uint32
     link_rx_init(&app->rx);
     app->state_period_us = (uint64_t)state_period_ms * 1000u;
     app->next_state_us = app->state_period_us;
+#if defined(FW_CORE_BENCH)
+    if (hal->link_conn != 0) {
+        bool busy = false;
+        app->conn_seen = hal->link_conn(hal->ctx, &busy);
+    }
+#endif
     return true;
 }
 
@@ -36,6 +42,30 @@ static void send_state(fw_app *app)
     drive_fill_state(&app->d, &m.u.state);
     m.u.state.rx_errors = app->rx.errors;
     m.u.state.cycle_overruns = app->cycle_overruns;
+#if defined(FW_CORE_BENCH)
+    if (app->d.cfg->bench_build) {
+        /* The pair goes as one write, so the link takes both or neither (contract 8). */
+        uint8_t pair[2u * LINK_WIRE_MAX];
+        size_t n1 = link_encode(&m, pair, LINK_WIRE_MAX);
+        link_msg b;
+        memset(&b, 0, sizeof b);
+        b.type = LINK_BENCH_STATE;
+        b.seq = (uint16_t)(app->tx_seq + 1u);
+        drive_fill_bench_state(&app->d, &b.u.bench_state);
+        b.u.bench_state.pair_seq = app->tx_seq;
+        b.u.bench_state.dropped_pairs = app->bench_dropped;
+        size_t n2 = n1 > 0 ? link_encode(&b, pair + n1, LINK_WIRE_MAX) : 0;
+        if (n2 > 0 && app->hal->link_write_frame(app->hal->ctx, pair, n1 + n2)) {
+            app->tx_seq = (uint16_t)(app->tx_seq + 2u);
+        } else {
+            app->state_drops++;
+            if (app->bench_dropped < UINT16_MAX) {
+                app->bench_dropped++;
+            }
+        }
+        return;
+    }
+#endif
     uint8_t wire[LINK_WIRE_MAX];
     size_t len = link_encode(&m, wire, sizeof wire);
     if (len > 0 && app->hal->link_write_frame(app->hal->ctx, wire, len)) {
@@ -44,6 +74,33 @@ static void send_state(fw_app *app)
         app->state_drops++;
     }
 }
+
+#if defined(FW_CORE_BENCH)
+/* The bench image's connection boundary (contract 8): while a change is in progress no byte is read; once it
+   is done, whatever the ring still holds from the old connection and the half frame are dropped, then the
+   core ends the arming and refuses bench commands that echo an older STATE. false: read nothing this tick. */
+static bool link_boundary(fw_app *app)
+{
+    const fw_hal *hal = app->hal;
+    if (hal->link_conn == 0) {
+        return true;
+    }
+    bool busy = false;
+    uint32_t gen = hal->link_conn(hal->ctx, &busy);
+    if (busy) {
+        return false;
+    }
+    if (gen != app->conn_seen) {
+        app->conn_seen = gen;
+        uint8_t junk[LINK_READ_CHUNK];
+        while (hal->link_read(hal->ctx, junk, sizeof junk) == sizeof junk) {
+        }
+        link_rx_init(&app->rx);
+        drive_link_boundary(&app->d);
+    }
+    return true;
+}
+#endif
 
 void fw_app_tick(fw_app *app)
 {
@@ -71,7 +128,13 @@ void fw_app_tick(fw_app *app)
     drive_begin(&app->d, &in);
 
     uint8_t buf[LINK_READ_CHUNK];
-    for (unsigned k = 0; k < LINK_READ_CHUNKS_PER_TICK; k++) {
+    unsigned chunks = LINK_READ_CHUNKS_PER_TICK;
+#if defined(FW_CORE_BENCH)
+    if (!link_boundary(app)) {
+        chunks = 0;
+    }
+#endif
+    for (unsigned k = 0; k < chunks; k++) {
         size_t n = hal->link_read(hal->ctx, buf, sizeof buf);
         for (size_t i = 0; i < n; i++) {
             link_msg m;

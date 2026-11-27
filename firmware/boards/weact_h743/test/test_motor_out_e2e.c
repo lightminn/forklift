@@ -98,6 +98,7 @@ static const fw_hal HAL = {0,
                            hal_spi_start,
                            hal_spi_take,
                            hal_kick,
+                           0,
                            0};
 
 static void tick(void)

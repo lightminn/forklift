@@ -12,6 +12,12 @@
 #else
 #define SINGLE_AXIS(c) false
 #endif
+/* The bench image (contract 8) is compiled in only with FW_CORE_BENCH. */
+#if defined(FW_CORE_BENCH)
+#define BENCH(c) ((c)->bench_build)
+#else
+#define BENCH(c) false
+#endif
 #define HALF_RANGE_MARGIN 16383.0f /* half of the 16-bit difference's half range */
 
 /* Bits cleared by a successful ARM rather than by CLEAR_FAULTS: the expiry and commissioning
@@ -83,6 +89,10 @@ bool drive_config_valid(const drive_config *c)
     if (SINGLE_AXIS(c) && (!c->commission_build || c->outputs_locked || c->hil_plant)) {
         return false;
     }
+    /* The bench image: an open commissioning build only, never single-axis at the same time. */
+    if (BENCH(c) && (!c->commission_build || c->outputs_locked || c->hil_plant || SINGLE_AXIS(c))) {
+        return false;
+    }
     if (c->commission_build) {
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             if (c->commission_duty_max_e4[ch] == 0 || c->commission_duty_max_e4[ch] > 10000u ||
@@ -117,10 +127,86 @@ bool drive_config_valid(const drive_config *c)
     return true;
 }
 
+/* ---- bench image (contract 8) --------------------------------------------------------- */
+
+/* The run ends (a run that drove gets its result, kept until the next BENCH_ARM consumes a new SET). Only
+   the first cause is recorded. */
+static void bench_end(drive *d, uint8_t reason)
+{
+#if defined(FW_CORE_BENCH)
+    if (!BENCH(d->cfg) || !d->run_active || d->run_drive == DRIVE_BENCH_RUN_ENDED) {
+        return;
+    }
+    if (d->run_drive == DRIVE_BENCH_RUN_DRIVING) {
+        d->res_run_id = d->run_id;
+        d->res_stop = reason;
+        d->res_axis = d->run_axis;
+        d->res_source = d->run_source;
+        d->res_blocked = 0;
+    }
+    d->run_drive = DRIVE_BENCH_RUN_ENDED;
+#else
+    (void)d;
+    (void)reason;
+#endif
+}
+
+/* The run's overrides end with its arming: the build's defaults again. */
+static void bench_close_if_left(drive *d)
+{
+#if defined(FW_CORE_BENCH)
+    if (!BENCH(d->cfg) || !d->run_active ||
+        d->mode == DRIVE_MODE_ARMED || d->mode == DRIVE_MODE_STOPPING) {
+        return;
+    }
+    d->run_drive = DRIVE_BENCH_RUN_ENDED;
+    d->run_active = false;
+    d->run_bypass = 0;
+#else
+    (void)d;
+#endif
+}
+
+static bool bench_bypassed(const drive *d, uint32_t bit)
+{
+#if defined(FW_CORE_BENCH)
+    return BENCH(d->cfg) && d->run_active && (d->run_bypass & bit) != 0;
+#else
+    (void)d;
+    (void)bit;
+    return false;
+#endif
+}
+
+/* The commissioning limits in force: the build's, or the bench run's. */
+static uint32_t cm_duty_max_e4(const drive *d, uint8_t ch)
+{
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->run_active) {
+        return d->run_duty_max_e4[ch];
+    }
+#endif
+    return d->cfg->commission_duty_max_e4[ch];
+}
+
+static uint32_t cm_time_ms(const drive *d, uint8_t ch)
+{
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->run_active) {
+        return d->run_time_ms[ch];
+    }
+#endif
+    return d->cfg->commission_time_ms[ch];
+}
+
 /* ---- faults ------------------------------------------------------------------------- */
 
 static void enter_fault(drive *d, uint32_t bits)
 {
+    bench_end(d, DRIVE_BENCH_STOP_FAULT); /* the result only: the outputs and the latch are FAULT's own */
+#if defined(FW_CORE_BENCH)
+    d->bset_valid = false;
+#endif
     d->latched |= bits;
     if (d->mode != DRIVE_MODE_ESTOP) {
         d->mode = DRIVE_MODE_FAULT;
@@ -447,9 +533,15 @@ static uint32_t driving_sensor_bits(const drive *d)
         return bits & keep; /* M and H drive without their KTH: the bits stay in STATE only */
     }
     if (d->cm_axis == DRIVE_CH_M) {
-        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID | DRIVE_FAULT_STEER_OUT_OF_RANGE;
+        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID;
+        if (!bench_bypassed(d, DRIVE_BENCH_STEER_RANGE)) {
+            keep |= DRIVE_FAULT_STEER_OUT_OF_RANGE;
+        }
     } else if (d->cm_axis == DRIVE_CH_H) {
-        keep |= DRIVE_FAULT_LIFT_SENSOR_INVALID | DRIVE_FAULT_LIFT_OUT_OF_RANGE;
+        keep |= DRIVE_FAULT_LIFT_SENSOR_INVALID;
+        if (!bench_bypassed(d, DRIVE_BENCH_LIFT_RANGE)) {
+            keep |= DRIVE_FAULT_LIFT_OUT_OF_RANGE;
+        }
     }
     return bits & keep;
 }
@@ -573,7 +665,7 @@ static bool commission_over_limit(const drive *d)
        cm_on still holds until a zero-output cycle (design 2026-11-25 1.1, Codex S P1-1). */
     return d->cfg->commission_build && d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT &&
            d->time_us - d->cm_on_since_us >
-               (uint64_t)d->cfg->commission_time_ms[d->cm_on_axis] * US_PER_MS;
+               (uint64_t)cm_time_ms(d, d->cm_on_axis) * US_PER_MS;
 }
 
 /* After the commissioning time limit: the limit bit, and no ARM before stop_grace_ms of zero
@@ -619,6 +711,7 @@ void drive_begin(drive *d, const drive_inputs *in)
         bool expired = d->has_deadline && d->time_us > d->deadline_us;
         bool over = cm_over;
         if (expired || over) {
+            bench_end(d, expired ? DRIVE_BENCH_STOP_COMMAND_TIMEOUT : DRIVE_BENCH_STOP_TIME_LIMIT);
             enter_stopping(d, (expired ? DRIVE_FAULT_COMMAND_TIMEOUT : 0u) |
                                   (over ? DRIVE_FAULT_COMMISSION_TIME_LIMIT : 0u));
         }
@@ -651,12 +744,14 @@ void drive_begin(drive *d, const drive_inputs *in)
     }
     d->estop_now = in->estop_active;
     if (in->estop_active) {
+        bench_end(d, DRIVE_BENCH_STOP_ESTOP); /* the result only: ESTOP keeps its own outputs */
         d->latched |= DRIVE_FAULT_ESTOP_INPUT;
         d->mode = DRIVE_MODE_ESTOP;
     }
 
     step_driver_init(d, in);
     step_status_poll(d);
+    bench_close_if_left(d);
     refresh_flags(d);
     d->first_cycle = false;
 }
@@ -708,13 +803,24 @@ static uint8_t arm_check(const drive *d, const link_arm *a)
     return DRIVE_REJECT_NONE;
 }
 
+static void arm_accept(drive *d, uint64_t echo_mcu_time_us, uint16_t seq);
+
 static void handle_arm(drive *d, const link_msg *m)
 {
+    if (BENCH(d->cfg)) {
+        d->reject_reason = DRIVE_REJECT_WRONG_BUILD; /* the bench image arms with BENCH_ARM only */
+        return;
+    }
     uint8_t why = arm_check(d, &m->u.arm);
     d->reject_reason = why;
     if (why != DRIVE_REJECT_NONE) {
         return;
     }
+    arm_accept(d, m->u.arm.echo_mcu_time_us, m->seq);
+}
+
+static void arm_accept(drive *d, uint64_t echo_mcu_time_us, uint16_t seq)
+{
     d->arm_gen = d->arm_gen == 0xFFFFu ? 1u : (uint16_t)(d->arm_gen + 1u);
     d->mode = DRIVE_MODE_ARMED;
     d->latched &= ~ARM_CLEARS;
@@ -724,8 +830,8 @@ static void handle_arm(drive *d, const link_msg *m)
     d->limited = false;
     /* An ARM with no DRIVE behind it expires like a command. */
     d->has_deadline = true;
-    d->deadline_us = m->u.arm.echo_mcu_time_us + (uint64_t)d->cfg->command_timeout_ms * US_PER_MS;
-    d->last_rx_seq = m->seq;
+    d->deadline_us = echo_mcu_time_us + (uint64_t)d->cfg->command_timeout_ms * US_PER_MS;
+    d->last_rx_seq = seq;
 }
 
 static float clip(float x, float lo, float hi, bool *limited)
@@ -799,9 +905,15 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
     /* Integer e4 against the picked axis's limit: a float x 10000 comparison misreads the edge. */
     int32_t duty = c->duty_e4;
     uint32_t duty_abs = (uint32_t)(duty < 0 ? -duty : duty);
-    if (duty_abs > d->cfg->commission_duty_max_e4[c->axis]) {
+    if (duty_abs > cm_duty_max_e4(d, c->axis)) {
         return DRIVE_REJECT_BAD_VALUE;
     }
+#if defined(FW_CORE_BENCH)
+    /* A bench run drives its own axis only; a zero on another axis (the arming's L(0)) is preparation. */
+    if (BENCH(d->cfg) && d->run_active && duty != 0 && c->axis != d->run_axis) {
+        return DRIVE_REJECT_BAD_VALUE;
+    }
+#endif
     uint8_t why =
         command_check(d, m->seq, c->boot_id, c->arm_gen, c->echo_mcu_time_us, window_ms, duty != 0);
     if (why != DRIVE_REJECT_NONE) {
@@ -827,8 +939,10 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
         }
         return DRIVE_REJECT_NONE; /* M and H need no KTH here */
     }
-    if ((c->axis == DRIVE_CH_M && !axis_ok(&d->steer)) ||
-        (c->axis == DRIVE_CH_H && !axis_ok(&d->lift))) {
+    if ((c->axis == DRIVE_CH_M && !(d->steer.valid && (!d->steer.out_of_range ||
+                                                       bench_bypassed(d, DRIVE_BENCH_STEER_RANGE)))) ||
+        (c->axis == DRIVE_CH_H && !(d->lift.valid && (!d->lift.out_of_range ||
+                                                      bench_bypassed(d, DRIVE_BENCH_LIFT_RANGE))))) {
         return DRIVE_REJECT_SENSOR_INVALID; /* the picked axis must be measurable */
     }
     return DRIVE_REJECT_NONE;
@@ -840,8 +954,30 @@ static void handle_commission(drive *d, const link_msg *m)
     uint32_t window_ms = window_for(d, c->valid_after_echo_ms);
     d->reject_reason = commission_check(d, m, window_ms);
     if (d->reject_reason != DRIVE_REJECT_NONE) {
+#if defined(FW_CORE_BENCH)
+        if (BENCH(d->cfg) && d->run_drive == DRIVE_BENCH_RUN_ENDED && d->res_run_id == d->run_id &&
+            d->res_blocked < UINT16_MAX) {
+            d->res_blocked++; /* refused after the run that drove had ended */
+        }
+#endif
         return;
     }
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->run_active) {
+        if (c->duty_e4 == 0 && d->run_drive == DRIVE_BENCH_RUN_DRIVING) {
+            /* The run's end (plan A1): the MCU stops it itself; the deadline is not extended. */
+            d->have_drive_seq = true;
+            d->last_drive_seq = m->seq;
+            d->last_rx_seq = m->seq;
+            bench_end(d, DRIVE_BENCH_STOP_END_ZERO);
+            enter_stopping(d, 0);
+            return;
+        }
+        if (c->duty_e4 != 0 && d->run_drive == DRIVE_BENCH_RUN_PREP) {
+            d->run_drive = DRIVE_BENCH_RUN_DRIVING;
+        }
+    }
+#endif
     if (d->cm_axis != c->axis && d->cm_axis < 2) {
         d->wheel_duty[d->cm_axis] = 0.0f; /* the old wheel restarts from 0 if picked again */
     }
@@ -911,6 +1047,136 @@ static void handle_clear(drive *d, const link_msg *m)
     start_driver_init(d, true);
 }
 
+#if defined(FW_CORE_BENCH)
+/* A bench command's echo: fresh, and of a STATE sent after the last connection change. */
+static bool bench_echo_ok(const drive *d, uint64_t echo)
+{
+    return echo >= d->boundary_us && echo_fresh(d, echo, d->cfg->command_timeout_ms);
+}
+
+static uint8_t bench_set_check(const drive *d, const link_bench_set *b)
+{
+    const uint32_t max_ms = 0x7FFFFFFFu / US_PER_MS; /* drive_config_valid's ceiling */
+    if (!BENCH(d->cfg)) {
+        return DRIVE_REJECT_WRONG_BUILD;
+    }
+    if (d->mode != DRIVE_MODE_DISARMED || d->cm_on) {
+        return DRIVE_REJECT_NOT_DISARMED;
+    }
+    if (b->boot_id != d->boot_id) {
+        return DRIVE_REJECT_BOOT_MISMATCH;
+    }
+    if (!bench_echo_ok(d, b->echo_mcu_time_us)) {
+        return DRIVE_REJECT_STALE_ECHO;
+    }
+    /* A1a: duty runs without a measurement source and without a distance stop. */
+    if (b->run_id == 0 || b->mode != DRIVE_BENCH_MODE_DUTY || b->axis >= DRIVE_CH_COUNT ||
+        b->source != DRIVE_BENCH_SOURCE_NONE || (b->count_sign != 1 && b->count_sign != -1) ||
+        (b->bypass & ~DRIVE_BENCH_KNOWN) != 0 || b->stop_counts != 0) {
+        return DRIVE_REJECT_BAD_VALUE;
+    }
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        if (b->duty_max_e4[ch] == 0 || b->duty_max_e4[ch] > 10000u || b->time_ms[ch] == 0 ||
+            b->time_ms[ch] > max_ms) {
+            return DRIVE_REJECT_BAD_VALUE;
+        }
+    }
+    return DRIVE_REJECT_NONE;
+}
+
+static void handle_bench_set(drive *d, const link_msg *m)
+{
+    d->reject_reason = bench_set_check(d, &m->u.bench_set);
+    if (d->reject_reason != DRIVE_REJECT_NONE) {
+        return;
+    }
+    d->bset = m->u.bench_set;
+    d->bset_valid = true;
+    d->bset_at_us = d->time_us;
+    d->bset_gen = d->conn_gen;
+    d->last_rx_seq = m->seq;
+}
+
+static void handle_bench_arm(drive *d, const link_msg *m)
+{
+    const link_bench_arm *a = &m->u.bench_arm;
+    if (!BENCH(d->cfg)) {
+        d->reject_reason = DRIVE_REJECT_WRONG_BUILD;
+        return;
+    }
+    link_arm as_arm = {.boot_id = a->boot_id, .echo_mcu_time_us = a->echo_mcu_time_us};
+    uint8_t why = arm_check(d, &as_arm);
+    if (why == DRIVE_REJECT_NONE && a->echo_mcu_time_us < d->boundary_us) {
+        why = DRIVE_REJECT_STALE_ECHO;
+    }
+    /* The run's BENCH_SET: on this connection, unconsumed, unexpired, with this run id. */
+    if (why == DRIVE_REJECT_NONE &&
+        (!d->bset_valid || d->bset.run_id != a->run_id || d->bset_gen != d->conn_gen ||
+         d->time_us - d->bset_at_us > (uint64_t)DRIVE_BENCH_SET_TTL_MS * US_PER_MS)) {
+        why = DRIVE_REJECT_BAD_VALUE;
+    }
+    d->reject_reason = why;
+    if (why != DRIVE_REJECT_NONE) {
+        return;
+    }
+    arm_accept(d, a->echo_mcu_time_us, m->seq);
+    d->run_active = true;
+    d->run_id = d->bset.run_id;
+    d->run_axis = d->bset.axis;
+    d->run_mode = d->bset.mode;
+    d->run_source = d->bset.source;
+    d->run_drive = DRIVE_BENCH_RUN_PREP;
+    d->run_bypass = d->bset.bypass;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        d->run_duty_max_e4[ch] = d->bset.duty_max_e4[ch];
+        d->run_time_ms[ch] = d->bset.time_ms[ch];
+    }
+    d->res_run_id = 0; /* a new run consumed: the last result is gone */
+    d->res_stop = DRIVE_BENCH_STOP_NONE;
+    d->res_axis = d->res_source = 0;
+    d->res_blocked = 0;
+    d->bset_valid = false;
+}
+
+void drive_link_boundary(drive *d)
+{
+    if (!BENCH(d->cfg)) {
+        return;
+    }
+    d->conn_gen++;
+    d->boundary_us = d->time_us;
+    d->bset_valid = false;
+    if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
+        bench_end(d, DRIVE_BENCH_STOP_LINK_BOUNDARY);
+        enter_stopping(d, 0);
+    }
+    refresh_flags(d);
+}
+
+static uint16_t sat_age_ms(void)
+{
+    return 0xFFFFu; /* A1a: no measurement source, so no evidence yet */
+}
+
+void drive_fill_bench_state(const drive *d, link_bench_state *s)
+{
+    memset(s, 0, sizeof *s);
+    s->run_id = d->run_id;
+    s->result_run_id = d->res_run_id;
+    s->axis = d->run_axis;
+    s->source = d->run_source;
+    s->stop_reason = d->res_stop;
+    s->blocked = d->res_blocked;
+    s->evidence_age_ms = sat_age_ms();
+    s->end_evidence_age_ms = sat_age_ms();
+    s->mcu_bypass = (uint8_t)(d->run_active ? d->run_bypass : 0u);
+    s->drive = (uint8_t)((d->run_drive & 0x03u) | ((d->run_mode & 0x03u) << 4));
+    s->conn_gen = d->conn_gen;
+    s->result_axis = d->res_axis;
+    s->result_source = d->res_source;
+}
+#endif
+
 void drive_handle(drive *d, const link_msg *m)
 {
     switch (m->type) {
@@ -921,7 +1187,11 @@ void drive_handle(drive *d, const link_msg *m)
         handle_drive(d, m);
         break;
     case LINK_DISARM:
+#if defined(FW_CORE_BENCH)
+        d->bset_valid = false;
+#endif
         if (driving(d)) {
+            bench_end(d, DRIVE_BENCH_STOP_DISARM);
             d->mode = DRIVE_MODE_DISARMED;
             d->has_deadline = false;
             reset_control(d);
@@ -934,9 +1204,18 @@ void drive_handle(drive *d, const link_msg *m)
     case LINK_COMMISSION:
         handle_commission(d, m);
         break;
+#if defined(FW_CORE_BENCH)
+    case LINK_BENCH_SET:
+        handle_bench_set(d, m);
+        break;
+    case LINK_BENCH_ARM:
+        handle_bench_arm(d, m);
+        break;
+#endif
     default:
         break;
     }
+    bench_close_if_left(d);
     refresh_flags(d);
 }
 

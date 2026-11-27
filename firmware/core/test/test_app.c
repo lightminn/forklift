@@ -95,6 +95,12 @@ typedef struct {
     bool refuse_every_other;
     int write_calls;
     int kicks;
+    /* bench image (contract 8) */
+    uint32_t conn_gen;
+    bool conn_busy;
+    uint16_t last_state_seq;
+    link_bench_state last_bench;
+    int bench_pairs, bench_unpaired;
 } board;
 
 static board B;
@@ -149,13 +155,35 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
         return false;
     }
     link_msg m;
+    bool state_in_this_write = false;
     for (size_t i = 0; i < len; i++) {
-        if (link_rx_feed(&b->host_rx, frame[i], &m) && m.type == LINK_STATE) {
+        if (!link_rx_feed(&b->host_rx, frame[i], &m)) {
+            continue;
+        }
+        if (m.type == LINK_STATE) {
             b->last_state = m.u.state;
+            b->last_state_seq = m.seq;
             b->states++;
+            state_in_this_write = true;
+        } else if (m.type == LINK_BENCH_STATE) {
+            b->last_bench = m.u.bench_state;
+            /* its STATE came in the same write, right before it, with the seq it names */
+            if (state_in_this_write && m.u.bench_state.pair_seq == b->last_state_seq &&
+                m.seq == (uint16_t)(b->last_state_seq + 1u)) {
+                b->bench_pairs++;
+            } else {
+                b->bench_unpaired++;
+            }
         }
     }
     return true;
+}
+
+static uint32_t hal_link_conn(void *ctx, bool *busy)
+{
+    board *b = ctx;
+    *busy = b->conn_busy;
+    return b->conn_gen;
 }
 
 static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx, uint32_t tag)
@@ -210,7 +238,12 @@ static void hal_kick(void *ctx)
 
 static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
-    hal_spi_take, hal_kick, 0};
+    hal_spi_take, hal_kick, 0, 0};
+
+static void hal_kick(void *ctx);
+static const fw_hal HAL_BENCH = {&B,           hal_now,  hal_read, hal_write,    hal_link_read,
+                                 hal_link_write, hal_spi_start, hal_spi_take, hal_kick, 0,
+                                 hal_link_conn};
 
 static drive_config CFG;
 static fw_app app;
@@ -373,6 +406,94 @@ static void overruns_and_watchdog(void)
     CHECK(app.d.fault_flags & DRIVE_FAULT_CYCLE_OVERRUN);
 }
 
+/* ---- bench image (contract 8) ---------------------------------------------------------- */
+static void start_bench(void)
+{
+    memset(&B, 0, sizeof B);
+    B.now = 0xFFFF0000u;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        B.nfault_low[ch] = true;
+    }
+    link_rx_init(&B.host_rx);
+    CFG = make_config();
+    CFG.estop_wired = false;
+    CFG.commission_build = true;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        CFG.commission_duty_max_e4[ch] = 1500;
+        CFG.commission_time_ms[ch] = 2000;
+    }
+    CFG.bench_build = true;
+    CHECK(fw_app_init(&app, &HAL_BENCH, &CFG, 10, BOOT_ID, DRIVE_RESET_POWER));
+}
+
+static void host_bench_set_arm(uint32_t run_id)
+{
+    link_msg m = {.type = LINK_BENCH_SET, .seq = host_seq++};
+    m.u.bench_set = (link_bench_set){.boot_id = B.last_state.boot_id,
+                                     .echo_mcu_time_us = B.last_state.mcu_time_us,
+                                     .run_id = run_id,
+                                     .mode = DRIVE_BENCH_MODE_DUTY,
+                                     .axis = DRIVE_CH_L,
+                                     .count_sign = 1,
+                                     .duty_max_e4 = {1500, 1500, 1500, 1500},
+                                     .time_ms = {2000, 2000, 2000, 2000}};
+    host_send(m);
+    run_ms(12); /* the SET's acceptance shows in the next STATE */
+    link_msg a = {.type = LINK_BENCH_ARM, .seq = host_seq++};
+    a.u.bench_arm = (link_bench_arm){.boot_id = B.last_state.boot_id,
+                                     .echo_mcu_time_us = B.last_state.mcu_time_us,
+                                     .run_id = run_id};
+    host_send(a);
+}
+
+static void bench_pairs_go_out_together(void)
+{
+    start_bench();
+    run_ms(100);
+    int states = B.states, pairs = B.bench_pairs;
+    run_ms(1000);
+    CHECK_EQ_I(B.states - states, 100);
+    CHECK_EQ_I(B.bench_pairs - pairs, 100);
+    CHECK_EQ_I(B.bench_unpaired, 0);
+    B.refuse_every_other = true; /* a refused write takes the whole pair */
+    states = B.states;
+    run_ms(1000);
+    CHECK_EQ_I(B.states - states, 50);
+    CHECK_EQ_I(B.bench_unpaired, 0);
+    CHECK_EQ_U(B.host_rx.errors, 0);
+    CHECK(B.last_bench.dropped_pairs >= 49 && B.last_bench.dropped_pairs <= 50);
+}
+
+static void bench_connection_boundary(void)
+{
+    start_bench();
+    run_ms(100);
+    B.conn_busy = true; /* a change in progress: not one byte is read */
+    host_bench_set_arm(5);
+    size_t queued = B.to_mcu_len;
+    size_t pos = B.to_mcu_pos;
+    run_ms(20);
+    CHECK_EQ_U(B.to_mcu_pos, pos);
+    B.conn_gen++; /* done: the old connection's bytes are dropped */
+    B.conn_busy = false;
+    run_ms(20);
+    CHECK_EQ_U(B.to_mcu_pos, queued);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(B.last_bench.conn_gen, 1);
+    CHECK_EQ_U(B.last_state.rx_errors, 0); /* dropped, not counted as broken frames */
+
+    host_bench_set_arm(6); /* the new connection arms ... */
+    run_ms(12);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(B.last_bench.run_id, 6);
+    B.conn_gen += 2; /* ... and a later change ends the arming */
+    run_ms(1);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_STOPPING);
+    run_ms(150);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(B.last_bench.conn_gen, 2);
+}
+
 int main(void)
 {
     boots_through_spi_with_drvoff_first();
@@ -381,5 +502,7 @@ int main(void)
     state_rate_and_whole_frame_drops();
     rx_errors_reported();
     overruns_and_watchdog();
+    bench_pairs_go_out_together();
+    bench_connection_boundary();
     return FW_TEST_RESULT();
 }

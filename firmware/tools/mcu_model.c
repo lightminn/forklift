@@ -223,7 +223,7 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
 
 static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
-    hal_spi_take, hal_kick, frame_handled};
+    hal_spi_take, hal_kick, frame_handled, 0};
 
 /* ---- plant: the shared model, plus the host-only hand turn ------------------------------ */
 static void step_plant(double dt)
