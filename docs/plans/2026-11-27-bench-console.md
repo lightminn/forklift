@@ -413,6 +413,70 @@ B1 에서 다음은 '아직 없음'으로 거부한다.
   - (c) 목업 차량으로 기존 화면을 렌더해 PR 전후 스크린샷 비교(지도·오버레이·카메라·측면 패널).
 - **검증:** node 시험, B 의 HIL 백엔드와 붙인 렌더 확인(목업).
 
+### 4.1 C 구현 결정 (2026-11-28)
+
+C 는 B1 백엔드(`tools/bench_console.py`)에 붙는 화면이다. B1 범위인 듀티 구동에 맞추고, hold·거리 칸은 비활성으로 두고 'A1b 뒤'라고 표시한다. B2 가 들어오면 그 칸을 연다.
+
+- **공용 파일은 갈고리만 건드린다.**
+  - `index.html` 은 바꾸지 않는다. '벤치' 메뉴 버튼과 화면 DOM 은 `bench_dom.js` 가 `welcome.session === "bench"` 일 때만 만든다. 다른 welcome 이 오거나 연결이 끊기면 지운다(이벤트 핸들러도 함께).
+  - 그래서 벤치가 아닌 welcome 에서는 메뉴와 DOM 이 아예 없다(4 절 (a)).
+  - `main.js` 에는 갈고리 셋만 더한다.
+    - welcome/disconnect 때 `bench.onWelcome(msg)` / `bench.onDisconnect()`
+    - 렌더 루프에서 `renderBench()`
+    - `showView` 가 벤치 화면 이름을 받게 함
+  - 화면 패널의 큰 STOP 은 공용 `pressStop("bench")` 을 부른다. Escape 는 지금 그대로다. 그래서 벤치 패널이 보내는 STOP 은 공용 `stop` 과 같다.
+- **`protocol.js`**: `bench_state` 를 받으면 같은 epoch 일 때 `controlGen` 을 갱신한다. lease 소유자가 이 탭이 아니면 `leaseId` 를 버린다. 이는 `real_status` 와 같은 방식이고, B1 이 실어 보내는 세대·lease 를 이렇게 쓰기로 했다. 마지막 `bench_state` 는 보관하고, `dropSession` 때 지운다. 다른 메시지 처리는 그대로다.
+- **순수 모듈 `js/bench.js`**(DOM 없음, node 시험 대상). 맡는 것:
+  - 보임 판정
+  - 축별 기본 원천과 원천에 맞지 않는 칸의 비활성
+  - 폼 값 → `bench_run` 필드. 형식만 검사하고 판정은 서버가 한다.
+  - 큰 실행 확인 문구 칸을 보일지
+  - 우회 칩(MCU 확인분 / 호스트 적용분)과 안내 문구(0.2 절)
+  - 결과 요약(판정 ①, 사유, 정지 원인, 최고 전류, 드라이버 상태 네 바이트, 기록 폴더)
+  - 그래프의 최근 10 s 버퍼
+  - 벤치 요청 장부
+    - 벤치 요청은 `session.request` 로 보내고, 그 id 를 장부에 적는다.
+    - **단절 때 장부의 대기 요청은 `session.forget` 으로 버린다.** 같은 epoch 이든 바뀐 epoch 이든 다시 보내지 않는다(4 절 (a'')).
+    - 공용 STOP 의 재전송은 `protocol.js` 그대로다.
+- **`js/bench_dom.js`**: DOM 만들기·지우기, 그리기, 입력 묶기, canvas 그래프(외부 라이브러리 없음, 0 절 3).
+  - 그래프 계열은 원천 측정(M/H 는 STATE 의 조향 rad·승강 m, L/R 은 바퀴 카운트 변화), 실행 축 듀티, 전류 L R M H 다.
+  - 목표·오차는 B2 에서 더한다.
+- **`profile.js`**: 화면 문구 전부와 B1 의 세부 거부 사유를 넣는다. 세부 사유는 `detail` 의 `not_yet_*` 다.
+- **완료 조건 2 의 시험 방법(계획과 다른 점)**
+  - (a) 계획은 '실제 프런트 진입점에서 node 시험' 이다. 그런데 `main.js` 는 DOM·WebSocket·IntersectionObserver·canvas 를 바로 쓰고, 저장소에는 jsdom 이 없다. node 시험은 노트북에서만 돈다(ws1 에는 node 가 없다).
+  - 그래서 둘로 나눈다.
+    - ① node 시험: 실제 `createSession` 과 `bench.js` 제어기로 welcome 전 → bench → 단절 → REAL/Isaac/HIL welcome 을 재생한다. 그리고 다음을 본다.
+      - 보임 상태와 장부
+      - 보낸 메시지(벤치가 아닌 welcome 에서는 벤치 메시지 0 건)
+      - 대기 요청 폐기
+      - STOP 재전송
+      - 정적 시험 하나: `main.js` 의 벤치 갈고리가 제어기를 거치는지
+    - ② 실제 브라우저(Playwright)에서 진입점 재생. 아래 셋을 차례로 띄운다.
+      - 벤치 백엔드(pty `mcu_model --bench 1`)
+      - 가짜 차량(Isaac 형 welcome)
+      - 같은 탭에서 다시 벤치 백엔드
+    - ② 에서 볼 것: 메뉴·DOM 생성·삭제, 공용 STOP 버튼·Escape 가 `stop` 을 보냄, 벤치가 아닌 쪽에서 벤치 메시지 0 건. 기록은 `docs/validation/` 에 남긴다.
+    - jsdom 의존성은 들이지 않는다.
+  - (a') 설정이 꺼진 백엔드의 벤치 훅 0 회·MCU 쓰기 0 은 B1 의 중재기·전송기 시험으로 이미 고정돼 있다.
+  - (c) 가짜 차량으로 기존 화면 넷(모니터·이벤트·상태·연결)을 PR 전후로 찍어 비교한다(Playwright). 벤치 화면은 B1 백엔드 + 모형으로 찍는다.
+- **Codex 구현 전 검토 1 회차 반영**
+  - 화면 제거 때 벤치를 보던 중이면 모니터링으로 돌아간다. 메뉴의 클릭은 만들 때 묶는다.
+  - 다시 만든 화면은 우회·확인 체크가 해제된 상태다. 다시 받는다.
+  - `bench_state` 의 lease 는 `{client_id, remaining_s}` 다. 지금 소켓의 welcome 이 벤치이고 epoch 가 같을 때만 받는다. 단절 때 보관값을 지운다.
+  - `lease_id` 는 ACK 에서 받는다.
+  - 폼 계약은 `power_switch_in_hand`·`wheels_lifted`·`vcc_watched`(불리언)와 `large_confirm`·`window`·`physical_setup` 이다.
+    - 범위 우회가 꺼진 M/H 만 창을 보낸다.
+    - 큰 실행 문구는 서버가 거부 `detail` 에 적어 준 정확한 문구를 화면이 보여 준다(JS 로 따로 계산하지 않는다).
+  - 고장 해제는 보드 모드가 FAULT·ESTOP 일 때만 연다. 6.5 절 안내는 '권장'으로만 보인다.
+  - ACK 는 수락일 뿐이다. 이 탭이 시작한 실행의 결과는 `bench_result` 를 `request_id` 로 맞춰 고른다.
+    - `bench_state.last_result` 와 다른 실행의 결과는 '직전 실행' 으로 따로 보인다.
+    - B1 결과에는 드라이버 상태 바이트가 없으므로, 현재 바이트는 머리줄에 보인다.
+  - (a) 브라우저 재생은 아래를 덮는다: 같은 탭의 REAL/HIL(`real_status`)·Isaac(`state`) 전환, ACK 유실 → 단절 → welcome 지연(같은 epoch·바뀐 epoch). 기록은 `docs/validation/2026-11-28-bench-console-c-browser.md` 다.
+  - (a') 직접 주입 시험을 더했다(`tests/unit/live/test_real_loop_bench_requests.py`). 운영 루프 시험대에 네 요청을 토큰 있이·없이 넣어도 그 창의 MCU 프레임이 같은 길이의 기준 창과 같고 응답도 0 건이다.
+  - L/R 측정 칸은 '바퀴 카운트 변화(측정 원천 아님)'로 표시한다. 재부팅·랩에서 거짓 점프가 나지 않게 기준을 다시 잡는다.
+  - 거부의 `detail` 은 모두 보인다.
+  - 개발용 `bench_console.py --model <mcu_model>` 을 더했다. 도구가 자기 pty 에 모형을 띄워 보드 없이 화면을 시험한다.
+
 ## 5. 미검증으로 남는 것
 
 - 실물 MT: 미장착이라 모형으로만 검증한다. MT 장착 날 카운트/회전·부호·정지 검출을 실물로 확인한다.

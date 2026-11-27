@@ -1,0 +1,5 @@
+{"at": 1795797883.9289756, "mode": "hil", "epoch": 8181, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795797883.9702847, "mode": "hil", "epoch": 8181, "conn": "control", "msg": {"t": "targets_request", "request_id": "a171e3d7-25d2-498f-8e9b-c18496166179", "session_epoch": 8181, "control_gen": 3, "request_token": 1181, "request_seq": 1}}
+{"at": 1795797884.5783734, "mode": "hil", "epoch": 8181, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795797888.1236289, "mode": "hil", "epoch": 8181, "conn": "control", "msg": {"t": "stop", "request_id": "e538fb93-0ea2-48b2-be69-1284c5944c9c", "source": "console", "session_epoch": 8181}}
+{"at": 1795797888.4238274, "mode": "hil", "epoch": 8181, "conn": "control", "msg": {"t": "stop", "request_id": "f01a6fdb-a22d-4ddb-a4d3-01f122b8ef23", "source": "key", "session_epoch": 8181}}

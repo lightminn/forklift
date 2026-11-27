@@ -1,0 +1,50 @@
+{"at": 1795797753.744798, "mode": "bench-mute", "epoch": 4242, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795797753.7571902, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795797756.7733514, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "lease_request", "request_id": "7db0c245-42c3-411b-b505-1b9ce1f474cd", "session_epoch": 4242, "control_gen": 3, "request_token": 1242, "request_seq": 1}}
+{"at": 1795797756.77404, "mode": "bench-mute", "epoch": 4242, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795797756.874806, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 2, "token": "k2"}}}
+{"at": 1795797756.9750662, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 3, "token": "k3"}}}
+{"at": 1795797757.0760138, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 4, "token": "k4"}}}
+{"at": 1795797757.1771655, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 5, "token": "k5"}}}
+{"at": 1795797757.2792642, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 6, "token": "k6"}}}
+{"at": 1795797757.3794014, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 7, "token": "k7"}}}
+{"at": 1795797757.4804878, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 8, "token": "k8"}}}
+{"at": 1795797757.5816572, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 9, "token": "k9"}}}
+{"at": 1795797757.682785, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 10, "token": "k10"}}}
+{"at": 1795797757.7840261, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 11, "token": "k11"}}}
+{"at": 1795797757.8851492, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 12, "token": "k12"}}}
+{"at": 1795797757.98585, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 13, "token": "k13"}}}
+{"at": 1795797758.0874996, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 14, "token": "k14"}}}
+{"at": 1795797758.1887171, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 15, "token": "k15"}}}
+{"at": 1795797758.2900007, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 16, "token": "k16"}}}
+{"at": 1795797758.3912523, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 17, "token": "k17"}}}
+{"at": 1795797758.49236, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 18, "token": "k18"}}}
+{"at": 1795797758.593627, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 19, "token": "k19"}}}
+{"at": 1795797758.6956465, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 20, "token": "k20"}}}
+{"at": 1795797758.7960598, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 21, "token": "k21"}}}
+{"at": 1795797758.8971708, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 22, "token": "k22"}}}
+{"at": 1795797758.9987712, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 23, "token": "k23"}}}
+{"at": 1795797759.1006615, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 24, "token": "k24"}}}
+{"at": 1795797759.2017264, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 25, "token": "k25"}}}
+{"at": 1795797759.3027718, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 26, "token": "k26"}}}
+{"at": 1795797759.404033, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 27, "token": "k27"}}}
+{"at": 1795797759.5049562, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 28, "token": "k28"}}}
+{"at": 1795797759.6060503, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 29, "token": "k29"}}}
+{"at": 1795797759.7074313, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 30, "token": "k30"}}}
+{"at": 1795797759.808749, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 31, "token": "k31"}}}
+{"at": 1795797759.9098408, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 32, "token": "k32"}}}
+{"at": 1795797760.0113933, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 33, "token": "k33"}}}
+{"at": 1795797760.1127398, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 34, "token": "k34"}}}
+{"at": 1795797760.213808, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 35, "token": "k35"}}}
+{"at": 1795797760.3149927, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 36, "token": "k36"}}}
+{"at": 1795797760.4158528, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 37, "token": "k37"}}}
+{"at": 1795797760.517093, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 38, "token": "k38"}}}
+{"at": 1795797760.6184618, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 39, "token": "k39"}}}
+{"at": 1795797760.7196703, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 40, "token": "k40"}}}
+{"at": 1795797760.8210573, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 41, "token": "k41"}}}
+{"at": 1795797760.9218104, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 42, "token": "k42"}}}
+{"at": 1795797761.0233583, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 43, "token": "k43"}}}
+{"at": 1795797761.1246142, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 44, "token": "k44"}}}
+{"at": 1795797761.2256756, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 45, "token": "k45"}}}
+{"at": 1795797761.326916, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 46, "token": "k46"}}}
+{"at": 1795797761.42797, "mode": "bench-mute", "epoch": 4242, "conn": "control", "msg": {"t": "echo", "session_epoch": 4242, "lease_id": "LS1", "echo": {"state_seq": 47, "token": "k47"}}}
