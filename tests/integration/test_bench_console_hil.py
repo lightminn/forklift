@@ -5,6 +5,7 @@ duty, one zero, the board's own stop), the three cancellations (STOP, the lease,
 record and the clear -- not currents or speeds of a real motor (the model's plant is synthetic). The model's command
 validity is the board's 150 ms; the pty's timing is the host's scheduler, so no settling timing is judged here."""
 
+import dataclasses
 import json
 import os
 import signal
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from forklift_core.mcu_link.messages import Mode
+from forklift_core.mcu_link.messages import FaultFlag, Mode, StateFlag
 from forklift_core.plant.mcu_host import HostEvent
 
 REPO = Path(__file__).resolve().parents[2]
@@ -304,7 +305,7 @@ def test_a_fault_is_cleared_through_a_disarm_then_the_clear(rig):
     assert run_until(lambda: b.clears, 6.0), b.replies
     out = b.clears[-1]
     assert b.replies[rid]["t"] == "ack" and out["before"]["mode"] == "FAULT"
-    assert out["result"] in ("cleared", "not_cleared", "not_ready"), out  # the model's fault may persist
+    assert out["result"] in ("cleared", "unconfirmed", "not_ready"), out  # the model's fault may persist
     kinds = written_kinds(c)
     assert kinds.index("DISARM") < kinds.index("CLEAR_FAULTS")
 
@@ -504,3 +505,325 @@ def test_the_result_carries_the_peak_current_from_the_runs_states(rig):
     rows = record_rows(res)
     peak = [max(abs(r["current_ma"][k]) for r in rows if r.get("t") == "state") for k in range(4)]
     assert res["peak_current_ma"] == peak
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+def test_ctrl_c_or_sigterm_ends_the_model_console_cleanly(mcu_model, tmp_path, sig):  # noqa: F811
+    """Both signals only ask (Codex C round 4 P1): the loop ends at a cycle boundary, exit 0, the model child gone."""
+    import select
+
+    log = tmp_path / "err.txt"
+    with open(log, "w") as err:
+        proc = subprocess.Popen([sys.executable, str(REPO / "tools" / "bench_console.py"), "--model", str(mcu_model),
+                                 "--port", "0", "--runs-root", str(tmp_path / "runs")],
+                                stdout=subprocess.PIPE, stderr=err, text=True,
+                                env={**os.environ, "PYTHONPATH": f"{REPO / 'src'}:{REPO}"})
+        try:
+            line, end, fd = b"", time.monotonic() + 10.0, proc.stdout.fileno()  # the whole start line, bounded
+            while b"\n" not in line and time.monotonic() < end:
+                if select.select([fd], [], [], max(0.0, end - time.monotonic()))[0]:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        break
+                    line += chunk
+            line = line.decode(errors="replace")
+            assert line.endswith("\n") and json.loads(line).get("t") == "started", (line, log.read_text())
+            time.sleep(0.5)
+            assert proc.poll() is None, log.read_text()  # alive when the signal goes
+            proc.send_signal(sig)
+            assert proc.wait(timeout=10) == 0
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            proc.stdout.close()
+    out = subprocess.run(["pgrep", "-f", f"{mcu_model} --link"], capture_output=True, text=True)
+    assert out.stdout.strip() == ""
+
+
+def test_a_model_ending_after_its_first_state_is_one_lost_device(mcu_model, tmp_path):  # noqa: F811
+    from forklift_core.plant.mcu_host import HostEvent  # noqa: F401
+
+    holder = {}
+    dev = bench_console.ModelDevice(str(mcu_model), gate=lambda f, w: holder["c"].gate(f, w))
+    c = bench_console.BenchConsole(dev, runs_root=tmp_path / "runs")
+    holder["c"] = c
+    events = []
+    real = c._device_event
+    c._device_event = lambda e, now: (events.append(e.kind), real(e, now))
+    try:
+        end = time.monotonic() + 5.0
+        while c.not_ready() is not None and time.monotonic() < end:
+            c.cycle()
+            time.sleep(0.002)
+        assert c.not_ready() is None
+        dev.proc.terminate()
+        dev.proc.wait(timeout=5)
+        for _ in range(5):
+            c.cycle()
+        assert events.count("disconnected") == 1 and c.not_ready() is not None
+    finally:
+        dev.close()
+
+
+def test_an_exit_while_driving_with_the_board_silent_still_records_the_run(rig):
+    """The tool stopped mid-drive and the board went silent (a terminal Ctrl-C can end both): the run is closed at the
+    exit deadline with a record, never left without one (Codex C round 5 P2-1)."""
+    c, b, run_until = rig()
+    b.send("bench_run", **{**RUN, "seconds": 1.4})
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written, 4.0)
+    record = c.run.rec.dir
+    c.dev.receive = lambda host, now: host.tick(now)  # nothing more comes from the board
+    bench_console.shutdown(c, wait_s=0.5)
+    assert c.run is None
+    res = json.loads((record / "result.json").read_text())
+    assert res["aborted"] == "tool_exit", res  # the first cause; the verdict says the cleanup went unconfirmed
+    assert not res["verdict"]["run_cleanup"]["ok"] and "cleanup_unconfirmed" in res["verdict"]["run_cleanup"]["why"], res
+
+
+def test_a_clear_with_no_state_after_its_clear_is_unconfirmed_not_refused(rig):
+    """CLEAR sent, then not one STATE: the clear closes 'unconfirmed', its 'after' empty -- never 'not_cleared' from a
+    sample made before the CLEAR (Codex C round 5 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None and c.clear.clear_seq is not None
+                     and c.clear.clear_seq in c.written, 4.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent from the CLEAR on
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def _after_the_clear_went_out(c, b, run_until):
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None and c.clear.clear_seq is not None
+                     and c.clear.clear_seq in c.written, 4.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent from here: only the injected STATE counts
+    return c.host.state
+
+
+def test_a_state_made_before_the_clear_but_received_after_it_does_not_decide(rig):
+    """A STATE the board made before it read the CLEAR, arriving after the CLEAR went out, says nothing of the CLEAR:
+    the clear is 'unconfirmed' with no 'after' (Codex C round 6 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    late = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1)  # still FAULT, last_rx_seq the DISARM's
+    c.host._state, c.host._state_rx_ns = late, int(c.clock())
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def test_a_board_out_of_fault_without_this_clears_echo_is_unconfirmed(rig):
+    """Out of FAULT with another seq in last_rx_seq: some CLEAR worked -- an old host's late one can (contract 8.4) --
+    but nothing ties it to this request, so it is 'unconfirmed', what was seen in its why (Codex C round 7 P2-1)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    after = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED,
+                                last_rx_seq=(c.clear.clear_seq + 3979) & 0xFFFF,
+                                flags=st.flags | StateFlag.DRIVERS_READY, fault_flags=FaultFlag(0))
+    c.host._state, c.host._state_rx_ns = after, int(c.clock())
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None and "DISARMED" in out["why"], out
+
+
+def test_a_link_change_after_the_clear_went_out_is_unconfirmed_not_refused(rig):
+    """The CLEAR written whole, then the link lost: the board may have taken it, so 'unconfirmed' with no 'after'
+    (Codex C round 7 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    _after_the_clear_went_out(c, b, run_until)
+    c.conn += 1  # the link the request was bound to is gone
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def _inject_pair(c, st, bst):
+    c.host._state, c.host._state_rx_ns = st, int(c.clock())
+    c._on_state(st, c.host._state_rx_ns)  # as the host does for every STATE it accepts
+    if bst is not None:
+        c.host.bench_state, c.host.bench_state_rx_ns, c.host.bench_state_boot = bst, int(c.clock()), st.boot_id
+        c.host.bench_state_of = st
+
+
+def test_a_new_board_generation_before_the_clear_refuses_it_with_no_after(rig):
+    """The board's connection generation changes on the same opening before the CLEAR goes out: refused, and the new
+    generation's STATE is not the request's 'after' (Codex C round 8 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent: only the injected pair counts
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    new = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED)
+    _inject_pair(c, new, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "refused" and out["after"] is None, out
+
+
+def test_a_state_whose_pair_is_not_in_yet_never_clears(rig):
+    """After the CLEAR's echo, a ready DISARMED STATE whose BENCH_STATE has not come in (the host reads the pair in two)
+    may be of a new generation: the clear is not decided on it (Codex C round 8 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is None or c.clear.phase == "ready", 6.0)
+    if c.clear is None:
+        pytest.skip("the model cleared within one read")  # nothing left to decide
+    c.dev.receive = lambda host, now: host.tick(now)
+    st = c.host.state
+    new = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED,
+                              flags=st.flags | StateFlag.DRIVERS_READY, fault_flags=FaultFlag(0))
+    _inject_pair(c, new, None)  # its pair not in: bench_state_of is still the older STATE
+    assert run_until(lambda: b.clears, 6.0)
+    out = b.clears[-1]
+    assert out["result"] != "cleared" and out["after"] is None, out
+
+
+def test_the_clear_is_not_written_on_a_state_whose_pair_is_not_in(rig):
+    """The CLEAR's bytes go out only on the latest STATE's own pair: a newer STATE with its BENCH_STATE not in yet (a
+    new generation is possible) holds the frame, refusing nothing; its pair arriving frees it (Codex C round 9 P2-1)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    assert c.frame_allowed(frame)
+    newer = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000)
+    c.host._state, c.host._state_rx_ns = newer, int(c.clock())  # its pair not in
+    assert not c.frame_allowed(frame)
+    _inject_pair(c, newer, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+    assert not c.frame_allowed(frame)  # its pair names a new generation: the request no longer holds
+    _inject_pair(c, newer, bst)
+    assert c.frame_allowed(frame)
+    bench_console.shutdown(c, wait_s=0.0)  # the request closed with its record
+
+
+def test_an_echo_pair_followed_in_the_same_read_by_a_newer_state_is_kept(rig):
+    """CLEAR echo STATE + its BENCH_STATE + a newer STATE naming a later frame, in one read: the echo of the completed
+    pair is kept, and the clear goes on to its ready check (Codex C round 9 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    bst = c.host.bench_state
+    echo = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 500, mode=Mode.BOOT, last_rx_seq=c.clear.clear_seq,
+                               fault_flags=FaultFlag(0))
+    _inject_pair(c, echo, bst)
+    newer = dataclasses.replace(echo, mcu_time_us=echo.mcu_time_us + 500, last_rx_seq=(c.clear.clear_seq + 7) & 0xFFFF)
+    _inject_pair(c, newer, dataclasses.replace(bst))  # a second completed pair in the same read (round 10 P2-2)
+    assert run_until(lambda: c.clear is None or c.clear.phase == "ready", 2.0)
+    assert c.clear is not None and c.clear.phase == "ready"
+    ready = dataclasses.replace(newer, mcu_time_us=newer.mcu_time_us + 500, mode=Mode.DISARMED,
+                                flags=newer.flags | StateFlag.DRIVERS_READY)
+    _inject_pair(c, ready, bst)
+    assert run_until(lambda: b.clears, 2.0)
+    assert b.clears[-1]["result"] == "cleared", b.clears[-1]
+
+
+def test_a_state_received_before_the_clear_went_out_is_not_its_echo(rig):
+    """A STATE naming the CLEAR's seq but received before the CLEAR's last byte went out is not its reply; one received
+    after is (Codex C round 10 P2-1)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    seq = c.clear.clear_seq
+    t_written = c.written[seq][1]
+    c.clear.echoed.discard(seq)
+    named = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 10, last_rx_seq=seq)
+    c._on_state(named, t_written - 1)
+    assert seq not in c.clear.echoed
+    c._on_state(dataclasses.replace(named, mcu_time_us=named.mcu_time_us + 10), t_written + 1)
+    assert seq in c.clear.echoed
+    bench_console.shutdown(c, wait_s=0.0)
+
+
+def test_the_rest_of_a_clear_already_partly_out_is_not_held_for_a_pair(rig):
+    """The CLEAR's first bytes out, then a STATE whose pair is not in: the rest still goes (holding a partial frame is
+    abandoning it); a pair naming a new generation stops it (Codex C round 10 P2-3)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    newer = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000)
+    c.host._state, c.host._state_rx_ns = newer, int(c.clock())  # its pair not in
+    assert not c.frame_allowed(frame)  # a first byte waits
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4321), 3
+    try:
+        assert c.frame_allowed(frame)  # the rest goes
+        _inject_pair(c, newer, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+        assert not c.frame_allowed(frame)  # a new generation stops it
+    finally:
+        link._cur, link._off = saved
+    bench_console.shutdown(c, wait_s=0.0)
+
+
+def test_a_partly_written_clear_stops_on_new_fault_bits_and_after_its_request_closed(rig):
+    """The rest of a partly written CLEAR: new fault bits in the latest STATE stop it without waiting for its pair, and
+    once the request is closed the check answers no (the link then abandons the frame) instead of raising (Codex C
+    round 11 P2-1, P2-2)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st = c.host.state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4321), 3
+    try:
+        extra = next(f for f in FaultFlag if f and not (st.fault_flags & f))
+        more = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, fault_flags=st.fault_flags | extra)
+        c.host._state, c.host._state_rx_ns = more, int(c.clock())  # its pair not in
+        assert not c.frame_allowed(frame)
+        bench_console.shutdown(c, wait_s=0.0)  # the request closed
+        assert c.clear is None and not c.frame_allowed(frame)
+    finally:
+        link._cur, link._off = saved
+
+
+def test_a_closed_clears_partly_written_disarm_loses_its_leave(rig):
+    """The clear's own DISARM partly out when the request closes: the frame check answers no, so the link abandons it
+    instead of finishing it as a stop frame of the session (Codex C round 12 P2)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.disarm_seq = 4322
+    c.cleanup_seqs.add(4322)
+    frame = SimpleNamespace(kind="DISARM", seq=4322, expires_ns=None, nonzero=False, echo=None, generation=0)
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4322), 3
+    try:
+        assert c.frame_allowed(frame)  # the request holds: the rest goes
+        bench_console.shutdown(c, wait_s=0.0)  # the request closed
+        assert c.clear is None and 4322 not in c.cleanup_seqs and not c.frame_allowed(frame)
+    finally:
+        link._cur, link._off = saved

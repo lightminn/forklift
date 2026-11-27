@@ -18,6 +18,8 @@ import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
 import { createSendGapMeter, pageReport } from "./sendgap.js";
 import { bindRealPanel, renderRealPanel } from "./realpanel_dom.js";
+import { createBenchController } from "./bench.js";
+import { renderBench, syncBench } from "./bench_dom.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 // R2-3 (b): a teleop is good for 0.30 s from the tick it echoes -- about 0.2 s from this page's send. Past that the MCU
@@ -187,8 +189,15 @@ try {
   /* storage unavailable */
 }
 
+// the bench console (docs/plans/2026-11-27-bench-console.md 4.1): its screen exists only on a bench welcome
+m.bench = createBenchController({ session: m.session, now: () => performance.now() });
+const benchHooks = () => ({ showView, pressStop, rejectText });
+
 m.session.subscribe((msg) => {
+  m.bench.onMessage(msg);
   if (msg.t === "welcome") {
+    m.bench.onWelcome(msg);
+    syncBench(m, benchHooks());
     if (msg.session_epoch !== m.mediaEpoch) {
       // a new vehicle session: nothing of the old one stays on screen
       m.grid = null;
@@ -247,6 +256,13 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "ack" && typeof msg.lease_id === "string") {
     try {
       sessionStorage.setItem("console.held_lease", clientId); // a reload right after this reclaims
+    } catch {
+      /* storage unavailable */
+    }
+  } else if (msg.t === "bench_state") {
+    // the bench console: a lease it no longer gives this tab is not reclaimed by a reload (as the state branch does)
+    try {
+      if (!m.session.hasLease && msg.lease?.client_id !== clientId) sessionStorage.removeItem("console.held_lease");
     } catch {
       /* storage unavailable */
     }
@@ -329,6 +345,8 @@ function connectControl() {
     m.link.up = false;
     m.confirm.cancel(); // plan D13: a confirm belongs to the connection it was armed on
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
+    m.bench.onDisconnect(); // its requests in flight are dropped, never resent; its screen goes until a bench welcome
+    syncBench(m, benchHooks());
     m.queue.onDisconnect(); // mission queue plan D6: stopped, a running mission goes on
     m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
     m.welcomeAt = null;
@@ -1042,6 +1060,7 @@ function healthTick() {
     cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
     grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
     queue: { run: q.run, stopReason: q.stopReason, items: q.items.length, blocked: q.lastPickBlocked },
+    bench: m.bench.visible ? { stateAt: m.bench.stateAt } : null,
   });
   const viewing = !$("v-health").hidden && !document.hidden;
   m.alarms.update(m.health.rows, performance.now(), Date.now() / 1000, { epoch: m.session.epoch, viewing });
@@ -1067,6 +1086,7 @@ setInterval(() => {
 setInterval(() => {
   render(m);
   renderRealPanel(m, clientId); // 5c-1b: the real truck's operator panel
+  renderBench(m, { rejectText }); // the bench screen, when there is one
   if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
   refreshWizard();
   const stale = staleness({

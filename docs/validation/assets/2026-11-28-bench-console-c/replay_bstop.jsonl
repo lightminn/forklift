@@ -1,0 +1,3 @@
+{"at": 1795797912.8643417, "mode": "bench-mute", "epoch": 9191, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795797913.3631892, "mode": "bench-mute", "epoch": 9191, "conn": "control", "msg": {"t": "stop", "request_id": "92edc3f8-0de1-4117-a997-f0eed55a3c2f", "source": "bench", "session_epoch": 9191}}
+{"at": 1795797913.4110448, "mode": "bench-mute", "epoch": 9191, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}

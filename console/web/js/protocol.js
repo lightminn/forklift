@@ -23,6 +23,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
   let realStatus = null; // the real truck's real_status (5c-1), the newest of this session
   let realStatusLease = null; // the lease this console held when that status came (5c-1b: a status from before a
   // lease was taken back does not open the real panel's buttons)
+  let benchState = null; // the bench console's bench_state (plan 2026-11-27 4.1), the newest of this session
   // persistent console plan D7: the connection's request token (from its welcome) and its seq; none from a back end
   // that gives none (the fake vehicle)
   let requestToken = null;
@@ -53,6 +54,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     targets = null;
     realStatus = null;
     realStatusLease = null;
+    benchState = null;
     armed = false;
     controlGen = null;
     armGen = null;
@@ -120,6 +122,16 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
         realStatusLease = leaseId;
         break;
       }
+      case "bench_state": {
+        // the bench console (plan 2026-11-27 4.1): its generation and lease holder, as a state would give them; only
+        // the bench back end sends it
+        if (msg.session_epoch !== epoch || welcome?.session !== "bench") return; // this socket's bench session only
+        if (Number.isInteger(msg.control_gen)) controlGen = msg.control_gen;
+        const holder = msg.lease ? msg.lease.client_id : null;
+        if (holder !== clientId) leaseId = null;
+        benchState = msg;
+        break;
+      }
       default:
         break;
     }
@@ -180,6 +192,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     leaseId = null;
     lastTick = null;
     armed = false;
+    benchState = null; // nothing of the old connection's bench stream opens a button on the next one
   }
 
   function teleopCommand({ mode, deadman, speedRatio, curvatureRatio, liftDir, frameId, client }) {
@@ -244,6 +257,9 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     },
     get realStatusLease() {
       return realStatusLease;
+    },
+    get benchState() {
+      return benchState;
     },
     get generations() {
       return { session_epoch: epoch, lease_id: leaseId, control_gen: controlGen, arm_gen: armGen };

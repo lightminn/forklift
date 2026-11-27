@@ -1,0 +1,6 @@
+{"at": 1795797829.1301582, "mode": "real", "epoch": 6161, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795797829.1701636, "mode": "real", "epoch": 6161, "conn": "control", "msg": {"t": "targets_request", "request_id": "8e7985e0-2a61-434d-9ef0-946087a762f2", "session_epoch": 6161, "control_gen": 3, "request_token": 1161, "request_seq": 1}}
+{"at": 1795797829.8023317, "mode": "real", "epoch": 6161, "conn": "control", "msg": {"t": "stop", "request_id": "4863d686-4391-4630-af85-dc1bafb757c9", "source": "console", "session_epoch": 6161}}
+{"at": 1795797830.1028016, "mode": "real", "epoch": 6161, "conn": "control", "msg": {"t": "stop", "request_id": "790e0b46-80b9-48ac-968d-a628d299c054", "source": "key", "session_epoch": 6161}}
+{"at": 1795797830.1029093, "mode": "real", "epoch": 6161, "conn": "control", "msg": {"t": "stop", "request_id": "201a71df-e9d1-4859-80aa-af2584114a29", "source": "key", "session_epoch": 6161}}
+{"at": 1795797830.213707, "mode": "real", "epoch": 6161, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}

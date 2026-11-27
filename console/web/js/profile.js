@@ -384,3 +384,56 @@ export function escapeRequest(st) {
   if (!offer || !Number.isInteger(offer.offer_id) || !Number.isInteger(st?.arm_gen)) return null;
   return { arm_gen: st.arm_gen, offer_id: offer.offer_id };
 }
+
+// The bench console's screen (docs/plans/2026-11-27-bench-console.md 4, 4.1): its words, kept here with the others.
+export const BENCH_TEXT = {
+  menu: "벤치",
+  title: "모터 벤치",
+  hint: "벤치 이미지(bench5) 전용 · 한 축 듀티 구동 · 판정은 보드의 기록으로",
+  axis: { L: "L 왼쪽 바퀴", R: "R 오른쪽 바퀴", M: "M 조향", H: "H 승강" },
+  source: { kth: "KTH(절대각)", none: "측정 없음", mt: "MT(모터축)" },
+  mode: { duty: "듀티 구동", hold: "위치 유지" },
+  waitB2: "A1b 뒤에 열림",
+  waitA1c: "A1c 뒤에 열림",
+  waitA2: "A2 뒤에 열림",
+  bypass: { steer_range: "조향 범위", lift_range: "승강 범위", kth_invalid: "KTH 무효" },
+  bypassSession: "이 실행만 우회",
+  advice: { rangeOff: "권장: 기구에서 모터를 분리하세요(부분 구성 절차 3 절) · 막지는 않습니다" },
+  clearAdvice: "권장: 고장 해제 전에 VM 을 끄세요(주말 인계 6.5 절) · 막지는 않습니다",
+  confirm: { power_switch_in_hand: "주 전원 스위치를 손에 쥠", wheels_lifted: "바퀴를 띄우고 고정함",
+    vcc_watched: "VCC 를 지켜봄(듀티 0.3 초과)" },
+  largeConfirm: "큰 실행 확인 문구",
+  physicalSetup: { "": "물리 구성(선택)", coupled: "기구 결합", decoupled: "모터 분리", lifted: "바퀴 들어 올림" },
+  start: "시작",
+  stop: "STOP",
+  disarm: "DISARM",
+  clear: "고장 해제",
+  cause: "원인(필수)",
+  chipsMcu: "MCU 확인 우회",
+  chipsHost: "호스트 우회",
+  noBypass: "우회 없음",
+  notReady: "보드 준비 안 됨",
+  ready: "준비됨",
+  phase: { recover: "직전 결과 확인", set: "설정 전송", arm: "무장", prep: "축 준비", drive: "구동", stop: "정지 중",
+    closed: "닫힘" },
+  result: "결과",
+  verdictRun: "실행·정리",
+  verdictHold: "위치 유지 목표",
+  verdictDistance: "거리",
+  verdictLater: "B2 에서",
+  ok: "정상",
+  notOk: "실패",
+  noResult: "아직 결과 없음",
+  graph: "최근 10 s",
+  replyRefused: "거부",
+  replyOk: "받음",
+};
+
+// The bench back end's detail words (B1: bench_run refusals the server explains in ``detail``).
+export function benchDetailText(detail) {
+  const d = String(detail ?? "");
+  if (d.startsWith("not_yet_a1b")) return "위치 유지·거리 정지는 A1b 뒤에 열립니다";
+  if (d.startsWith("not_yet_a1c")) return "MT 원천은 A1c 뒤에 열립니다";
+  if (d.startsWith("not_yet_a2")) return "KTH 무효 우회는 A2 뒤에 열립니다";
+  return d;
+}

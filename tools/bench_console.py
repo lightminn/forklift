@@ -3,7 +3,7 @@
 the Jetson for the bench image (``lim=lr1 bench5``), one board writer, the shared lease, STOP and request ledger, and a
 run engine that drives one axis by duty for a time (A1a). Hold, distance stops and the MT source come with B2.
 
-usage: bench_console.py --device /dev/forklift-mcu [--baud B] [--host 127.0.0.1] [--port 8765]
+usage: bench_console.py (--device /dev/forklift-mcu [--baud B] | --model PATH) [--host 127.0.0.1] [--port 8765]
                         [--console-lan --console-origin-host H] [--web-root console/web] [--runs-root ~/bench_runs]
                         [--duration-s S]
 
@@ -290,6 +290,7 @@ class Clear:
     disarm_seq: int | None = None
     clear_seq: int | None = None
     before: dict = field(default_factory=dict)
+    echoed: set = field(default_factory=set)  # this request's seqs a paired STATE of its epoch echoed (round 9 P2-2)
 
 
 def _latch_view(st) -> dict:
@@ -373,6 +374,7 @@ class BenchConsole:
             self._emit(r, {**state_row(Sample(received_ns, st)), "conn": self.conn})
             r.peak_current_ma = [max(a, abs(int(b))) for a, b in zip(r.peak_current_ma, st.current_ma)]
         if self.clear is not None:
+            self._note_echo(self.clear, st, received_ns)
             try:
                 self.clear.rec.emit({**state_row(Sample(received_ns, st)), "conn": self.conn})
             except RecordError:
@@ -495,10 +497,31 @@ class BenchConsole:
         return None, {"clear": rec.dir.name}
 
     def _binding_now(self) -> tuple:
-        """(host opening, board connection generation, boot, fault bits) now -- what a clear is bound to."""
-        st, bst = self.host.state, self.host.bench_state
-        return (self.conn, None if bst is None else bst.conn_gen, None if st is None else st.boot_id,
-                FaultFlag(0) if st is None else FaultFlag(st.fault_flags))
+        """(host opening, board connection generation, boot, fault bits) now -- what a clear is bound to -- all from
+        one completed pair, never a newer STATE's bits with the previous pair's generation (Codex C round 9 P2-1)."""
+        ps, bst = self.host.bench_state_of, self.host.bench_state
+        if ps is None or bst is None:
+            return (self.conn, None, None, FaultFlag(0))
+        return (self.conn, bst.conn_gen, ps.boot_id, FaultFlag(ps.fault_flags))
+
+    def _continuing(self, seq: int) -> bool:
+        """The link is in the middle of that frame (some of its bytes already out)."""
+        link = getattr(self.dev, "link", None)
+        cur = getattr(link, "_cur", None)
+        return cur is not None and getattr(link, "_off", 0) > 0 and (int(cur.seq) & 0xFFFF) == seq
+
+    def _holds(self, c: Clear) -> bool | None:
+        """The clear's binding against the latest STATE: None while that STATE's pair is not in (its generation is not
+        known yet: nothing is sent, nothing refused), else whether it still holds (round 9 P2-1)."""
+        st = self.host.state
+        if c is None or st is None:
+            return False
+        if (self.conn != c.binding.conn or st.boot_id != c.binding.boot_id
+                or FaultFlag(st.fault_flags) != c.binding.fault_flags):
+            return False  # what the STATE alone settles is judged before waiting for its pair (round 11 P2-1)
+        if st is not self.host.bench_state_of:
+            return None
+        return c.binding.holds(*self._binding_now())
 
     # --- the write boundary ------------------------------------------------------------------------------------------
     def cancel_reason(self, r: Run, now_ns: int) -> str | None:
@@ -532,7 +555,8 @@ class BenchConsole:
         if seq in self.cleanup_seqs and (f.kind == "DISARM" or zero):
             c = self.clear
             if c is not None and f.kind == "DISARM" and seq == c.disarm_seq:
-                return c.binding.holds(*self._binding_now())  # the clear's DISARM: its request still holds (r4 P2-3)
+                held = self._holds(c)  # the clear's DISARM: its request still holds (r4 P2-3, r9 P2-1, r10 P2-3)
+                return held is True or (held is None and self._continuing(seq))
             return True  # this session's own stop frame, by its seq and its kind (round 3 P1-1)
         arming_zero = f.echo is not None or (self.host.arming_zero_seq is not None
                                              and seq == self.host.arming_zero_seq & 0xFFFF)
@@ -544,8 +568,13 @@ class BenchConsole:
             return False  # no DISARM this session did not ask for
         if f.kind == "CLEAR_FAULTS":
             c, st = self.clear, self.host.state
-            return (c is not None and c.clear_seq == seq and st is not None
-                    and c.binding.holds(*self._binding_now()))
+            # the first byte on the latest STATE's own pair (round 9 P2-1); the rest of a frame already partly out is
+            # not held for a pair still to come (holding it is abandoning it, round 10 P2-3), only stopped when the
+            # binding no longer holds
+            if c is None or c.clear_seq != seq or st is None:
+                return False  # its request already closed: the link abandons the rest (round 11 P2-2)
+            held = self._holds(c)
+            return held is True or (held is None and self._continuing(seq))
         r = self.run
         if r is None or f.kind not in RUN_KINDS or r.phase in ("stop", "closed"):
             return False
@@ -1051,12 +1080,36 @@ class BenchConsole:
             self.arbiter.release_stop(now / 1e9, "bench_stop_confirmed")
 
     # --- the clear ----------------------------------------------------------------------------------------------------
+    def _seen_after(self, seq: int | None) -> bool:
+        """A STATE received after that frame's last byte went out (never one made before it)."""
+        w = self.written.get(seq) if seq is not None else None
+        return w is not None and self.host.state_rx_ns is not None and self.host.state_rx_ns > w[1]
+
+    def _same_epoch(self, c: Clear) -> bool:
+        """The latest STATE is of the clear's own epoch: paired with its BENCH_STATE (so its board connection generation
+        is known, not the previous pair's) on the same host opening, generation and boot (Codex C round 8 P2)."""
+        st, bst = self.host.state, self.host.bench_state
+        return (st is not None and bst is not None and self.host.bench_state_of is st
+                and self.conn == c.binding.conn and bst.conn_gen == c.binding.conn_gen
+                and st.boot_id == c.binding.boot_id)
+
     def _clear_done(self, c: Clear, result: str, now: int, why: str | None = None) -> None:
         st = self.host.state
+        last = c.clear_seq if c.clear_seq is not None and c.clear_seq in self.written else c.disarm_seq
+        sent = last is not None and last in self.written
+        # the state after the attempt: only one received after its last frame (Codex C round 5 P2-2); before any
+        # frame went out, the state as it is. An unconfirmed clear has none: a STATE received after the CLEAR may
+        # have been made before the board read it (round 6 P2)
+        # and never one of another opening, generation or boot, nor a STATE whose pair is not in yet (round 8 P2)
+        after = None if st is None or not self._same_epoch(c) or result == "unconfirmed" \
+            or (sent and not self._seen_after(last)) else _latch_view(st)
         out = {"t": "clear_result", "request_id": c.request_id, "clear": c.rec.dir.name, "result": result,
-               "why": why, "cause": c.cause, "before": c.before, "after": None if st is None else _latch_view(st)}
+               "why": why, "cause": c.cause, "before": c.before, "after": after}
         self.host.drop_frames(("CLEAR_FAULTS",) if result == "cleared" else ("CLEAR_FAULTS", "DISARM"),
                               f"clear: {result}")  # a refused request's own unsent frames go with it (round 3 P2-3)
+        if c.disarm_seq is not None and c.disarm_seq not in self.written:
+            # its DISARM, even one partly out, loses its leave with the request: the link abandons the rest (r12 P2)
+            self.cleanup_seqs.discard(c.disarm_seq)
         try:
             c.rec.emit(out)
             c.rec.result(out)
@@ -1066,24 +1119,45 @@ class BenchConsole:
         self._put(out)
         self.clear = None
 
-    def _echoed(self, seq: int, kind: str, c: Clear) -> bool:
-        st, rx = self.host.state, self.host.state_rx_ns
+    def _note_echo(self, c: Clear, st, received_ns: int) -> None:
+        """Every STATE the host accepts, each in its read (so two pairs in one read never hide the first one's echo,
+        Codex C round 10 P2-2): one received after the request's own frame went out whole, naming its seq, of the
+        request's boot and host opening, is that frame's reply, kept (round 9 P2-2). Never one received before the
+        frame went out (round 10 P2-1). Its board generation is not asked: a frame the board answered was taken
+        whatever the generation, and a generation change is the boundary check's (the clear then unconfirmed)."""
+        seq = st.last_rx_seq & 0xFFFF
+        if seq not in (c.disarm_seq, c.clear_seq):
+            return
+        kind = "DISARM" if seq == c.disarm_seq else "CLEAR_FAULTS"
         w = self.written.get(seq)
-        return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and st.boot_id == c.binding.boot_id
-                and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
+        if (w is not None and w[0] == kind and received_ns > w[1] and st.boot_id == c.binding.boot_id
+                and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us):
+            c.echoed.add(seq)
+
+    def _echoed(self, seq: int, kind: str, c: Clear) -> bool:  # noqa: ARG002 -- kind checked when it was noted
+        return seq is not None and seq in c.echoed
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
         conn_gen = None if self.host.bench_state is None else self.host.bench_state.conn_gen
         if self.conn != c.binding.conn or conn_gen != c.binding.conn_gen or st is None \
                 or st.boot_id != c.binding.boot_id:
-            self._clear_done(c, "refused", now, "the link or the boot changed: ask again")
+            if c.clear_seq is not None and self.fate.get(c.clear_seq) == "written":
+                # the CLEAR went out whole and its reply was not seen: the board may have taken it (round 7 P2-2)
+                self._clear_done(c, "unconfirmed", now, "the link or the boot changed after the CLEAR, no reply seen")
+            else:
+                self._clear_done(c, "refused", now, "the link or the boot changed: ask again")
             return
         if c.phase == "disarm":
             if c.disarm_seq is None:
-                if not c.binding.holds(*self._binding_now()):
+                held = self._holds(c)
+                if held is False:
                     # judged before the DISARM too (round 2 P2-3): a request asked on other bits is not run
                     self._clear_done(c, "refused", now, "the fault bits changed before the DISARM: ask again")
+                    return
+                if held is None:  # the latest STATE's pair not in yet: queue nothing this cycle (round 9 P2-1)
+                    if now - c.phase_ns > CLEAR_ECHO_S * 1e9:
+                        self._clear_done(c, "refused", now, "no complete STATE pair to bind the clear to: ask again")
                     return
                 seen = {s for _b, s in self.recent_rx} | {0}
                 while (self.host.skip_seq(0) & 0xFFFF) in seen:  # a number no recent STATE named, before queueing
@@ -1092,12 +1166,12 @@ class BenchConsole:
                 c.disarm_seq = self.host.queued_disarm_seq()
                 self.cleanup_seqs.add(c.disarm_seq)
                 c.phase_ns = now
-            elif self._pending(c.disarm_seq) and not c.binding.holds(*self._binding_now()):
+            elif self._pending(c.disarm_seq) and self._holds(c) is False:
                 # still unsent and the request no longer holds: refused, its DISARM out of the queue (round 4 P2-3)
                 self._clear_done(c, "refused", now, "the board changed before the DISARM went out: ask again")
                 return
-            elif self._echoed(c.disarm_seq, "DISARM", c):
-                if not c.binding.holds(*self._binding_now()):
+            elif self._echoed(c.disarm_seq, "DISARM", c) and self._holds(c) is not None:
+                if not self._holds(c):
                     self._clear_done(c, "refused", now, "the fault bits changed: ask again")
                     return
                 blocked = self.host.request_clear_faults(now)
@@ -1110,17 +1184,26 @@ class BenchConsole:
                 self._clear_done(c, "no_echo", now, "the DISARM before the clear was not echoed")
         elif c.phase == "clear":
             if not self._echoed(c.clear_seq, "CLEAR_FAULTS", c) and self._pending(c.clear_seq) \
-                    and not c.binding.holds(*self._binding_now()):
+                    and self._holds(c) is False:
                 # still unsent and the bits changed: refused for good, the frame out of the queue (round 3 P2-3)
                 self._clear_done(c, "refused", now, "the fault bits changed before the CLEAR: ask again")
                 return
             if self._echoed(c.clear_seq, "CLEAR_FAULTS", c):
                 c.phase, c.phase_ns = "ready", now
             elif now - c.phase_ns > CLEAR_ECHO_S * 1e9:
-                why = st.reject_reason.name
-                self._clear_done(c, "not_cleared", now, f"the CLEAR was not taken (reject {why})")
+                # no echo of this CLEAR: a refusal leaves none of its own (reject_reason is the board's last one,
+                # last_rx_seq unchanged), and a board out of FAULT may be an old host's late CLEAR (contract 8.4), so
+                # this request is unconfirmed, what was seen only in its why (rounds 6 and 7 P2)
+                if not self._seen_after(c.clear_seq):
+                    self._clear_done(c, "unconfirmed", now, "no STATE after the CLEAR")
+                elif st.mode in (Mode.FAULT, Mode.ESTOP):
+                    self._clear_done(c, "unconfirmed", now, f"no reply to the CLEAR (the board still {st.mode.name}, "
+                                                            f"its last reject {st.reject_reason.name})")
+                else:
+                    self._clear_done(c, "unconfirmed", now, f"no echo of this CLEAR; the board is {st.mode.name} "
+                                                            "(a CLEAR worked, not shown to be this one)")
         elif c.phase == "ready":
-            if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY:
+            if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY and self._same_epoch(c):
                 self._clear_done(c, "cleared", now)
             elif now - c.phase_ns > CLEAR_READY_S * 1e9:
                 self._clear_done(c, "not_ready", now, f"after the clear: {st.mode.name}")
@@ -1167,10 +1250,107 @@ def _stop_name(v: int):
     return BenchStop(v).name.lower() if 0 <= v <= max(BenchStop) else v
 
 
+MODEL_PRODUCT = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench5"
+
+
+class ModelDevice:
+    """The MCU model (``mcu_model --commission-build 1 --bench 1``) on this tool's own pty, for trying the console
+    without a board (plan 4.1: the screen's check in a browser). Nothing else can open the pty; the product string
+    names the model."""
+
+    def __init__(self, exe: str, gate) -> None:
+        import os
+        import subprocess
+        import tty
+
+        from real_mcu_link import BenchTtyLink
+
+        self.master = self.slave = None
+        self.proc = None
+        try:
+            self.master, self.slave = os.openpty()
+            tty.setraw(self.slave)
+            os.set_blocking(self.master, False)
+            # its own session: a terminal Ctrl-C reaches this tool, which then stops the model itself (round 5 P2-1)
+            self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
+                                          "--bench", "1"], start_new_session=True)
+            self.link = BenchTtyLink(self.master, gate=gate)
+        except BaseException:
+            self.close()  # neither the child nor the pty outlives a failed construction (round 3 P3-1, 4 P3-2)
+            raise
+        self.opened = False
+        self.dead = False
+
+    def receive(self, host, now):
+        from forklift_core.plant.mcu_host import HostEvent
+
+        events = []
+        if self.dead:
+            return events + host.tick(now)
+        if self.proc.poll() is not None:
+            # the model ended: a lost device, as a board unplugged (round 3 P2-5) -- the console stops being ready
+            self.dead = True
+            return events + host.disconnected(now)  # the host's own disconnected event: one per loss
+        if not self.opened:
+            self.opened = True
+            events.append(HostEvent("connected", {"path": "model", "product": MODEL_PRODUCT}))
+            events += host.link_identity(MODEL_PRODUCT)
+        data = self.link.read_available()
+        if data:
+            events += host.on_bytes(data, time.monotonic_ns())
+        events += host.tick(now)
+        return events
+
+    def transmit(self, host, now):
+        if not self.dead:
+            self.link.pump_writes(host, now)
+        return []
+
+    def close(self) -> None:
+        import os
+
+        if self.proc is not None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                self.proc.kill()
+        for fd in (self.master, self.slave):
+            if fd is None:
+                continue
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def shutdown(console: "BenchConsole", *, wait_s: float = STOP_WAIT_S + 1.0, sleep=time.sleep) -> None:
+    """The tool's exit: a run is cancelled and stopped by the stop rule, a clear whose CLEAR never went out is closed as
+    cancelled; both are given ``wait_s`` to end, and whatever is still open then is closed with a record --
+    ``unconfirmed`` / ``unconfirmed_at_exit`` -- never left without one (Codex C round 4 P2-4, round 5 P2-1)."""
+    if console.run is not None and console.run.cancel is None:
+        console.run.cancel = "tool_exit"
+    c = console.clear
+    if c is not None and (c.clear_seq is None or console._pending(c.clear_seq)):
+        console._clear_done(c, "cancelled", int(console.clock()), "the tool was stopped before the CLEAR")
+    stop_end = time.monotonic() + wait_s
+    while (console.run is not None or console.clear is not None) and time.monotonic() < stop_end:
+        console.cycle()
+        sleep(CYCLE_S)
+    if console.clear is not None:
+        console._clear_done(console.clear, "unconfirmed", int(console.clock()), "the tool was stopped")
+    if console.run is not None:
+        r = console.run
+        r.aborted = r.aborted or "unconfirmed_at_exit"  # the first cause stays (tool_exit once a cycle ran)
+        console._close(r, int(console.clock()), None)
+
+
 # --- the CLI -----------------------------------------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--device", required=True)
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--device")
+    src.add_argument("--model", help="the MCU model executable (mcu_model): the console on its own pty, no board")
     p.add_argument("--baud", type=int, default=None)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
@@ -1194,47 +1374,72 @@ def main(argv=None) -> int:
     from console.live.server import LiveServer, MediaStore
     from real_mcu_link import BenchTtyLink, ReconnectingLink
 
+    import signal
+
+    stop_asked = {"v": False}
+
+    def _terminate(signum, frame):  # noqa: ARG001 -- only asks: the loop ends at a cycle's boundary (round 3 P1),
+        stop_asked["v"] = True  # never in the middle of a frame's bookkeeping, and the stop cleanup then runs
+
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)  # Ctrl-C too (round 4 P1): never an exception mid-frame
     holder = {}
-    dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
-                           link_factory=lambda fd: BenchTtyLink(fd, gate=lambda f, w: holder["c"].gate(f, w)))
-    console = BenchConsole(dev, runs_root=Path(args.runs_root))
-    holder["c"] = console
+    gate = lambda f, w: holder["c"].gate(f, w)  # noqa: E731 -- bound at every opening, a reopening too
+    dev = None
+    server = None
     try:
-        dev.open_first(console.host, time.monotonic_ns())
-    except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
-        print(f"refused: {exc}", file=sys.stderr)
-        return 2
-    product = console.host.usb_product
-    if bl.any_bench_image(product) and not bl.bench_image(product):
-        print(f"refused: {product!r} is another bench generation than '{' '.join(bl.BENCH_SUFFIX)}'", file=sys.stderr)
-        return 2
-    if not bl.bench_image(product):
-        print(f"refused: {product!r} is not the bench image (no product ending '{' '.join(bl.BENCH_SUFFIX)}')",
-              file=sys.stderr)
-        return 2
-    hosts = ("127.0.0.1", "localhost") + ((args.console_origin_host,) if args.console_lan else ())
-    server = LiveServer(console.channels, MediaStore(), welcome(console.epoch, product), host=args.host,
-                        port=args.port, web_root=Path(args.web_root), origin_hosts=hosts)
-    console.channels.notify = lambda: server.handle.wake() if server.handle is not None else None
-    port = server.start()
-    print(json.dumps({"t": "started", "port": port, "product": product, "runs_root": str(console.runs_root),
-                      "console_lan": bool(args.console_lan)}), flush=True)
-    end = None if args.duration_s is None else time.monotonic() + args.duration_s
-    try:
-        while end is None or time.monotonic() < end:
-            console.cycle()
-            time.sleep(CYCLE_S)
-    except KeyboardInterrupt:
-        pass
+        if args.model:
+            dev = ModelDevice(args.model, gate)  # the child exists from here: the finally below ends it
+            console = BenchConsole(dev, runs_root=Path(args.runs_root))
+            holder["c"] = console
+            end_wait = time.monotonic() + 3.0
+            while console.host.state is None and time.monotonic() < end_wait and not stop_asked["v"]:
+                console.cycle()
+                time.sleep(CYCLE_S)
+            if console.host.state is None:
+                print("refused: the model sent no STATE within 3 s", file=sys.stderr)
+                return 2
+        else:
+            dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
+                                   link_factory=lambda fd: BenchTtyLink(fd, gate=gate))
+            console = BenchConsole(dev, runs_root=Path(args.runs_root))
+            holder["c"] = console
+            try:
+                dev.open_first(console.host, time.monotonic_ns())
+            except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
+                print(f"refused: {exc}", file=sys.stderr)
+                return 2
+        product = console.host.usb_product
+        if bl.any_bench_image(product) and not bl.bench_image(product):
+            print(f"refused: {product!r} is another bench generation than '{' '.join(bl.BENCH_SUFFIX)}'",
+                  file=sys.stderr)
+            return 2
+        if not bl.bench_image(product):
+            print(f"refused: {product!r} is not the bench image (no product ending '{' '.join(bl.BENCH_SUFFIX)}')",
+                  file=sys.stderr)
+            return 2
+        hosts = ("127.0.0.1", "localhost") + ((args.console_origin_host,) if args.console_lan else ())
+        server = LiveServer(console.channels, MediaStore(), welcome(console.epoch, product), host=args.host,
+                            port=args.port, web_root=Path(args.web_root), origin_hosts=hosts)
+        console.channels.notify = lambda: server.handle.wake() if server.handle is not None else None
+        port = server.start()
+        print(json.dumps({"t": "started", "port": port, "product": product, "runs_root": str(console.runs_root),
+                          "console_lan": bool(args.console_lan)}), flush=True)
+        end = None if args.duration_s is None else time.monotonic() + args.duration_s
+        try:
+            while (end is None or time.monotonic() < end) and not stop_asked["v"]:
+                console.cycle()
+                time.sleep(CYCLE_S)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            shutdown(console)
     finally:
-        if console.run is not None and console.run.cancel is None:
-            console.run.cancel = "tool_exit"
-        stop_end = time.monotonic() + STOP_WAIT_S + 1.0
-        while console.run is not None and time.monotonic() < stop_end:
-            console.cycle()
-            time.sleep(CYCLE_S)
-        server.stop()
-        if dev.link is not None:
+        if server is not None:
+            server.stop()
+        if isinstance(dev, ModelDevice):
+            dev.close()
+        elif dev is not None and dev.link is not None:
             dev.link.close()
     return 0
 

@@ -158,6 +158,23 @@ export function healthRows(inp) {
   else rows.push(r("control", "ok", "연결됨"));
   rows.push(r("media", inp.link.mediaUp ? "ok" : "warn", inp.link.mediaUp ? "연결됨" : "재접속 중"));
 
+  // the bench console (plan 2026-11-27 4.1): its bench_state is the stream, it has no pose, map or vehicle state
+  if (inp.bench) {
+    const at = inp.bench.stateAt;
+    if (!inp.link.up || inp.welcomeAt === null) rows.push(r("state", "unknown", "연결 기다리는 중"));
+    else if (at === null || at < inp.welcomeAt) {
+      rows.push(inp.nowMs - inp.welcomeAt <= SILENCE_MS ? r("state", "unknown", "첫 벤치 상태 기다리는 중")
+        : r("state", "crit", "welcome 뒤 벤치 상태가 오지 않음"));
+    } else {
+      const age = inp.nowMs - at;
+      rows.push(r("state", age <= STALE_S * 1000 ? "ok" : age <= SILENCE_MS ? "warn" : "crit", secs(age)));
+    }
+    for (const key of ["pose", "camera", "scan", "grid", "feedback", "stop", "permit", "scene"]) {
+      rows.push(r(key, "off", "벤치 세션 · 해당 없음"));
+    }
+    return rows.concat(shownRows(inp));
+  }
+
   // what arrives since this welcome
   if (!inp.link.up || inp.welcomeAt === null) rows.push(r("state", "unknown", "연결 기다리는 중"), r("pose", "unknown", "—"));
   else if (!fresh) {

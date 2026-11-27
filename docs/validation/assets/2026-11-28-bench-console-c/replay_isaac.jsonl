@@ -1,0 +1,5 @@
+{"at": 1795797859.6214342, "mode": "isaac", "epoch": 7171, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795797860.301951, "mode": "isaac", "epoch": 7171, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795797860.3026688, "mode": "isaac", "epoch": 7171, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795797861.0171938, "mode": "isaac", "epoch": 7171, "conn": "control", "msg": {"t": "stop", "request_id": "80b6c887-8e74-42c6-abad-42a260799b70", "source": "console", "session_epoch": 7171}}
+{"at": 1795797861.3176754, "mode": "isaac", "epoch": 7171, "conn": "control", "msg": {"t": "stop", "request_id": "85b7dc55-0d31-4496-87af-71e8e896a241", "source": "key", "session_epoch": 7171}}
