@@ -158,3 +158,88 @@ def board_refusal(product: str | None) -> str | None:
 
 def confirmation_phrase(ask: RunAsk) -> str:
     return f"duty {abs(ask.duty):g}, {ask.seconds:g} s, wheels lifted and fixed"
+
+
+# ---- the bench image (bench console plan A1a, mcu-link contract 8) ------------------------------------------------------
+# The bench image ends its USB product string with exactly these tokens (gen_build_info.cmake); the generation names the
+# wire contract it speaks (bench5: BENCH_SET / BENCH_ARM / BENCH_STATE). Any other generation is not this one: it is
+# refused for every run and stays out of gates (judgement.diagnostic_image).
+BENCH_SUFFIX = ("lim=lr1", "bench5")
+# The checks a BENCH_SET may turn off for one run (firmware drive.h DRIVE_BENCH_*). The stopping side -- overcurrent,
+# current sense, driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun -- has no name and never will.
+BENCH_BYPASS_BITS = {"steer_range": 1 << 0, "lift_range": 1 << 1}
+# The bench image's defaults: the open commissioning build's limits (board_config.c, pinned by the unit test) --
+# L, R duty 1.0 and the validator's ms ceiling, M, H 0.15 / 2 s.
+BENCH_DEFAULT_DUTY_E4 = (10000, 10000, 1500, 1500)
+BENCH_DEFAULT_TIME_MS = (0x7FFFFFFF // 1000, 0x7FFFFFFF // 1000, 2000, 2000)
+BENCH_TIME_MAX_MS = 0x7FFFFFFF // 1000
+
+
+def bench_image(product: str | None) -> bool:
+    """Whether a USB product string is this tool's bench image: the open commissioning prefix and the exact suffix."""
+    return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX)
+            and tuple(product.split()[-len(BENCH_SUFFIX):]) == BENCH_SUFFIX)
+
+
+def any_bench_image(product: str | None) -> bool:
+    """Any bench generation (``lim=lr1 bench*``), this tool's own or not."""
+    toks = str(product).split() if product else []
+    return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX) and len(toks) >= 2
+            and toks[-2] == LIMITS_TOKEN and toks[-1].startswith("bench"))
+
+
+def parse_bench_bypass(text: str | None) -> tuple[str, ...]:
+    if not text:
+        return ()
+    names = tuple(dict.fromkeys(n.strip() for n in text.split(",") if n.strip()))
+    unknown = [n for n in names if n not in BENCH_BYPASS_BITS]
+    if unknown:
+        raise LimitRefused(f"bench-bypass: unknown name(s) {unknown}; known {sorted(BENCH_BYPASS_BITS)} "
+                           "(the stopping side is never bypassed)")
+    return names
+
+
+@dataclass(frozen=True)
+class BenchAsk:
+    """One run's BENCH_SET: the bypass names, and the run axis's duty and time limits (the other axes at the image's
+    defaults)."""
+
+    axis: int
+    names: tuple[str, ...]
+    duty_max: float | None  # None: the image's default for the axis
+    time_max_s: float | None
+
+    @property
+    def bypass(self) -> int:
+        out = 0
+        for n in self.names:
+            out |= BENCH_BYPASS_BITS[n]
+        return out
+
+    def duty_max_e4(self) -> tuple[int, ...]:
+        out = list(BENCH_DEFAULT_DUTY_E4)
+        if self.duty_max is not None:
+            out[self.axis] = int(round(self.duty_max * 10000))
+        return tuple(out)
+
+    def time_ms(self) -> tuple[int, ...]:
+        out = list(BENCH_DEFAULT_TIME_MS)
+        if self.time_max_s is not None:
+            out[self.axis] = int(round(self.time_max_s * 1000))
+        return tuple(out)
+
+    def overrides(self) -> bool:
+        return (self.bypass != 0 or self.duty_max_e4() != BENCH_DEFAULT_DUTY_E4
+                or self.time_ms() != BENCH_DEFAULT_TIME_MS)
+
+
+def bench_refusal(ask: BenchAsk) -> str | None:
+    if ask.duty_max is not None and not 0 < ask.duty_max <= 1.0:
+        return "bench-duty-max: in (0, 1]"
+    if ask.time_max_s is not None and not 0.001 <= ask.time_max_s <= BENCH_TIME_MAX_MS / 1000.0:
+        return f"bench-time-max: in [0.001, {BENCH_TIME_MAX_MS / 1000.0:g}] s"
+    if "steer_range" in ask.names and ask.axis != 2:
+        return "bench-bypass steer_range: the steering axis (M) only"
+    if "lift_range" in ask.names and ask.axis != 3:
+        return "bench-bypass lift_range: the lift axis (H) only"
+    return None
