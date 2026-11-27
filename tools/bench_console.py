@@ -514,7 +514,12 @@ class BenchConsole:
         """The clear's binding against the latest STATE: None while that STATE's pair is not in (its generation is not
         known yet: nothing is sent, nothing refused), else whether it still holds (round 9 P2-1)."""
         st = self.host.state
-        if st is None or st is not self.host.bench_state_of:
+        if c is None or st is None:
+            return False
+        if (self.conn != c.binding.conn or st.boot_id != c.binding.boot_id
+                or FaultFlag(st.fault_flags) != c.binding.fault_flags):
+            return False  # what the STATE alone settles is judged before waiting for its pair (round 11 P2-1)
+        if st is not self.host.bench_state_of:
             return None
         return c.binding.holds(*self._binding_now())
 
@@ -566,9 +571,10 @@ class BenchConsole:
             # the first byte on the latest STATE's own pair (round 9 P2-1); the rest of a frame already partly out is
             # not held for a pair still to come (holding it is abandoning it, round 10 P2-3), only stopped when the
             # binding no longer holds
+            if c is None or c.clear_seq != seq or st is None:
+                return False  # its request already closed: the link abandons the rest (round 11 P2-2)
             held = self._holds(c)
-            return (c is not None and c.clear_seq == seq and st is not None
-                    and (held is True or (held is None and self._continuing(seq))))
+            return held is True or (held is None and self._continuing(seq))
         r = self.run
         if r is None or f.kind not in RUN_KINDS or r.phase in ("stop", "closed"):
             return False
