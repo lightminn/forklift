@@ -20,6 +20,62 @@ static const uint8_t BENCH_STATE_0103[] = {
     0xff, 0x08, 0x01, 0x01, 0x02, 0x01, 0x02, 0x03, 0x02, 0x04, 0x04, 0xff, 0xff, 0xfa, 0x04, 0x01,
     0x13, 0x05, 0x02, 0x02, 0x03, 0x65, 0x97, 0x00};
 
+/* bench6 meaning (plan 4.2 A1b-1), the same two vectors as test_bench_messages.py */
+static const uint8_t BENCH_SET_000D[] = {
+    0x04, 0x03, 0x06, 0x0d, 0x08, 0xef, 0xbe, 0xad, 0xde, 0xef, 0xcd, 0xab, 0x02, 0x01, 0x01, 0x01,
+    0x0a, 0x0d, 0xf0, 0xad, 0x0b, 0x01, 0x03, 0x01, 0xff, 0x02, 0x01, 0x01, 0x0c, 0x10, 0x27, 0x10,
+    0x27, 0xdc, 0x05, 0xd0, 0x07, 0x9b, 0xc4, 0x20, 0x04, 0x9b, 0xc4, 0x20, 0x03, 0xd0, 0x07, 0x01,
+    0x03, 0x88, 0x13, 0x01, 0x01, 0x06, 0xf0, 0xff, 0xff, 0x68, 0x4b, 0x00};
+static const uint8_t BENCH_STATE_0202[] = {
+    0x19, 0x03, 0x82, 0x02, 0x02, 0x01, 0x02, 0x0d, 0xf0, 0xad, 0x0b, 0x0d, 0xf0, 0xad, 0x0b, 0x03,
+    0x01, 0x01, 0x02, 0x23, 0x01, 0x78, 0xec, 0xff, 0xff, 0x01, 0x01, 0x01, 0x0a, 0x78, 0xfc, 0xff,
+    0xff, 0x78, 0xec, 0xff, 0xff, 0x09, 0x02, 0x02, 0x01, 0x01, 0x04, 0xfe, 0xff, 0x03, 0x09, 0x02,
+    0x13, 0x07, 0x0b, 0x03, 0x01, 0x24, 0x55, 0x00};
+
+static link_msg bench_set_000d(void)
+{
+    link_msg m = {.type = LINK_BENCH_SET, .seq = 0x000D};
+    m.u.bench_set = (link_bench_set){.boot_id = 0xDEADBEEFu,
+                                      .echo_mcu_time_us = 0x0000000100ABCDEFull,
+                                      .run_id = 0x0BADF00Du,
+                                      .mode = 1,
+                                      .axis = 3,
+                                      .source = 1,
+                                      .count_sign = -1,
+                                      .bypass = 2,
+                                      .duty_max_e4 = {10000, 10000, 1500, 2000},
+                                      .time_ms = {2147483, 2147483, 2000, 5000},
+                                      .stop_counts = -4096};
+    return m;
+}
+
+static link_msg bench_state_0202(void)
+{
+    link_msg m = {.type = LINK_BENCH_STATE, .seq = 0x0202};
+    m.u.bench_state = (link_bench_state){.pair_seq = 0x0201,
+                                          .run_id = 0x0BADF00Du,
+                                          .result_run_id = 0x0BADF00Du,
+                                          .axis = 3,
+                                          .source = 1,
+                                          .count_state = 1,
+                                          .kth_lost = 2,
+                                          .raw_angle = 0x0123,
+                                          .cumulative = -5000,
+                                          .distance_ref = -904,
+                                          .cut_position = -5000,
+                                          .stop_reason = 9,
+                                          .blocked = 2,
+                                          .evidence_age_ms = 0xFFFE,
+                                          .end_evidence_age_ms = 3,
+                                          .mcu_bypass = 2,
+                                          .drive = 0x13,
+                                          .conn_gen = 7,
+                                          .run_flags = 0x0B,
+                                          .result_axis = 3,
+                                          .result_source = 1};
+    return m;
+}
+
 static int encodes_to(const link_msg *m, const uint8_t *want, size_t want_len)
 {
     uint8_t wire[LINK_WIRE_MAX];
@@ -93,6 +149,9 @@ static void golden_vectors(void)
     CHECK(encodes_to(&set, BENCH_SET_000B, sizeof BENCH_SET_000B));
     CHECK(encodes_to(&arm, BENCH_ARM_000C, sizeof BENCH_ARM_000C));
     CHECK(encodes_to(&st, BENCH_STATE_0103, sizeof BENCH_STATE_0103));
+    link_msg set6 = bench_set_000d(), st6 = bench_state_0202();
+    CHECK(encodes_to(&set6, BENCH_SET_000D, sizeof BENCH_SET_000D));
+    CHECK(encodes_to(&st6, BENCH_STATE_0202, sizeof BENCH_STATE_0202));
 
     link_rx rx;
     link_rx_init(&rx);

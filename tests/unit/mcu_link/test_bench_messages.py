@@ -40,7 +40,22 @@ STATE = BenchState(pair_seq=0x0102, run_id=0x12345678, result_run_id=0x11223344,
                    end_evidence_age_ms=250, mcu_bypass=1, drive=0x13, conn_gen=5, run_flags=0, result_axis=2,
                    result_source=0)
 
-GOLDEN = [(SET, 0x000B, BENCH_SET_000B), (ARM, 0x000C, BENCH_ARM_000C), (STATE, 0x0103, BENCH_STATE_0103)]
+# bench6 meaning (plan 4.2 A1b-1): an H KTH run stopping at -4096 with count_sign -1, and a provisional cut
+# waiting for its confirmation (stop 9, confirm 0), H lost, run flags UNCLEAN | RES_UNCLEAN | RES_TENTATIVE, the
+# live evidence age saturated (0xFFFE) and the end age 3 ms.
+BENCH_SET_000D = "0403060d08efbeaddeefcdab020101010a0df0ad0b010301ff0201010c10271027dc05d0079bc420049bc42003d00701038813010106f0ffff684b00"
+BENCH_STATE_0202 = "190382020201020df0ad0b0df0ad0b03010102230178ecffff0101010a78fcffff78ecffff090202010104feff03090213070b0301245500"
+SET6 = BenchSet(boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000001_00ABCDEF, run_id=0x0BADF00D, mode=1, axis=3, source=1,
+                count_sign=-1, bypass=2, duty_max_e4=(10000, 10000, 1500, 2000), time_ms=(2147483, 2147483, 2000, 5000),
+                stop_counts=-4096)
+STATE6 = BenchState(pair_seq=0x0201, run_id=0x0BADF00D, result_run_id=0x0BADF00D, axis=3, source=1, count_state=1,
+                    kth_lost=2, raw_angle=0x0123, cumulative=-5000, target=0, distance_ref=-904, cut_position=-5000,
+                    stop_reason=9, distance_confirm=0, blocked=2, dropped_pairs=0, evidence_age_ms=0xFFFE,
+                    end_evidence_age_ms=3, mcu_bypass=2, drive=0x13, conn_gen=7, run_flags=0x0B, result_axis=3,
+                    result_source=1)
+
+GOLDEN = [(SET, 0x000B, BENCH_SET_000B), (ARM, 0x000C, BENCH_ARM_000C), (STATE, 0x0103, BENCH_STATE_0103),
+          (SET6, 0x000D, BENCH_SET_000D), (STATE6, 0x0202, BENCH_STATE_0202)]
 
 
 def body_of(wire_hex: str) -> bytes:

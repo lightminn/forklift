@@ -202,6 +202,7 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 ## 7. 버전 관리
 
 - **벤치 확장(8 절, 2026-11-27, bench console plan A1a)**: 운영 `version` 3 은 그대로이고, 벤치 이미지 전용 메시지 셋(0x06·0x08·0x82)을 더했다. 그 세대는 제품 토큰 `bench5` 로 정한다. 다른 이미지는 이 type 을 모른다.
+- **벤치 확장 `bench6`(8 절, 2026-11-28, bench console plan 4.2 A1b-1)**: `source=kth`(M·H)·`stop_counts` 를 받고, `bench5` 가 비워 두던 `BENCH_STATE` 의 카운트·거리·증거 필드와 정지 사유 8–12 의 뜻을 채웠다. 예약 바이트는 `run_flags` 가 됐다. 메시지 길이와 배치는 같다.
 
 필드를 바꾸면 `version` 을 올린다. 한 버전 안에서 필드 의미를 바꾸지 않는다.
 
@@ -220,11 +221,11 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   - 승강 원점 비트는 승강 방식 결정(계획 3.5) 뒤 version 3 으로 미룬다.
   - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.2·3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다(래치 유지, 보류 만료 시각 고정, 보류는 구동 재개 금지일 뿐 제동·정지가 아님 — Codex 동의). 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
 
-## 8. 벤치 확장 (wire 세대 `bench5`)
+## 8. 벤치 확장 (wire 세대 `bench6`)
 
-벤치 이미지 전용 메시지다(계획 `docs/plans/2026-11-27-bench-console.md` 1 절). 운영 `version` 3 의 메시지·필드·고정 벡터(3–6 절)는 바꾸지 않는다. 프레임(1 절)과 `version` 3 은 같다. 벤치 확장의 세대는 USB 제품 문자열 끝 토큰 `bench5` 로 정한다.
+벤치 이미지 전용 메시지다(계획 `docs/plans/2026-11-27-bench-console.md` 1 절). 운영 `version` 3 의 메시지·필드·고정 벡터(3–6 절)는 바꾸지 않는다. 프레임(1 절)과 `version` 3 은 같다. 벤치 확장의 세대는 USB 제품 문자열 끝 토큰 `bench6` 으로 정한다. A1a 의 `bench5`(측정 원천·거리 정지 없음)는 굽힌 적이 없고, `bench6` 호스트는 거부한다. 세대 토큰은 payload 에 없으므로 같은 입력의 메시지 바이트는 세대와 무관하다.
 
-- **벤치 이미지**: `FW_BUILD=commission`, `FW_MOTOR_OUTPUT=1`, `FW_LINK=usb`, `FW_BENCH=1` 이고 fw-single 이 아니다. 제품 문자열은 `… lim=lr1 bench5` 로 끝난다. 다른 조합은 configure 가 거부한다.
+- **벤치 이미지**: `FW_BUILD=commission`, `FW_MOTOR_OUTPUT=1`, `FW_LINK=usb`, `FW_BENCH=1` 이고 fw-single 이 아니다. 제품 문자열은 `… lim=lr1 bench6` 으로 끝난다. 다른 조합은 configure 가 거부한다.
 - **다른 이미지**: 0x06·0x08·0x82 를 모르는 `type` 으로 버린다(`rx_errors`). 코어를 `FW_CORE_BENCH` 없이 컴파일하기 때문이다. 받아 들이지도, 보내지도 않는다.
 - **벤치 이미지는 운영 `ARM` 을 `wrong_build` 로 거부한다.** 무장은 `BENCH_ARM` 으로만 한다.
 
@@ -243,20 +244,20 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 | `boot_id` | u32 | 지금 부팅 ID |
 | `echo_mcu_time_us` | u64 | 받은 `STATE` 의 시각. `command_timeout_ms` 안이고, 마지막 연결 변경(8.4) 이후여야 한다 |
 | `run_id` | u32 | 호스트가 실행마다 새로 뽑는 값, 0 아님 |
-| `mode` | u8 | 1 `duty`(시간 상한 듀티 구동). 2 `hold` 는 다음 세대(A1b) |
+| `mode` | u8 | 1 `duty`(시간 상한 듀티 구동, 거리 정지 가능). 2 `hold` 는 다음 세대(A1b-2) |
 | `axis` | u8 | 0 L, 1 R, 2 M, 3 H — 이 실행에서 0 이 아닌 출력을 낼 수 있는 유일한 축 |
-| `source` | u8 | 0 없음. 1 `kth`·2 `mt` 는 다음 세대 |
-| `count_sign` | i8 | ±1, 듀티 부호와 원천 카운트 증가 방향의 관계(측정 원천이 생기는 세대에서 씀) |
+| `source` | u8 | 0 없음, 1 `kth`(축 M·H 만: 그 축의 KTH 이동량 카운트, 8.3). 2 `mt` 는 다음 세대(A1c) |
+| `count_sign` | i8 | ±1, 듀티 부호와 카운트 증가 방향의 관계. 거리 실행의 목표 부호는 `count_sign` × 듀티 부호여야 한다 |
 | `bypass` | u32 | bit0 `steer_range`(M 범위 검사 끔, KTH 유효 검사는 유지), bit1 `lift_range`(H). 나머지 비트는 0. 멈추는 쪽(과전류·전류센서·드라이버 결함·STOP/DISARM·명령 만료·IWDG·사이클 초과)은 비트가 없다 |
 | `duty_max_e4[4]` | u16 ×4 | 축별 듀티 상한, 1…10000 |
 | `time_ms[4]` | u32 ×4 | 축별 연속 출력 시간 상한, 1…2147483 |
-| `stop_counts` | i32 | 거리 정지, 0 = 없음(다음 세대) |
+| `stop_counts` | i32 | 거리 정지: 측정 축 카운트의 부호 있는 상대값, 0 = 없음. `source=kth` 일 때만, −2³¹ 은 받지 않음 |
 
-거부 이유(처음 걸린 것): 벤치 이미지 아님 → `wrong_build`, `DISARMED` 아님·출력 구간 열림 → `not_disarmed`, `boot_id` → `boot_mismatch`, echo → `stale_echo`, 값 → `bad_value`(이 세대가 받지 않는 `mode`·`source`·`stop_counts` 포함). 받아들이면 그 설정을 대기시키고 `last_rx_seq` 를 올린다. 대기 설정은 1 s 뒤 만료되고, `DISARM`·결함·연결 변경에서 버려진다.
+거부 이유(처음 걸린 것): 벤치 이미지 아님 → `wrong_build`, `DISARMED` 아님·출력 구간 열림 → `not_disarmed`, `boot_id` → `boot_mismatch`, echo → `stale_echo`, 값 → `bad_value`(`mode` 2, `source` 2, L·R 의 `kth`, `kth` 없는 `stop_counts`, −2³¹ 포함). 받아들이면 그 설정을 대기시키고 `last_rx_seq` 를 올린다. 대기 설정은 1 s 뒤 만료되고, `DISARM`·결함·연결 변경에서 버려진다.
 
 ### 8.2 `BENCH_ARM`
 
-`ARM` 과 같은 검사(3.2: `boot_id`, 신선도, 모드, 시간 상한 보류, 전류 측정)에 더해, echo 가 마지막 연결 변경 이후여야 하고(`stale_echo`), 대기 중인 `BENCH_SET` 이 같은 연결에서 왔고 만료되지 않았으며 `run_id` 가 같아야 한다(`bad_value`). 받아들이면 `ARM` 처럼 무장하고 그 설정을 소비한다. 우회 비트와 축별 상한은 **이 무장 동안만** 쓰이고, 모드가 `ARMED`·`STOPPING` 을 벗어나면 빌드 기본값으로 돌아간다. 이전 실행의 결과(8.3)는 이때 비워진다.
+`ARM` 과 같은 검사(3.2: `boot_id`, 신선도, 모드, 시간 상한 보류, 전류 측정)에 더해, echo 가 마지막 연결 변경 이후여야 하고(`stale_echo`), 대기 중인 `BENCH_SET` 이 같은 연결에서 왔고 만료되지 않았으며 `run_id` 가 같아야 한다(`bad_value`). 거리 실행(`stop_counts≠0`)은 그 SET 의 측정 축 카운트가 `valid`(8.3)이고 그 축에 `kth_zero_suspect` 복구 대기가 없어야 한다(`sensor_invalid`). 받아들이면 `ARM` 처럼 무장하고 그 설정을 소비한다. 우회 비트와 축별 상한은 **이 무장 동안만** 쓰이고, 모드가 `ARMED`·`STOPPING` 을 벗어나면 빌드 기본값으로 돌아간다. 이전 실행의 결과(8.3)는 이때 비워진다.
 
 ### 8.3 실행과 결과
 
@@ -266,6 +267,23 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 - **`STOPPING` 중 `DISARM`(벤치 이미지만, 3.2 의 예외)**: 받아들이되(`last_rx_seq`) 제동을 줄이지 않는다. `stop_grace_ms` 가 끝나야 `DISARMED` 가 된다. 연결 변경 뒤 늦게 도착한 이전 호스트의 `DISARM` 이 제동을 끊지 못하게 하기 위해서다. `ARMED` 에서의 `DISARM` 은 3.2 그대로 바로 `DISARMED`(정지 사유 4).
 - **출력 구간의 시간 상한**은 구간이 열릴 때의 상한(실행 중이면 그 실행의 상한)을 구간이 닫힐 때까지 쓴다. 실행이 끝난 직후에도 빌드 기본값으로 다시 재지 않는다.
 - **결과**: 구동한 실행만 결과를 남긴다(`result_run_id`, 정지 사유, 결과의 축·원천, 차단한 요청 수). 최초 원인은 덮어쓰지 않으며, 다음 `BENCH_ARM` 이 새 설정을 소비할 때까지 남는다. 구동 없이 끝난 실행은 결과가 없다(`result_run_id` 가 그 실행이 아님).
+
+**bench6 — KTH 카운트와 거리 정지** (근거와 반례: 계획 `docs/plans/2026-11-27-bench-console.md` 4.2 A1b-1)
+
+- **카운트**: M·H 각각, 매 제어 주기. 프레임 시각은 보드의 SPI 완료 시각(취득 시각, 64 비트로 확장)이다. 그 주기의 시각보다 뒤에 게시된 프레임은 다음 주기에 소비한다.
+  - 마지막으로 센 비영 프레임이 '신뢰 표본'이다. 다음 비영 프레임은 신뢰 표본에서 최단 걸음으로 풀고, 취득 간격 3,000 µs 이하·걸음 512 카운트/ms 이하일 때만 센다.
+  - 0x0000 은 직전에 센 원시각이 0 에서 ±512 안일 때만 잠정으로 센다. 다음 비영 프레임이 신뢰 표본에서 다시 맞춘다.
+  - 손실: 위 조건을 어긴 걸음, 3,000 µs 넘게 셀 프레임이 없음, 소비 때 나이가 3,000 µs 넘는 프레임. 손실을 검출한 비영 프레임은 다음 비교 기준이 되고, 그 기준에서 정상인 다음 걸음이 복구다.
+  - 걸음 상한 512 카운트/ms 는 검출 문턱이다. 실제 축 속도가 어느 3 ms 이하 구간에서도 그보다 느리다는 것은 받아들인 전제다(계획 4.2, 총괄 2026-11-28).
+- **거리 실행의 구동**: 첫 비영 `COMMISSION` 은 ARM 뒤 그 축의 손실이 없고, 그 주기에 새로 센 비영 프레임이 있을 때만 받는다(아니면 `sensor_invalid`). 그 누적값이 기준(`distance_ref`)이다. 목표 부호가 `count_sign` × 듀티 부호가 아니거나, 실행 중 반대 부호이면 `bad_value` 다.
+- **끝 전이(8–12)**: 기존 결함 판정 다음, 그 주기의 명령 처리 앞에서 본다. MCU 가 스스로 `STOPPING` 을 거쳐 `DISARMED` 로 간다.
+  - 12 `kth_lost`: 측정 축 손실.
+  - 8 `distance_reached`·9 `distance_provisional`: 기준에서의 부호 있는 이동이 목표 이상. 그때 마지막으로 센 프레임이 0x0000 이면 9 다.
+  - 10 `no_progress`: 기준에서 반대 방향 128 카운트, 또는 출력이 0 아닌 시간 300 ms 동안 신뢰 표본으로 2 카운트 진행이 없음.
+  - 11 `kth_zero_suspect`: 출력이 0 아닌 동안 0x0000 만 센 구간이 4 ms 를 넘거나, 300 ms 창이 0x0000 뿐. 그 축의 거리 실행은 다음 비영 프레임을 셀 때까지 거부된다.
+- **잠정 확인** `distance_confirm`: 9 의 결과는 0(대기)으로 시작한다. 다음 `BENCH_ARM` 전에 그 축에서 처음 센 신뢰 표본이 목표 너머면 1, 아니면 2 다. 그 전에 손실되면 2 이고 `run_flags` bit2 가 선다. 한 번만 바뀐다.
+- **증거 나이**: 측정 축의 마지막 신뢰 표본(ARM 이후)의 취득 시각부터의 ms 다. 0xFFFF 는 아직 없음, 0xFFFE 는 포화다. 끝 전이에서 `end_evidence_age_ms` 로 고정한다.
+- **끝 위치**: KTH 실행은 끝 전이의 누적값을 `cut_position` 에 고정한다(거리 차단이면 차단 위치).
 
 ### 8.4 연결 변경 (USB)
 
@@ -287,19 +305,19 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 | `run_id` | u32 | 마지막으로 소비한 실행(없으면 0) |
 | `result_run_id` | u32 | 결과가 있는 실행(없으면 0) |
 | `axis`, `source` | u8, u8 | 마지막 실행의 축·원천 |
-| `count_state` | u8 | 0 `none_yet`, 1 `valid`, 2 `lost` (이 세대는 0) |
-| `kth_lost` | u8 | bit0 M, bit1 H (이 세대는 0) |
-| `raw_angle` | u16 | 측정 축의 같은 주기 원시각 (이 세대는 0) |
-| `cumulative`, `target`, `distance_ref`, `cut_position` | i32 ×4 | 원천 카운트 값들 (이 세대는 0) |
-| `stop_reason` | u8 | 8.3 의 정지 사유(0 없음; 8–12 는 다음 세대) |
-| `distance_confirm` | u8 | 0 없음, 1 도달, 2 보류 (이 세대는 0) |
+| `count_state` | u8 | 측정 축(`source=kth`) 카운트: 0 `none_yet`, 1 `valid`, 2 `lost`. 원천 없음이면 0 |
+| `kth_lost` | u8 | 지금 손실 중인 축: bit0 M, bit1 H |
+| `raw_angle` | u16 | 측정 축에서 마지막으로 센 원시각 |
+| `cumulative`, `target`, `distance_ref`, `cut_position` | i32 ×4 | 측정 축 누적값(모듈러, 차는 32 비트 모듈러로 읽음), hold 목표(A1b-2 전 0), 거리 기준(구동 중이면 그 실행, 아니면 결과), 결과의 끝 위치 |
+| `stop_reason` | u8 | 8.3 의 정지 사유(0 없음, 1–12) |
+| `distance_confirm` | u8 | 0 없음·대기, 1 도달, 2 보류(8.3 잠정 확인) |
 | `blocked` | u16 | 끝난 뒤 차단한 구동 요청 수(포화) |
 | `dropped_pairs` | u16 | 버린 짝 수(포화) |
-| `evidence_age_ms`, `end_evidence_age_ms` | u16, u16 | 증거 나이(포화, 0xFFFF = 아직 없음; 이 세대는 0xFFFF) |
+| `evidence_age_ms`, `end_evidence_age_ms` | u16, u16 | 증거 나이와 끝 전이 때의 나이(0xFFFE 포화, 0xFFFF 아직 없음) |
 | `mcu_bypass` | u8 | 지금 무장에서 쓰이는 우회 비트(8.1) |
 | `drive` | u8 | bit0–1 실행 상태(0 없음, 1 준비, 2 구동, 3 끝), bit4–5 모드 |
 | `conn_gen` | u8 | 연결 변경 수(mod 256) |
-| `reserved` | u8 | 0 |
+| `run_flags` | u8 | bit0 이 실행의 측정이 끊김(구동 시작 때 `valid` 아님 또는 ARM 뒤 손실, 다음 ARM 까지 실시간), bit1 결과의 bit0(끝에서 고정), bit2 잠정 확인이 손실로 끝남, bit3 끝에서 마지막으로 센 프레임이 0x0000, bit4 구동 시작 틱에 새 비영 프레임이 없었음(측정 전용). 나머지 0 |
 | `result_axis`, `result_source` | u8, u8 | 결과의 축·원천 |
 
 운영 `STATE.fault_flags` 의 bit 25–31 은 벤치 이미지에서도 0 이다. 우회 표식은 `mcu_bypass` 에만 있다.
@@ -314,3 +332,7 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   `0403080c08efbeaddeefcdab0201010107785634124c7300`
 - `bench_state_0103` — seq 0x0103, 필드 순서대로 `0x0102, 0x12345678, 0x11223344, 2, 0, 0, 0, 0x0ABC, −123456, 654321, −7, 8, 1, 0, 3, 4, 0xFFFF, 250, 1, 0x13, 5, 0, 2, 0`:
   `1003820301020178563412443322110201010abc0ac01dfefff1fb0906f9ffffff08010102010203020404fffffa04011305020203659700`
+- `bench_set_000d`(bench6 의미) — seq 0x000D, boot 0xDEADBEEF, echo 0x0000000100ABCDEF, run 0x0BADF00D, mode 1, axis 3, source 1, count_sign −1, bypass 2, duty (10000, 10000, 1500, 2000), time (2147483, 2147483, 2000, 5000), stop −4096:
+  `0403060d08efbeaddeefcdab020101010a0df0ad0b010301ff0201010c10271027dc05d0079bc420049bc42003d00701038813010106f0ffff684b00`
+- `bench_state_0202`(bench6 의미) — seq 0x0202, 필드 순서대로 `0x0201, 0x0BADF00D, 0x0BADF00D, 3, 1, 1, 2, 0x0123, −5000, 0, −904, −5000, 9, 0, 2, 0, 0xFFFE, 3, 2, 0x13, 7, 0x0B, 3, 1`:
+  `190382020201020df0ad0b0df0ad0b03010102230178ecffff0101010a78fcffff78ecffff090202010104feff03090213070b0301245500`
