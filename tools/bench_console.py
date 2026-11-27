@@ -3,7 +3,7 @@
 the Jetson for the bench image (``lim=lr1 bench5``), one board writer, the shared lease, STOP and request ledger, and a
 run engine that drives one axis by duty for a time (A1a). Hold, distance stops and the MT source come with B2.
 
-usage: bench_console.py --device /dev/forklift-mcu [--baud B] [--host 127.0.0.1] [--port 8765]
+usage: bench_console.py (--device /dev/forklift-mcu [--baud B] | --model PATH) [--host 127.0.0.1] [--port 8765]
                         [--console-lan --console-origin-host H] [--web-root console/web] [--runs-root ~/bench_runs]
                         [--duration-s S]
 
@@ -1167,10 +1167,68 @@ def _stop_name(v: int):
     return BenchStop(v).name.lower() if 0 <= v <= max(BenchStop) else v
 
 
+MODEL_PRODUCT = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench5"
+
+
+class ModelDevice:
+    """The MCU model (``mcu_model --commission-build 1 --bench 1``) on this tool's own pty, for trying the console
+    without a board (plan 4.1: the screen's check in a browser). Nothing else can open the pty; the product string
+    names the model."""
+
+    def __init__(self, exe: str, gate) -> None:
+        import os
+        import subprocess
+        import tty
+
+        from real_mcu_link import BenchTtyLink
+
+        self.master, self.slave = os.openpty()
+        tty.setraw(self.slave)
+        os.set_blocking(self.master, False)
+        self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
+                                      "--bench", "1"])
+        self.link = BenchTtyLink(self.master, gate=gate)
+        self.opened = False
+
+    def receive(self, host, now):
+        from forklift_core.plant.mcu_host import HostEvent
+
+        events = []
+        if not self.opened:
+            self.opened = True
+            events.append(HostEvent("connected", {"path": "model", "product": MODEL_PRODUCT}))
+            events += host.link_identity(MODEL_PRODUCT)
+        data = self.link.read_available()
+        if data:
+            events += host.on_bytes(data, time.monotonic_ns())
+        events += host.tick(now)
+        return events
+
+    def transmit(self, host, now):
+        self.link.pump_writes(host, now)
+        return []
+
+    def close(self) -> None:
+        import os
+
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            self.proc.kill()
+        for fd in (self.master, self.slave):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 # --- the CLI -----------------------------------------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument("--device", required=True)
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--device")
+    src.add_argument("--model", help="the MCU model executable (mcu_model): the console on its own pty, no board")
     p.add_argument("--baud", type=int, default=None)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
@@ -1195,15 +1253,25 @@ def main(argv=None) -> int:
     from real_mcu_link import BenchTtyLink, ReconnectingLink
 
     holder = {}
-    dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
-                           link_factory=lambda fd: BenchTtyLink(fd, gate=lambda f, w: holder["c"].gate(f, w)))
-    console = BenchConsole(dev, runs_root=Path(args.runs_root))
-    holder["c"] = console
-    try:
-        dev.open_first(console.host, time.monotonic_ns())
-    except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
-        print(f"refused: {exc}", file=sys.stderr)
-        return 2
+    gate = lambda f, w: holder["c"].gate(f, w)  # noqa: E731 -- bound at every opening, a reopening too
+    if args.model:
+        dev = ModelDevice(args.model, gate)
+        console = BenchConsole(dev, runs_root=Path(args.runs_root))
+        holder["c"] = console
+        end_wait = time.monotonic() + 3.0
+        while console.host.state is None and time.monotonic() < end_wait:
+            console.cycle()
+            time.sleep(CYCLE_S)
+    else:
+        dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
+                               link_factory=lambda fd: BenchTtyLink(fd, gate=gate))
+        console = BenchConsole(dev, runs_root=Path(args.runs_root))
+        holder["c"] = console
+        try:
+            dev.open_first(console.host, time.monotonic_ns())
+        except Exception as exc:  # noqa: BLE001 -- a held device or an unreadable one: refused before the console
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
     product = console.host.usb_product
     if bl.any_bench_image(product) and not bl.bench_image(product):
         print(f"refused: {product!r} is another bench generation than '{' '.join(bl.BENCH_SUFFIX)}'", file=sys.stderr)
@@ -1234,7 +1302,9 @@ def main(argv=None) -> int:
             console.cycle()
             time.sleep(CYCLE_S)
         server.stop()
-        if dev.link is not None:
+        if isinstance(dev, ModelDevice):
+            dev.close()
+        elif dev.link is not None:
             dev.link.close()
     return 0
 
