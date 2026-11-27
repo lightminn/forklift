@@ -3,12 +3,10 @@
 
 The command line refuses a pty, so this child calls ``run_real`` itself with the test's transport factory. The test
 hands the child its pty's slave fd (``fd``, inherited); the child takes that fd only -- never a path -- and only when
-it is a pty slave: anything else (a real tty, a file) and the child refuses before the lock is dropped or any test
-identity is given (Codex U3e-1 implementation round 1 P1). On that fd, ``RealTtyTransport.open`` runs as on the board
+it is a pty slave: anything else (a real tty, a file) and the child refuses before any test identity is given (Codex U3e-1 implementation round 1 P1). On that fd, ``RealTtyTransport.open`` runs as on the board
 (the executor lock taken first, the fd set raw) with the operating product string and serial the test gives. Every write the transport makes -- each frame's first write, each continuation and
 the frame-less resync bytes -- is logged with its byte count (``writes.jsonl``), so "no motion byte" is judged on
-what reached the device. With ``drop_lock`` the precondition judgement is run as it is and only
-``precondition:unlock_incomplete`` is taken out of its list (pytest's stand-in for U3e-2); every other reason stays.
+what reached the device. The precondition judgement runs as it is (U3e-2 removed the unlock's lock).
 
 usage: python real_operating_child.py <config.json>"""
 
@@ -26,7 +24,6 @@ sys.path.insert(0, str(REPO / "tools"))
 import real_autonomy as tool  # noqa: E402
 import real_loop_transport as rlt  # noqa: E402
 
-from forklift_core.live import real_preconditions as rp  # noqa: E402
 
 
 def _the_tests_pty(fd: int) -> bool:
@@ -48,13 +45,6 @@ def main() -> int:
     if not _the_tests_pty(fd):
         print(json.dumps({"run": False, "refused": ["child_fd_not_a_pty"]}), flush=True)
         return 2  # before the judgement is touched or any identity handed out
-    if cfg.get("drop_lock"):
-        judged = rp.operating_preconditions
-
-        def without_lock(facts):
-            return [r for r in judged(facts) if r != rp.UNLOCK_INCOMPLETE]
-
-        rp.operating_preconditions = without_lock
     log = open(cfg["writes_log"], "a", buffering=1)  # noqa: SIM115 -- open for the run's whole life
 
     class LoggedTransport(rlt.RealTtyTransport):

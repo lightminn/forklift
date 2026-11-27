@@ -12,8 +12,8 @@ Every file is parsed from the very bytes its sha256 is taken of; a loader that r
 the vehicle, the LiDAR validator) is bracketed by the file's hash before and after, and a change is a reason
 (``files_changed``). The assembly also compares these hashes with the ones ``prepare_run`` loaded.
 
-``UNLOCK_INCOMPLETE`` stays in the list until the last unlock PR (U3) removes it: until then the operating assembly is
-refused whatever the record says (plan 2.4, 6).
+The unlock's lock (``precondition:unlock_incomplete``, plan 2.4) was removed by its last PR (U3e-2): an empty list now
+lets the operating assembly go on.
 
 IMU qualification (C7) is not an assembly refusal: it is returned apart (``imu_qualified``) for the runtime readiness
 (``imu:unqualified``, bypassable for the session, plan 2.7); the watch's ``imu`` provenance is C7's, not C13's."""
@@ -32,7 +32,6 @@ import yaml
 REPO = Path(__file__).resolve().parents[3]
 RECORD_YAML = REPO / "config" / "real" / "s10_preconditions.yaml"
 SCHEMA = "s10_preconditions/1"
-UNLOCK_INCOMPLETE = "precondition:unlock_incomplete"
 STATUSES = ("pass", "approved_limited")
 CORRIDOR_HALF_M = 0.10  # plan 2.4: the approved corridor's half width (the coverage record is bound to it)
 APPROVED_CASES = ["A"]  # S10: case A only (plan 2.4)
@@ -533,8 +532,7 @@ def _stop_model_values(f: Facts) -> list:
 
 def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
-    out = [UNLOCK_INCOMPLETE]
-    out += [f"precondition:files_changed:{name}" for name in f.changed]
+    out = [f"precondition:files_changed:{name}" for name in f.changed]
     # every file the judgement binds must have been read (a missing hash is never compared away)
     out += [f"precondition:facts_missing:{name}" for name in REQUIRED_HASHES if not f.file_hashes.get(name)]
     out += _c1_board(f)
@@ -558,5 +556,5 @@ def operating_preconditions(f: Facts) -> list:
     return out
 
 
-__all__ = ["Facts", "GATHER_ERRORS", "HASHED", "ITEMS", "image_commit", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather",
+__all__ = ["Facts", "GATHER_ERRORS", "HASHED", "ITEMS", "image_commit", "RECORD_YAML", "SCHEMA", "STOP_FILES", "gather",
            "imu_qualified", "load_record", "operating_preconditions"]

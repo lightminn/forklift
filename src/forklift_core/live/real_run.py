@@ -937,8 +937,8 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     out = []
     client = sources.client
     if client is Client.REAL:
-        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal -- with
-        # precondition:unlock_incomplete until the unlock's last PR, so it is refused whatever the record says
+        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal (the lock that
+        # refused whatever the record said was removed by U3e-2)
         judged = real_preconditions(prep, sources.host, sources.transport)
         prep.judgement = list(judged)  # the list the assembly judged on; the run's grant takes this one (U3e-1)
         out += judged
@@ -1036,7 +1036,7 @@ def real_preconditions(prep, host, transport) -> list:
                           settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
                           vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
     except rp.GATHER_ERRORS as err:
-        return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+        return [f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
     # the corridor end the run will drive is the one prep built from the chassis it loaded, not a second reading
     # (Codex unlock U1 review round 3 P1)
     facts.inserted_offset_m = float(prep.geometry.inserted_offset_m)

@@ -1,6 +1,6 @@
 """The operating unlock U1 (docs/plans/2026-11-26-real-operating-assembly.md 2.4, 2.10, 3): S10's operating
 preconditions -- refused on today's settings, every item bound to what it was measured on so a later change voids it,
-and, with everything filled in, only ``precondition:unlock_incomplete`` left until the unlock's last PR."""
+and, with everything filled in, nothing left (the unlock's lock was removed by U3e-2)."""
 
 import copy
 import shutil
@@ -135,7 +135,7 @@ def test_todays_settings_are_refused_with_their_reasons():
                   budget_path=REAL / "obstacle_layer.yaml", vehicle_path=REAL / "vehicle.yaml",
                   watch_path=REAL / "safety_watch.yaml")
     out = rp.operating_preconditions(f)
-    assert out[0] == rp.UNLOCK_INCOMPLETE
+    assert out and "precondition:unlock_incomplete" not in out  # U3e-2: what refuses is S10's own judgement
     for reason in ("precondition:C1:board:no_state", "precondition:C5:lidar:first_beam_err_s",
                    "precondition:C5:lidar:mount_unmeasured", "precondition:C2:s5_safety:unset",
                    "precondition:C11:lift:unset", "precondition:C12:vehicle:wheel_radius:unmeasured",
@@ -145,8 +145,8 @@ def test_todays_settings_are_refused_with_their_reasons():
     assert not any("teleop_speed_limit" in r or ":watch:tilt:" in r for r in out)
 
 
-def test_everything_met_leaves_only_the_unlock_lock(site):
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+def test_everything_met_leaves_nothing(site):
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("board,reason", [
@@ -298,7 +298,7 @@ def test_a_whole_range_self_locking_document_replaces_the_worst_height_row(site)
     def change(r):
         _hold(r, rows=[{"raised_cm": 20.0, "sag_cm_after_60s": 0.1}], self_locking_evidence="docs/evidence.md")
 
-    assert site.change_record(change) == [rp.UNLOCK_INCOMPLETE]
+    assert site.change_record(change) == []
 
 
 def test_an_unmeasured_value_needs_a_lead_exception(site):
@@ -311,7 +311,7 @@ def test_an_unmeasured_value_needs_a_lead_exception(site):
     assert "precondition:C12:vehicle:wheel_radius:unmeasured" in rp.operating_preconditions(site.facts())
     rec["config_exceptions"] = [{"file": "vehicle", "key": "wheel_radius", "decision_id": "D-3"}]
     site.write_record(rec)
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("text,why", [
@@ -382,7 +382,7 @@ def test_the_imu_watch_provenance_is_c7_not_an_assembly_refusal(site):
     d["imu"]["provenance"]["measured"] = False
     watch.write_text(yaml.safe_dump(d, sort_keys=False))
     site.write_record(site.full_record())
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 def test_an_invalid_lidar_file_is_refused_by_its_own_loader(site):
@@ -534,7 +534,7 @@ def test_each_stop_model_value_needs_its_own_measurement_or_exception(site):
     assert f"precondition:C13:layer:{LAT}:unmeasured" not in out and f"precondition:C13:layer:{DEC}:unmeasured" in out
     rec["config_exceptions"].append({"file": "layer", "key": DEC, "decision_id": "D-10"})
     site.write_record(rec)
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 @pytest.mark.parametrize("decision", ["", "   ", None, 7])
@@ -573,7 +573,7 @@ def test_the_stop_models_values_are_checked_whatever_their_provenance(site, key,
 
 def test_a_zero_latency_is_a_valid_value(site):
     _layer(site, lambda d: d["permission"].update(latency_s=0.0))
-    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+    assert rp.operating_preconditions(site.facts()) == []
 
 
 def test_the_stop_model_approval_is_bound_to_the_lidar_file(site):

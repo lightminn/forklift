@@ -380,6 +380,7 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 - port-review 7 항목마다 실측값으로 해결했거나, 해결 전 제한 운용(속도 상한·사례 제한)을 총괄이 승인했을 것(Codex P2).
 - 엔코더 고장 검출(3.3)과 입력 나이 정지(2.2)가 들어가 있을 것.
 - C13 정지 모델(`obstacle_layer_real.yaml` `permission.latency_s`·`decel_mps2`)이 S5 실측이거나 총괄 예외 `decision_id` 가 있을 것 — 잠정값이면 운영 조립이 C13 으로 거부한다(`docs/plans/2026-11-26-real-operating-assembly.md` 6.1, 총괄 동의 2026-11-27).
+- U3e-1b(#658, D5 경로 끝 정체 수정)의 미검증 두 가지를 S10 첫 실행에서 본다. ① 실차 D5 단계에서 가능 운동 질의가 정지 호를 한 번 더 계산할 때 Jetson 의 틱 시간(쓰기 전 30 ms 예산 안인지, 실행 기록의 `tick` `elapsed_s`) ② approach·insert 밖 단계(운반·하역·cusp)의 경로 끝에서 같은 정체(서 있는 엔코더 상한이 끝 감속보다 커서 `direction_unsure`·`residual_over_allowed` hold 가 풀리지 않음)가 있는지 — S10-A 는 승강에서 끝나므로 이번 범위 밖이지만, 있으면 후속 항목으로 올린다.
 - S10 에서 태블릿으로 콘솔을 쓰면 실행에 `--host <Jetson 의 LAN 주소> --console-lan --console-origin-host <태블릿 브라우저에 적는 호스트>` 를 준다. 실차 콘솔은 기본으로 루프백에만 묶이고, `--console-lan` 이면 인증 없음 경고가 기록·시작 출력에 남는다(같은 문서 6.1). IMU 장치는 연결하지 않으므로 콘솔의 C7 줄은 처음에 'C7 IMU 막힘'이고, 운용자가 그 세션에서 `imu` 우회를 켜면 '우회 중: C7 IMU (기울기 감시 꺼짐)'으로 바뀐다(정상, 세션마다 다시 켬).
 
 ## 6. 위험과 멈춤 규칙

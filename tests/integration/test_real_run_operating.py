@@ -9,8 +9,8 @@ mount compared, the digest on every ready), no IMU device. The site is a valid t
 then the survey report, registry and bundle from that file's hash, and an S10 precondition record bound to it --
 with evidence in tests/fixtures/operating/ (the assembly takes evidence inside the repository only).
 
-The lock (``precondition:unlock_incomplete``) is in the repository until U3e-2. A case that needs the run to move
-takes only that reason out of the judgement (the child's ``drop_lock``); every other judgement runs as it is.
+The judgement runs as it is in every case (the unlock's lock was removed by U3e-2): the site's configs are measured, so
+a valid site assembles; the repository's own provisional stop model keeps a site closed (case 1).
 
 What this shows is the wiring and the contract on the wall clock -- the empty corridor's run and stop. It is no
 evidence of obstacle projection, SLAM matching or any field value. CPU: as the HIL runs, 4 CPUs or more (a partial
@@ -104,7 +104,7 @@ class Site:
     """A valid temporary operating site (plan 6.1): configs measured, lidar.yaml first, the survey and registry bound
     to it, the S10 precondition record bound to the board this test gives."""
 
-    def __init__(self, root: Path, *, record_over=None):
+    def __init__(self, root: Path, *, record_over=None, layer_over=None):
         self.root = root
         cfg = self.cfg = root / "cfg"
         cfg.mkdir(parents=True)
@@ -116,6 +116,8 @@ class Site:
             d = _measured(yaml.safe_load((REAL / name).read_text()))
             if name == "vehicle.yaml":
                 d["chassis_model"] = str((REAL / d["chassis_model"]).resolve())
+            if name == "obstacle_layer_real.yaml" and layer_over is not None:
+                layer_over(d)
             (cfg / name).write_text(yaml.safe_dump(d, sort_keys=False))
         lidar = yaml.safe_load((REAL / "lidar.yaml").read_text())
         lidar["timing"].update(first_beam_err_s=0.002, basis="engineering", decision_id="D-E2E", basis_doc=BOUND,
@@ -281,7 +283,7 @@ class OperatingConsole(Console):
 class Operating:
     """The model on the test's pty, the scan producer, the fake bridge and the run's child."""
 
-    def __init__(self, model, tmp_path: Path, site: Site, *, duration_s=120, drop_lock=True, model_args=(),
+    def __init__(self, model, tmp_path: Path, site: Site, *, duration_s=120, model_args=(),
                  product=PRODUCT):
         self.tmp, self.site = tmp_path, site
         self.out = tmp_path / "run"
@@ -302,7 +304,7 @@ class Operating:
         cfg = tmp_path / "child.json"
         cfg.write_text(json.dumps({"argv": site.argv(self.slave_name, self.out, duration_s, tmp_path / "scan.sock",
                                                      self.bridge.path), "product": product, "serial": SERIAL,
-                                   "writes_log": str(self.writes_log), "drop_lock": bool(drop_lock),
+                                   "writes_log": str(self.writes_log),
                                    "fd": slave}))
         self.proc = subprocess.Popen([sys.executable, str(REPO / "tests/integration/real_operating_child.py"),
                                       str(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -402,16 +404,25 @@ def _explain(run):
     return f"stdout:\n{''.join(run.lines)[-3000:]}\nstderr:\n{(getattr(run, 'stderr', '') or '')[-3000:]}"
 
 
-# --- case 1: the repository's lock on a valid site ---------------------------------------------------------------
-def test_on_a_valid_site_the_lock_alone_refuses_and_nothing_reaches_the_board(mcu_model, tmp_path):
-    """Plan 6.1 case 1: no judgement taken out -- the assembly is refused with exactly the lock, and not one byte
-    (no resync byte either) was written to the board."""
-    site = Site(tmp_path / "site")
-    with operating(mcu_model, tmp_path, site, drop_lock=False) as run:
+# --- case 1: the repository's provisional stop model on an otherwise valid site --------------------------------
+def _repository_stop_model(layer: dict) -> None:
+    """The repository's own C13 provenance (measured: false until S5) back over the site's measured copy."""
+    repo = yaml.safe_load((REAL / "obstacle_layer_real.yaml").read_text())
+    layer["permission"]["stop_model"] = repo["permission"]["stop_model"]
+
+
+def test_the_repository_stop_model_keeps_a_valid_site_closed_and_nothing_reaches_the_board(mcu_model, tmp_path):
+    """U3e-2 (the lock gone): a site valid in everything but the repository's provisional stop model (C13, measured
+    only at S5) is refused with exactly those two reasons, and not one byte (no resync byte either) reaches the
+    board."""
+    site = Site(tmp_path / "site", layer_over=_repository_stop_model)
+    with operating(mcu_model, tmp_path, site) as run:
         code = run.finish(timeout=90)
         end = run.end()
         assert code == 2, _explain(run)
-        assert end is not None and end["end"]["refused"] == [rp.UNLOCK_INCOMPLETE], _explain(run)
+        assert end is not None and end["end"]["refused"] == [
+            "precondition:C13:layer:permission.stop_model.latency_s:unmeasured",
+            "precondition:C13:layer:permission.stop_model.decel_mps2:unmeasured"], _explain(run)
         assert sum(w["n"] for w in run.writes()) == 0, run.writes()[:5]
         assert run.port is None  # no console was served
 
@@ -557,10 +568,10 @@ def test_a_submit_without_the_pallet_confirmation_never_moves_the_board(mcu_mode
 
 
 def test_one_reason_left_in_the_judgement_refuses_the_assembly(mcu_model, tmp_path):
-    """Plan 6.1 case 4: with fault_detection unset the judgement less the lock is exactly that one reason -- the run is
+    """Plan 6.1 case 4: with fault_detection unset the judgement is exactly that one reason -- the run is
     not assembled and nothing reaches the board."""
     site = Site(tmp_path / "site", record_over=lambda rec: rec["items"].__setitem__("fault_detection", None))
-    with operating(mcu_model, tmp_path, site, drop_lock=True) as run:
+    with operating(mcu_model, tmp_path, site) as run:
         code = run.finish(timeout=90)
         end = run.end()
         assert code == 2, _explain(run)
@@ -745,14 +756,14 @@ def test_a_lost_device_while_driving_revokes_and_is_never_reopened(mcu_model, tm
 
 
 def test_the_child_takes_only_the_tests_pty(tmp_path):
-    """Codex U3e-1 implementation round 1 P1: the child that drops the lock and hands out a test identity runs only on
+    """Codex U3e-1 implementation round 1 P1: the child that hands out a test identity runs only on
     the pty fd the test gave it -- a regular file's fd (or a real tty's) is refused before anything else."""
     f = tmp_path / "not-a-pty"
     f.write_bytes(b"")
     fd = os.open(f, os.O_RDWR)
     try:
         cfg = tmp_path / "child.json"
-        cfg.write_text(json.dumps({"argv": [], "product": PRODUCT, "serial": SERIAL, "drop_lock": True, "fd": fd,
+        cfg.write_text(json.dumps({"argv": [], "product": PRODUCT, "serial": SERIAL, "fd": fd,
                                    "writes_log": str(tmp_path / "w.jsonl")}))
         p = subprocess.run([sys.executable, str(REPO / "tests/integration/real_operating_child.py"), str(cfg)],
                            capture_output=True, text=True, timeout=60, pass_fds=(fd,),
