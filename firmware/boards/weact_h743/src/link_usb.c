@@ -95,6 +95,9 @@ void OTG_FS_IRQHandler(void)
        was set before and is 0 after is a connection change, counted here whatever TinyUSB's event queue does
        (Codex A1a rounds 5-6). While this runs, the tick reads no byte (link_read). */
     g_otg_in_isr = true;
+    if ((USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        conn_event_from_isr(); /* before TinyUSB clears it and waits on the FIFO flushes (round 8) */
+    }
     uint32_t addr_before = usb_dev_addr();
     tud_int_handler(BOARD_TUD_RHPORT);
     if (addr_before != 0u && usb_dev_addr() == 0u) {
@@ -142,30 +145,35 @@ static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_
    they differ and, once settled on a new value, drops what the receive ring still holds. The send FIFO is
    left alone: a DWC2 IN transfer reads it in place (board design 5.1). */
 static volatile uint32_t g_conn_begin, g_conn_end;
-/* A bus reset, unplug or suspend is counted in the OTG interrupt the moment it happens, so the tick stops
-   reading at once, before the main loop's tud_task gets to it (Codex A1a round 2). */
-static volatile uint32_t g_conn_events, g_conn_handled, g_conn_since;
-/* A USBRST the tick sees still waiting for the OTG interrupt: counted by the tick itself (its own counter, so
-   the two interrupt levels never increment one variable), so the arming ends at the next tick even if that
-   interrupt is held up in TinyUSB's reset handling (Codex A1a round 7). */
-static volatile uint32_t g_conn_tick_events, g_conn_tick_handled;
-/* The generation the tick last saw settled: the start time is stamped only when nothing is pending and the tick
-   has seen the last change, so the first start of a change survives until the tick reads it (Codex A1a round 3). */
-static volatile uint32_t g_conn_observed;
+/* Each context counts changes in its own counter and stamps its own start time, single writer each (Codex A1a
+   rounds 2-8): the OTG interrupt (bus reset, unplug, suspend), the tick (a USBRST still pending, or the OTG
+   interrupt seen mid-way two ticks running) and the main loop's lifecycle (DTR, mount; it also settles the
+   others). The tick takes the earliest start of whatever is pending. */
+static volatile uint32_t g_conn_events, g_conn_handled, g_since_isr;
+static volatile uint32_t g_conn_tick_events, g_conn_tick_handled, g_since_tick;
+static volatile uint32_t g_since_main;    /* the earliest start of the change the lifecycle settles */
+static volatile uint32_t g_conn_observed; /* the generation the tick last saw settled */
 static bool g_last_dtr;
 
-static bool conn_idle(void)
+static uint32_t earlier(uint32_t a, uint32_t b)
 {
-    return g_conn_events == g_conn_handled && g_conn_tick_events == g_conn_tick_handled &&
-           g_conn_begin == g_conn_end && g_conn_end == g_conn_observed;
+    return (int32_t)(a - b) < 0 ? a : b;
 }
 
 static void conn_event_from_isr(void)
 {
-    if (conn_idle()) {
-        g_conn_since = timebase_now_us();
+    if (g_conn_events == g_conn_handled) {
+        g_since_isr = timebase_now_us();
     }
     g_conn_events++;
+}
+
+static void conn_event_from_tick(void)
+{
+    if (g_conn_tick_events == g_conn_tick_handled) {
+        g_since_tick = timebase_now_us();
+    }
+    g_conn_tick_events++;
 }
 
 void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
@@ -180,19 +188,38 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 /* Control tick only. */
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
+    static uint8_t in_isr_ticks;
     if (g_link_stats.usb_started && (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
-        if (conn_idle()) {
-            g_conn_since = timebase_now_us();
-        }
-        g_conn_tick_events++;
+        conn_event_from_tick();
     }
-    uint32_t events = g_conn_events, handled = g_conn_handled;
+    /* An OTG interrupt is a few microseconds: one still mid-way at two ticks in a row is held up (e.g. in
+       TinyUSB's reset FIFO flushes); the arming ends rather than waiting for it (round 8). */
+    in_isr_ticks = g_otg_in_isr ? (uint8_t)(in_isr_ticks < 255u ? in_isr_ticks + 1u : 255u) : 0u;
+    if (in_isr_ticks == 2u) {
+        conn_event_from_tick();
+    }
+    bool isr_pending = g_conn_events != g_conn_handled;
+    bool tick_pending = g_conn_tick_events != g_conn_tick_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    *busy = events != handled || g_conn_tick_events != g_conn_tick_handled || begin != end;
-    *since_us = g_conn_since;
-    if (!*busy) {
+    bool main_pending = begin != end;
+    *busy = isr_pending || tick_pending || main_pending;
+    uint32_t since = g_since_main;
+    if (*busy) {
+        uint32_t now = timebase_now_us();
+        since = now;
+        if (isr_pending) {
+            since = earlier(since, g_since_isr);
+        }
+        if (tick_pending) {
+            since = earlier(since, g_since_tick);
+        }
+        if (main_pending) {
+            since = earlier(since, g_since_main);
+        }
+    } else {
         g_conn_observed = end;
     }
+    *since_us = since;
     return end;
 }
 #endif
@@ -204,11 +231,19 @@ static void lifecycle(void)
        an interrupt's own stamp (Codex A1a round 4), and the CDC receive FIFO, which that interrupt writes in
        place (DWC2 slave), is cleared on whole indices (round 1). */
     dcd_int_disable(0);
-    uint32_t events = g_conn_events;
     uint32_t tick_events = g_conn_tick_events; /* the tick preempts this; a later count keeps busy */
-    if (conn_idle()) {
-        g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
+    uint32_t events = g_conn_events;
+    uint32_t start = timebase_now_us(); /* this change's start: the earliest of what it settles */
+    if (tick_events != g_conn_tick_handled) {
+        start = earlier(start, g_since_tick);
     }
+    if (events != g_conn_handled) {
+        start = earlier(start, g_since_isr);
+    }
+    if (g_conn_end != g_conn_observed) { /* the last settled change not yet seen by the tick: keep its start */
+        start = earlier(start, g_since_main);
+    }
+    g_since_main = start;
     g_conn_begin = g_conn_end + 1u;
     /* The receive ring's consumer is the tick, which reads nothing while begin != end and cannot run inside this
        (it preempts the main loop, not the other way): dropping the old connection's bytes here is safe, and does
