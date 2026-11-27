@@ -639,3 +639,46 @@ def test_a_link_change_after_the_clear_went_out_is_unconfirmed_not_refused(rig):
     assert run_until(lambda: b.clears, 4.0)
     out = b.clears[-1]
     assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def _inject_pair(c, st, bst):
+    c.host._state, c.host._state_rx_ns = st, int(c.clock())
+    if bst is not None:
+        c.host.bench_state, c.host.bench_state_rx_ns, c.host.bench_state_boot = bst, int(c.clock()), st.boot_id
+        c.host.bench_state_of = st
+
+
+def test_a_new_board_generation_before_the_clear_refuses_it_with_no_after(rig):
+    """The board's connection generation changes on the same opening before the CLEAR goes out: refused, and the new
+    generation's STATE is not the request's 'after' (Codex C round 8 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent: only the injected pair counts
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    new = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED)
+    _inject_pair(c, new, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "refused" and out["after"] is None, out
+
+
+def test_a_state_whose_pair_is_not_in_yet_never_clears(rig):
+    """After the CLEAR's echo, a ready DISARMED STATE whose BENCH_STATE has not come in (the host reads the pair in two)
+    may be of a new generation: the clear is not decided on it (Codex C round 8 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is None or c.clear.phase == "ready", 6.0)
+    if c.clear is None:
+        pytest.skip("the model cleared within one read")  # nothing left to decide
+    c.dev.receive = lambda host, now: host.tick(now)
+    st = c.host.state
+    new = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED,
+                              flags=st.flags | StateFlag.DRIVERS_READY, fault_flags=FaultFlag(0))
+    _inject_pair(c, new, None)  # its pair not in: bench_state_of is still the older STATE
+    assert run_until(lambda: b.clears, 6.0)
+    out = b.clears[-1]
+    assert out["result"] != "cleared" and out["after"] is None, out
