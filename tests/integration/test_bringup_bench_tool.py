@@ -241,8 +241,59 @@ def test_bad_distances_are_refused_before_anything(model, axis, turns, why):
     assert not {"BENCH_SET", "BENCH_ARM"} & set(kinds_written(b))
 
 
-def test_a_high_duty_distance_is_shown_never_refused(capsys):
-    ask = bringup._bench_ask(args(axis="M", duty=0.5, stop_kth_turns=1.0, bench_bypass=None, bench_duty_max=0.6,
-                                  bench_time_max=None))
-    assert ask.distance and ask.stop_counts == 4096
-    assert "advisory: a distance stop at duty 0.5 is unverified" in capsys.readouterr().err
+def nonzero_writes(b):
+    return [w for w in b.writes if w.kind == "COMMISSION" and w.duty_e4]
+
+
+def test_a_high_duty_distance_is_shown_never_refused(model, capsys):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.45, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.5,
+                               bench_time_max=5.0, stop_kth_turns=0.02, vcc_watched=True, observed="none"), b)
+    assert res["result"] != "refused", res
+    err = capsys.readouterr().err
+    assert err.count("advisory: a distance stop at duty 0.45 is unverified") == 1
+    assert [r for r in rows(b) if r["t"] == "bench_advisory"]
+
+
+def test_a_distance_run_ended_before_its_target_failed(model):
+    """The tool's time ran out before the distance (its one zero ended the run): the run failed (plan 4.2 decision 8),
+    never 'ok'."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=0.5, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=5.0, observed="none"), b)
+    assert res["distance"]["result"] == "missed" and res["distance"]["ended_by"] == "end_zero", res
+    assert res["aborted"] == "bench_stop_end_zero"
+
+
+def test_a_one_count_run_has_no_driving_sample(model):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
+    assert res["distance"]["result"] == "reached", res
+    if res["result"] == "board_record_only":
+        assert res["metrics"]["reason"] == "no_driving_sample"
+    else:
+        assert res["result"] == "ok"  # the model's slow axis left a driving sample
+
+
+def test_the_window_is_judged_before_a_second_non_zero(model):
+    """The first accepted sample already outside the window: no second non-zero goes out (impl round 1 P1-2)."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, window=(-0.5, 0.0001), bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=0.5, observed="none"), b)
+    assert res["stop"] == "window", res
+    assert len(nonzero_writes(b)) <= 2  # the first, and at most the one in flight when the sample came
+
+
+def test_a_measuring_kth_run(model):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=0.8, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, kth_measure=True, observed="none"), b)
+    assert res["bench_set"]["source"] == 1 and res["bench_set"]["stop_counts"] == 0, res
+    assert res["result"] == "ok" and res["aborted"] is None, res
+    assert res["measure"]["status"] == "confirmed" and res["measure"]["moved"] > 0, res["measure"]

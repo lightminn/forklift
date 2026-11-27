@@ -115,6 +115,7 @@ STEP_MAX_S = 3.0
 CLEANUP_S = 1.0
 OBSERVE_S = 2.0
 STATE_GAP_S = 0.2  # after an event, two STATEs further apart than this are an observation failure
+RESULT_PAIR_WAIT_S = 0.15  # a STATE out of ARMED: how long its result pair may lag
 FIRST_NONZERO_SLACK_S = 0.02  # a distance run's first non-zero: its own deadline plus two STATE periods
 REST_OBSERVE_S = 0.6  # after DISARMED: the 0.5 s settling window at 100 Hz, and a margin
 BOARD_ENDS = ("distance_reached", "distance_provisional", "no_progress", "kth_zero_suspect", "kth_lost")
@@ -907,8 +908,13 @@ class CommissionSession(Session):
             prev = self.b.host.bench_state
             if self._prev_result is not None and prev is not None and prev.result_run_id == self._prev_result[1]:
                 # the confirmation may change until the ARM clears it: the last one seen is the record's final one
+                errors0 = self.b.record_errors
                 self.b.emit({"t": "bench_previous_result_final", "boot_id": self._prev_result[0],
                              **result_fields(prev)})
+                self.b.flush_record()
+                if self.b.record_errors != errors0:
+                    # the ARM clears the board's record: never before its final value is written down (impl r1 P2-6)
+                    raise Refused("bench: the last run's final board record could not be written: nothing is armed")
             return self.b.host.request_bench_arm(self.run_id, now_ns)
         return self.b.host.request_arm(now_ns)
 
@@ -979,8 +985,12 @@ class CommissionSession(Session):
             if (reason := stop()) is not None:
                 self.stop_reason = reason
                 return first
-        if nonzero and self._distance_run() and not self._first_nonzero_answered(duty_e4, bound):
-            return None
+        if nonzero and self._distance_run():
+            if not self._first_nonzero_answered(duty_e4, bound):
+                return None
+            if stop is not None and (reason := stop()) is not None:
+                self.stop_reason = reason  # the samples seen while its answer was awaited (impl r1 P1-2)
+                return None
         while time.monotonic_ns() < stop_ns and self.board_ended is None:
             seq = self.send_duty(duty_e4, bound)
             first = first if first is not None else seq
@@ -1000,38 +1010,71 @@ class CommissionSession(Session):
         is accepted or this run's result is latched. Refused (sensor_invalid) or unanswered within its own deadline
         plus two STATE periods (and a host-clock bound when nothing comes at all): the run is closed, never retried."""
         b = self.b
+        conn0 = b.conn
+        echo_rx_ns = b.host.state_rx_ns  # the STATE the command echoes was received then (the host-clock bound)
         seq = self.send_duty(duty_e4, bound)
         if seq is None:
             self.aborted = "bench_start_not_queued"
             return False
-        sent = time.monotonic_ns()
-        wait_s = max(0.0, (self.last_expires_ns - sent) / 1e9) + FIRST_NONZERO_SLACK_S
+        seq16 = seq & 0xFFFF
+        refused = {"why": None}
+
+        def write():
+            return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq16
+                         and w.conn == conn0), None)
+
+        def evidence():
+            # the host's accepted STATE, received after this command's last byte, of its boot and arming generation,
+            # made after the STATE it echoed: an older STATE naming the same seq is never its answer (impl r1 P1-1)
+            w, s, rx = write(), b.host.state, b.host.state_rx_ns
+            if (w is None or s is None or rx is None or rx < w.done_ns or s.boot_id != w.boot_id
+                    or s.arm_gen != w.arm_gen or w.echo_mcu_time_us is None or s.mcu_time_us <= w.echo_mcu_time_us):
+                return None, w
+            return s, w
 
         def answered() -> bool:
-            st = b.state
-            if st is None:
-                return False
-            if st.last_rx_seq == (seq & 0xFFFF):
+            if (self.bench_result() or {}).get("confirmed"):
                 return True
-            br = self.bench_result() or {}
-            return bool(br.get("confirmed")) or st.reject_reason == RejectReason.SENSOR_INVALID
+            s, w = evidence()
+            if s is None:
+                return False
+            if s.last_rx_seq == seq16:
+                return True
+            if s.reject_reason != RejectReason.NONE and refused["why"] is None:
+                refused["why"] = s.reject_reason.name.lower()  # kept: a refused command is never taken later
+            # the command's own deadline plus two STATE periods passed on the MCU's clock (impl r1 P2-1)
+            return refused["why"] is not None or (
+                w.valid_ms is not None
+                and s.mcu_time_us > w.echo_mcu_time_us + w.valid_ms * 1000 + FIRST_NONZERO_SLACK_S * 1e6)
 
-        b.run_until(answered, wait_s)
-        st, br = b.state, self.bench_result() or {}
+        w0 = None
+        for _ in range(20):  # the write's record (its validity) first: the host-clock bound needs it
+            b.cycle()
+            w0 = write()
+            if w0 is not None:
+                break
+        valid_ms = (w0.valid_ms if w0 is not None and w0.valid_ms is not None else b.host.cfg.cap_ms)
+        host_bound_s = max(0.0, ((echo_rx_ns or time.monotonic_ns()) + valid_ms * 1_000_000 + 50_000_000
+                                 - time.monotonic_ns()) / 1e9)
+        b.run_until(answered, host_bound_s)
+        br = self.bench_result() or {}
+        s, _w = evidence()
         if br.get("confirmed"):
             self.bench_start = "confirmed_by_result"  # it drove: the board's own end follows
             self.board_ended = br.get("stop_reason")
-            return True
-        if st is not None and st.last_rx_seq == (seq & 0xFFFF):
+        elif s is not None and s.last_rx_seq == seq16 and refused["why"] is None:
             self.bench_start = "accepted"
-            return True
-        if st is not None and st.reject_reason == RejectReason.SENSOR_INVALID:
+        elif refused["why"] is not None:
             self.bench_start = "refused"
-            self.aborted = "bench_start_refused_sensor_invalid"
+            self.aborted = f"bench_start_refused_{refused['why']}"
         else:
             self.bench_start = "unconfirmed"
             self.aborted = "bench_start_unconfirmed"
         b.emit({"t": "bench_start", "result": self.bench_start, "seq": seq})
+        if self.bench_start in ("accepted", "confirmed_by_result"):
+            return True
+        if b.host.ready:
+            self.send_duty(0)  # closed with a zero (then the cleanup's DISARM), never another non-zero
         return False
 
     def observe_rest(self, seconds: float = REST_OBSERVE_S) -> dict | None:
@@ -1094,6 +1137,9 @@ class CommissionSession(Session):
     def _abort_reason(self) -> str | None:
         b = self.b
         if not b.host.ready:
+            if self._distance_run():
+                # the STATE and its BENCH_STATE may come in two reads: the result pair decides (impl r1 P2-2)
+                b.run_until(lambda: self._board_ended_run() is not None, RESULT_PAIR_WAIT_S)
             if (ended := self._board_ended_run()) is not None:
                 self.board_ended = ended
                 return None
@@ -1112,6 +1158,15 @@ def result_fields(bs) -> dict:
            "blocked": bs.blocked, "distance_confirm": bs.distance_confirm, "run_flags": bs.run_flags,
            "distance_ref": bs.distance_ref, "cut_position": bs.cut_position,
            "end_evidence_age_ms": bs.end_evidence_age_ms}
+    if bs.result_source == 1:
+        # a KTH run: how far its end displacement is trusted, and the distance verdict when the board ended it by a
+        # distance rule (the distance asked is not in BENCH_STATE: the verdict's category only)
+        out["measure"] = bench_session.measure_verdict(run_flags=bs.run_flags, distance_ref=bs.distance_ref,
+                                                       cut_position=bs.cut_position)
+        if stop in BOARD_ENDS:
+            out["distance"] = bench_session.distance_verdict(
+                stop_reason=stop, confirm=bs.distance_confirm, run_flags=bs.run_flags, stop_counts=0,
+                distance_ref=bs.distance_ref, cut_position=bs.cut_position)
     return out
 
 
@@ -1155,6 +1210,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
         b.emit({"t": "bench_advisory", "advisory": "high_duty_distance_unverified", "duty": duty,
                 "above": bl.HIGH_DUTY_DISTANCE})  # shown and recorded, never refused (lead 2026-11-28)
+        print(f"advisory: a distance stop at duty {duty} is unverified above {bl.HIGH_DUTY_DISTANCE} "
+              "(the axis speed may near the counting bound)", file=sys.stderr)
     b.phase = "pre_zero"
     session.hold_duty(0, PRE_ZERO_S)
     b.phase = "on"
@@ -1188,6 +1245,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         else:
             session.hold_duty(0, POST_ZERO_S)
     session.cleanup()
+    rest = session.observe_rest() if getattr(session, "bench_image", False) else None
     if getattr(session, "bench_image", False):
         # the board's own first cause decides: a run that ended by expiry, a time limit, a fault or anything but the
         # tool's one zero is not ok, whatever the samples say (A1a-2 P2)
@@ -1197,8 +1255,10 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             br = session.bench_result()
         if not br.get("confirmed"):
             session.aborted = session.aborted or "bench_result_unconfirmed"
-        elif br.get("stop_reason") != "end_zero" and not (
-                distance_run and br.get("stop_reason") in bench_session.DISTANCE_ENDS):
+        elif distance_run and br.get("stop_reason") not in bench_session.DISTANCE_ENDS:
+            # ended before its target (its zero, a time limit, an expiry): the run failed (plan 4.2 decision 8)
+            session.aborted = session.aborted or f"bench_stop_{br.get('stop_reason')}"
+        elif not distance_run and br.get("stop_reason") != "end_zero":
             session.aborted = session.aborted or f"bench_stop_{br.get('stop_reason')}"
     # Acceptances are matched with the write log (order, connection, completion, echo), never with a seq alone: a
     # long run wraps the 16-bit seq and a USB-only reconnect brings the same boot back on a new fd (design 2026-11-25
@@ -1241,7 +1301,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     bench_out = {}
     if getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1:
         br = session.bench_result() or {}
-        if on_index is None and br.get("confirmed") and br.get("run_id") == session.run_id:
+        no_drive_sample = on_index is None or b.samples[on_index].state.mode != Mode.ARMED
+        if no_drive_sample and br.get("confirmed") and br.get("run_id") == session.run_id:
             # 100 Hz may miss a short distance run's acceptance and cut: the board's latched result says it drove;
             # the duty and current figures then have no sample (plan 4.2 A1b-1 decision 8)
             result = "board_record_only"
@@ -1258,9 +1319,9 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                     cut_position=br.get("cut_position", 0))
         if session.bench_start is not None:
             bench_out["start"] = session.bench_start
-        rest = session.observe_rest()
         if rest is not None:
             bench_out["rest"] = rest
+        bench_out["bench_result"] = br  # the one read the verdicts above were made from (impl r1 P2-4)
     if ambiguous is not None:
         # the seq of a sample on the driven span names more than one write: no figure is taken from it
         result = "unjudgeable"
@@ -1842,6 +1903,9 @@ def main(argv=None) -> int:
     cm.add_argument("--stop-kth-turns", type=float,
                     help="bench image (bench6): steering/lift only -- the board cuts the output after this many KTH "
                          "sensor turns in the duty's direction (plan 4.2 A1b-1)")
+    cm.add_argument("--kth-measure", action="store_true",
+                    help="bench image (bench6): steering/lift only -- measure the run by the KTH count without a "
+                         "distance stop (the end displacement and how far it is trusted)")
     cm.add_argument("--count-sign", type=int, choices=(1, -1), default=1,
                     help="bench image: +1 when a positive duty raises the KTH count, -1 when it lowers it")
     cm.add_argument("--sensorless", action="store_true",
@@ -2035,7 +2099,7 @@ def _bench_ask(args) -> bl.BenchAsk | None:
     """The run's BENCH_SET (plan A1a), or None when no bench argument was given (a bench board then gets its
     defaults)."""
     given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max", "stop_kth_turns")]
-    if all(v is None for v in given):
+    if all(v is None for v in given) and not getattr(args, "kth_measure", False):
         return None
     try:
         names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
@@ -2053,14 +2117,12 @@ def _bench_ask(args) -> bl.BenchAsk | None:
         except bl.LimitRefused as exc:
             raise Refused(str(exc)) from None
         source = 1
+    elif getattr(args, "kth_measure", False):
+        source = 1  # measuring only (no distance stop)
     ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
                       getattr(args, "bench_time_max", None), source=source, stop_counts=stop, count_sign=count_sign)
     if (why := bl.bench_refusal(ask)) is not None:
         raise Refused(why)
-    if ask.distance and abs(float(args.duty)) > bl.HIGH_DUTY_DISTANCE:
-        # shown and recorded, never refused (lead 2026-11-28): the speed premise was measured at duty 0.2
-        print(f"advisory: a distance stop at duty {args.duty} is unverified above {bl.HIGH_DUTY_DISTANCE} "
-              "(the axis speed may near the counting bound)", file=sys.stderr)
     return ask
 
 

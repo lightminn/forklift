@@ -252,6 +252,8 @@ def kth_stop_counts(turns: float, duty: float, count_sign: int) -> int:
     rounds to 0, which would mean no distance stop)."""
     if not math.isfinite(turns) or turns <= 0:
         raise LimitRefused("stop-kth-turns: a positive finite number of turns")
+    if turns >= 2 ** 31 / KTH_COUNTS_PER_TURN:
+        raise LimitRefused(f"stop-kth-turns: {turns} turns is past 2^31-1 counts")
     if count_sign not in (1, -1):
         raise LimitRefused("count-sign: 1 or -1")
     if duty == 0 or not math.isfinite(duty):

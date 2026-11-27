@@ -82,4 +82,17 @@ def test_the_rest_position():
     assert bs.rest_position(series(51, count_state=2))["why"] == "continuity"
     assert bs.rest_position(series(51, evidence_age_ms=150))["why"] == "evidence_age"
     assert bs.rest_position([])["result"] == "unconfirmed"
+    two = [(0, BASE), (500_000, BASE)]  # 0 and 500 ms only: no 100 Hz observation in between
+    assert bs.rest_position(two)["result"] == "unconfirmed"
+    assert bs.rest_position(series(51, raw_angle=0))["why"] == "not_reanchored"
+    assert bs.rest_position(series(51, step_us=40_000))["why"] == "sparse"
     assert Mode.DISARMED  # the caller passes samples after DISARMED
+
+
+def test_a_huge_distance_is_refused_not_overflowed():
+    from forklift_core.plant import bench_limits as bl
+    with pytest.raises(bl.LimitRefused):
+        bl.kth_stop_counts(1e308, 0.2, 1)
+    with pytest.raises(bl.LimitRefused):
+        bl.kth_stop_counts(0.0001, 0.2, 1)
+    assert bl.kth_stop_counts(1.0, -0.2, -1) == 4096 and bl.kth_stop_counts(1.0, 0.2, -1) == -4096

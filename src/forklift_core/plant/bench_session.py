@@ -225,6 +225,7 @@ def measure_verdict(*, run_flags: int, distance_ref: int, cut_position: int) -> 
 
 REST_SETTLE_US = 500_000  # 0.5 s with no change at 100 Hz
 REST_EVIDENCE_MS = 100
+REST_GAP_US = 30_000  # 100 Hz with up to two pairs missed
 
 
 def rest_position(samples) -> dict:
@@ -239,9 +240,18 @@ def rest_position(samples) -> dict:
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "continuity"}
     if last.evidence_age_ms > REST_EVIDENCE_MS:
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "evidence_age"}
-    window = [b for t, b in samples if t_last - t <= REST_SETTLE_US]
-    if samples[0][0] > t_last - REST_SETTLE_US or any(b.cumulative != last.cumulative for b in window):
+    window = [(t, b) for t, b in samples if t_last - t <= REST_SETTLE_US]
+    if samples[0][0] > t_last - REST_SETTLE_US or any(b.cumulative != last.cumulative for _t, b in window):
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "not_settled"}
+    # the 0.5 s covered by the 100 Hz samples (no gap over REST_GAP_US), of one run, each re-anchored on a non-zero
+    # frame with fresh evidence (impl r1 P1-4)
+    covering = [(t, b) for t, b in samples if t >= t_last - REST_SETTLE_US - REST_GAP_US]
+    times = [t for t, _b in covering]
+    if any(t2 - t1 > REST_GAP_US for t1, t2 in zip(times, times[1:])):
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "sparse"}
+    if any(b.run_id != last.run_id or b.raw_angle == 0 or b.evidence_age_ms > REST_EVIDENCE_MS
+           for _t, b in covering):
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "not_reanchored"}
     return {"result": "settled_at_100hz", "cumulative": last.cumulative,
             "wording": "100 Hz 관측에서 0.5 s 동안 위치 변화 없음"}
 

@@ -823,8 +823,12 @@ class BenchConsole:
         prev, bst = r.previous_result, self.host.bench_state
         if prev is not None and bst is not None and bst.result_run_id == prev["run_id"]:
             # the confirmation may change until this ARM clears it: the last one seen is the final record
-            self._emit(r, {"t": "bench_previous_result_final", "boot_id": prev["boot_id"],
-                           **bringup.result_fields(bst)})
+            final = {"t": "bench_previous_result_final", "boot_id": prev["boot_id"], **bringup.result_fields(bst)}
+            self._emit(r, final)
+            r.previous_result = final  # result.json carries the final value (impl r1 P2-5)
+            if r.cancel is not None:  # not written down: the ARM would clear the board's copy (impl r1 P2-6)
+                self._refuse(r, "previous_result_not_recorded", now)
+                return
         blocked = self.host.request_bench_arm(r.run_id, now)
         if blocked is not None:
             self._refuse(r, f"arm_blocked:{blocked.reason}", now)
