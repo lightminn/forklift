@@ -62,6 +62,18 @@ def test_a_bench_set_echoes_the_state_and_a_bench_arm_runs_the_arming_exchange()
     assert r.host.ready
 
 
+@pytest.mark.parametrize("count_sign", [1, -1])
+@pytest.mark.parametrize("stop", [-4096, 40])
+def test_a_distance_bench_set_carries_its_source_stop_and_count_sign(count_sign, stop):
+    """bench6 (plan 4.2 A1b-1 decision 8): the KTH source, the signed stop and count_sign reach the SET bytes."""
+    r = bench_rig()
+    r.feed()
+    assert r.host.bench_set(7, bl.BenchAsk(2, (), 0.2, 3.0), r.now, count_sign=count_sign, source=1,
+                            stop_counts=stop) is None
+    (bs,) = r.sent()
+    assert bs.source == 1 and bs.stop_counts == stop and bs.count_sign == count_sign
+
+
 def test_a_bench_set_needs_disarmed_and_no_arming_in_progress():
     r = bench_rig()
     r.feed(mode=Mode.ARMED, gen=1)

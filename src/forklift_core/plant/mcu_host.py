@@ -581,9 +581,11 @@ class McuLinkHost:
                 return "outputs_locked_or_hil"
         return None
 
-    def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1) -> Blocked | None:
-        """Queue the run's BENCH_SET (duty mode, no measurement source, no distance stop -- A1a), echoing the latest
-        STATE. Its seq is ``last_queued_seq``; the caller reads the board's acceptance from STATE."""
+    def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1,
+                  source: int = int(BenchSource.NONE), stop_counts: int = 0) -> Blocked | None:
+        """Queue the run's BENCH_SET (duty mode; bench6: measured by the KTH count with ``source`` and stopped at
+        ``stop_counts``, 0 = no distance stop), echoing the latest STATE. Its seq is ``last_queued_seq``; the caller
+        reads the board's acceptance from STATE."""
         refused = self.bench_refusal()
         if refused is not None:
             return Blocked(f"bench_refused: {refused}")
@@ -596,7 +598,7 @@ class McuLinkHost:
             return Blocked("outbox_full")
         try:
             msg = BenchSet(s.boot_id, s.mcu_time_us, int(run_id), int(BenchMode.DUTY), int(ask.axis),
-                           int(BenchSource.NONE), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), 0)
+                           int(source), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), int(stop_counts))
         except ValueError as exc:
             return Blocked(f"bad_value: {exc}")
         self._enqueue("BENCH_SET", msg, now_ns)
