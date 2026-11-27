@@ -1051,10 +1051,20 @@ class BenchConsole:
             self.arbiter.release_stop(now / 1e9, "bench_stop_confirmed")
 
     # --- the clear ----------------------------------------------------------------------------------------------------
+    def _seen_after(self, seq: int | None) -> bool:
+        """A STATE received after that frame's last byte went out (never one made before it)."""
+        w = self.written.get(seq) if seq is not None else None
+        return w is not None and self.host.state_rx_ns is not None and self.host.state_rx_ns > w[1]
+
     def _clear_done(self, c: Clear, result: str, now: int, why: str | None = None) -> None:
         st = self.host.state
+        last = c.clear_seq if c.clear_seq is not None and c.clear_seq in self.written else c.disarm_seq
+        sent = last is not None and last in self.written
+        # the state after the attempt: only one received after its last frame (Codex C round 5 P2-2); before any
+        # frame went out, the state as it is
+        after = None if st is None or (sent and not self._seen_after(last)) else _latch_view(st)
         out = {"t": "clear_result", "request_id": c.request_id, "clear": c.rec.dir.name, "result": result,
-               "why": why, "cause": c.cause, "before": c.before, "after": None if st is None else _latch_view(st)}
+               "why": why, "cause": c.cause, "before": c.before, "after": after}
         self.host.drop_frames(("CLEAR_FAULTS",) if result == "cleared" else ("CLEAR_FAULTS", "DISARM"),
                               f"clear: {result}")  # a refused request's own unsent frames go with it (round 3 P2-3)
         try:
@@ -1117,8 +1127,12 @@ class BenchConsole:
             if self._echoed(c.clear_seq, "CLEAR_FAULTS", c):
                 c.phase, c.phase_ns = "ready", now
             elif now - c.phase_ns > CLEAR_ECHO_S * 1e9:
-                why = st.reject_reason.name
-                self._clear_done(c, "not_cleared", now, f"the CLEAR was not taken (reject {why})")
+                if not self._seen_after(c.clear_seq):
+                    # no STATE since the CLEAR went out (or it never went whole): nothing says what the board did
+                    self._clear_done(c, "unconfirmed", now, "no STATE after the CLEAR")
+                else:
+                    why = st.reject_reason.name
+                    self._clear_done(c, "not_cleared", now, f"the CLEAR was not taken (reject {why})")
         elif c.phase == "ready":
             if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY:
                 self._clear_done(c, "cleared", now)
@@ -1188,8 +1202,9 @@ class ModelDevice:
             self.master, self.slave = os.openpty()
             tty.setraw(self.slave)
             os.set_blocking(self.master, False)
+            # its own session: a terminal Ctrl-C reaches this tool, which then stops the model itself (round 5 P2-1)
             self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
-                                          "--bench", "1"])
+                                          "--bench", "1"], start_new_session=True)
             self.link = BenchTtyLink(self.master, gate=gate)
         except BaseException:
             self.close()  # neither the child nor the pty outlives a failed construction (round 3 P3-1, 4 P3-2)
@@ -1238,6 +1253,27 @@ class ModelDevice:
                 os.close(fd)
             except OSError:
                 pass
+
+
+def shutdown(console: "BenchConsole", *, wait_s: float = STOP_WAIT_S + 1.0, sleep=time.sleep) -> None:
+    """The tool's exit: a run is cancelled and stopped by the stop rule, a clear whose CLEAR never went out is closed as
+    cancelled; both are given ``wait_s`` to end, and whatever is still open then is closed with a record --
+    ``unconfirmed`` / ``unconfirmed_at_exit`` -- never left without one (Codex C round 4 P2-4, round 5 P2-1)."""
+    if console.run is not None and console.run.cancel is None:
+        console.run.cancel = "tool_exit"
+    c = console.clear
+    if c is not None and (c.clear_seq is None or console._pending(c.clear_seq)):
+        console._clear_done(c, "cancelled", int(console.clock()), "the tool was stopped before the CLEAR")
+    stop_end = time.monotonic() + wait_s
+    while (console.run is not None or console.clear is not None) and time.monotonic() < stop_end:
+        console.cycle()
+        sleep(CYCLE_S)
+    if console.clear is not None:
+        console._clear_done(console.clear, "unconfirmed", int(console.clock()), "the tool was stopped")
+    if console.run is not None:
+        r = console.run
+        r.aborted = r.aborted or "unconfirmed_at_exit"
+        console._close(r, int(console.clock()), None)
 
 
 # --- the CLI -----------------------------------------------------------------------------------------------------------
@@ -1328,18 +1364,7 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             pass
         finally:
-            if console.run is not None and console.run.cancel is None:
-                console.run.cancel = "tool_exit"
-            c = console.clear
-            if c is not None and (c.clear_seq is None or console._pending(c.clear_seq)):
-                # its CLEAR never went out: the request ends here, recorded (round 4 P2-4)
-                console._clear_done(c, "cancelled", int(console.clock()), "the tool was stopped before the CLEAR")
-            stop_end = time.monotonic() + STOP_WAIT_S + 1.0
-            while (console.run is not None or console.clear is not None) and time.monotonic() < stop_end:
-                console.cycle()
-                time.sleep(CYCLE_S)
-            if console.clear is not None:  # its CLEAR went out but its end was not seen before the exit
-                console._clear_done(console.clear, "unconfirmed", int(console.clock()), "the tool was stopped")
+            shutdown(console)
     finally:
         if server is not None:
             server.stop()
