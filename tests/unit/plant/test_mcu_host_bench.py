@@ -1,5 +1,5 @@
 """The bench image on the mcu_link host (bench console plan A1a 1, contract 8): only a commission-mode host, on the
-opened tty whose product string is exactly the bench6 image, whose STATE says an open commissioning build, sends
+opened tty whose product string is exactly the bench7 image, whose STATE says an open commissioning build, sends
 BENCH_SET and BENCH_ARM; a plain ARM is refused there; a BENCH_STATE counts only right after its STATE."""
 
 import pytest
@@ -11,7 +11,7 @@ from forklift_core.plant.mcu_host import McuLinkHost
 
 from test_mcu_host_commission import CB, CFG, MS, Rig, state
 
-BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench6"
+BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench7"
 ASK = bl.BenchAsk(0, (), None, None)
 
 

@@ -27,7 +27,7 @@ import bench_console  # noqa: E402
 from real_mcu_link import BenchTtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
-BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench6"
+BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7"
 
 
 class PtyDevice:
