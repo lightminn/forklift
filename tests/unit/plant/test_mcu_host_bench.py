@@ -114,3 +114,15 @@ def test_a_queued_bench_set_never_reaches_another_boot():
                      float("nan"), 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, CB)
     r.host.on_bytes(encode(other, 1), r.now)
     assert r.sent() == []
+
+
+def test_a_pair_split_across_two_reads_still_counts():
+    r = bench_rig()
+    r.t_us += 10_000
+    r.now += 10 * MS
+    whole = state(r.t_us) + encode(_bench_state(1, run_id=8), 2)
+    cut = len(state(r.t_us)) + 5  # inside the BENCH_STATE
+    r.host.on_bytes(whole[:cut], r.now)
+    assert r.host.bench_state is None
+    r.host.on_bytes(whole[cut:], r.now)
+    assert r.host.bench_state is not None and r.host.bench_state.result_run_id == 8

@@ -39,13 +39,16 @@ def hold_bytes(seq=5):
                                SimpleNamespace(kind="ARM", seq=5, data=hold_bytes()),  # the reserved 0x07
                                SimpleNamespace(kind="ARM", seq=5,  # a buffer holding a bench frame second
                                                data=encode(Arm(7, 1000), 5) + encode(BenchArm(7, 1000, 9), 6)),
-                               SimpleNamespace(kind="ARM", seq=5, data=b"\x05\x01\x02\x00")])  # not a frame
+                               SimpleNamespace(kind="ARM", seq=5, data=b"\x05\x01\x02\x00"),  # not a frame
+                               SimpleNamespace(kind="ARM", seq=5, data=encode(Arm(7, 1000), 5)[:-1]),  # no delimiter
+                               SimpleNamespace(kind="ARM", seq=5,  # a CRC error
+                                               data=encode(Arm(7, 1000), 5)[:-3] + b"\x07\x07\x00")])
 def test_a_bench_frame_never_leaves_the_real_transport(f, granted):
     m, t = make()
     feed(m, t, state())
     if granted:
         assert t.grant([], 7) is True and t.real_operating
-    assert t._write_first(f, 0) == "eagain"
+    assert t._write_first(f, 0) == "refused"
     assert t._write_rest(f, 0) is False
     with pytest.raises(BlockingIOError):
         os.read(m, 256)  # not one byte reached the device
@@ -57,3 +60,39 @@ def test_an_ordinary_frame_still_goes_out_after_the_grant():
     assert t.grant([], 7) is True
     assert t._write_first(frame("ARM", Arm(7, 1000)), 0) == "done"
     assert len(os.read(m, 256)) > 0
+
+
+class _Host:
+    """The minimum of the host the transmit loop drives: a queue and what happened to each frame."""
+
+    def __init__(self, frames):
+        self.q, self.written, self.refused, self.unsent = list(frames), [], [], []
+
+    def next_frame(self, now_ns):
+        return self.q.pop(0) if self.q else None
+
+    def frame_written(self, f, ns):
+        self.written.append(f.kind)
+
+    def frame_refused(self, f, ns, why):
+        self.refused.append((f.kind, why))
+
+    def unsent(self, f, ns):
+        self.unsent.append(f.kind)
+        self.q.insert(0, f)
+
+    def drop_drives(self, why):
+        pass
+
+
+def test_a_refused_bench_frame_is_dropped_and_the_disarm_behind_it_goes_out():
+    """A bench frame (even labelled DISARM) never blocks the queue: dropped, and the real DISARM after it is sent."""
+    from forklift_core.mcu_link.messages import Disarm
+
+    m, t = make()
+    feed(m, t, state())
+    host = _Host([SimpleNamespace(kind="DISARM", seq=5, data=encode(BenchArm(7, 1000, 9), 5)),
+                  SimpleNamespace(kind="DISARM", seq=6, data=encode(Disarm(), 6))])
+    t.transmit(host, 0, lambda f, write: (write(), True)[1])
+    assert host.refused == [("DISARM", "bench_frame_on_this_transport")]
+    assert host.written == ["DISARM"] and host.unsent == []

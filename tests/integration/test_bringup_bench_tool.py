@@ -157,8 +157,33 @@ def test_a_run_the_board_ended_by_expiry_is_not_ok(model, monkeypatch):
 
 def test_a_cpr_on_the_bench_image_keeps_no_official_pass():
     out = {"valid": True, "counts_per_rev": [4096, 4096]}
-    bringup._mark_diagnostic_cpr(out, BENCH5)
+    bringup._mark_diagnostic_cpr(out, [BENCH5, None])  # the USB lost at the end: the opening's product still counts
     assert out["valid"] is None and out["computed_valid"] is True and out["not_for_gate"]
     plain = {"valid": True}
-    bringup._mark_diagnostic_cpr(plain, LR1)
+    bringup._mark_diagnostic_cpr(plain, [LR1])
     assert plain == {"valid": True}
+    absent = {"valid": None, "computed_valid": True}  # parts absent marked it first: its computed value stays
+    bringup._mark_diagnostic_cpr(absent, [BENCH5])
+    assert absent["computed_valid"] is True and absent["valid"] is None
+
+
+def test_a_record_that_cannot_be_written_stops_the_next_arm(model, monkeypatch):
+    """The next BENCH_ARM clears the board's record of the last run: if that record cannot be written, nothing is
+    armed."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    first = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert first["result"] == "ok", first
+    real_emit = b.emit
+
+    def failing(row):
+        if row.get("t") == "bench_previous_result":
+            b.record_errors += 1  # what the record's own error handling does on an OSError
+            return
+        real_emit(row)
+
+    monkeypatch.setattr(b, "emit", failing)
+    n = len(b.writes)
+    second = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert second["result"] == "refused" and "could not be written" in second["why"]
+    assert not {"BENCH_SET", "BENCH_ARM"} & {w.kind for w in b.writes[n:]}

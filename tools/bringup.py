@@ -145,9 +145,14 @@ class _BenchHost(McuLinkHost):
     on_open = None
     on_lost = None
 
+    products_seen: list | None = None
+
     def link_identity(self, product):
         if self.on_open is not None:
             self.on_open()
+        if self.products_seen is None:
+            self.products_seen = []
+        self.products_seen.append(product)  # every opening's product: a cpr judged by all of them (A1a-2 r2)
         return super().link_identity(product)
 
     def disconnected(self, now_ns):
@@ -775,21 +780,36 @@ class CommissionSession(Session):
         STATE.last_rx_seq, no reject); anything else refuses the run before the ARM."""
         b = self.b
         ask = self.bench or bl.BenchAsk(self.axis, (), None, None)
+        conn0, disc0 = b.conn, b.host.disconnects
+
+        def same_link() -> bool:
+            return b.conn == conn0 and b.host.disconnects == disc0
+
         # the board's record of the last run first (a CLI that ended before writing it down, same boot): recovered
         # here, before this run's BENCH_ARM clears it (contract 8.3; A1a-2 P2)
-        if not b.run_until(lambda: b.host.bench_state is not None and b.state is not None
-                           and b.host.bench_state_boot == b.state.boot_id, 1.0):
+        if not b.run_until(lambda: not same_link() or (b.host.bench_state is not None and b.state is not None
+                                                        and b.host.bench_state_boot == b.state.boot_id), 1.0):
             raise Refused("bench: no BENCH_STATE from the bench image on this connection")
+        if not same_link():
+            raise Refused("the link reconnected before the ARM: run it again to confirm")
         prev = b.host.bench_state
         if prev.result_run_id != 0:
+            errors0 = b.record_errors
             b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, "run_id": prev.result_run_id,
                     "stop_reason": BenchStop(prev.stop_reason).name.lower() if prev.stop_reason <= max(BenchStop)
                     else prev.stop_reason, "axis": "LRMH"[prev.result_axis] if prev.result_axis < 4 else None,
                     "blocked": prev.blocked})
+            if b.record_errors != errors0:
+                # the next ARM clears the board's record: never before it is written down (A1a-2 r2)
+                raise Refused("bench: the last run's board record could not be written: nothing is armed")
         self.run_id = secrets.randbits(32) or 1
-        if (b.host.skip_seq(0) & 0xFFFF) == b.state.last_rx_seq:
-            b.host.skip_seq(1)  # its seq must differ from the one the board last took (a fresh boot says 0)
+        # its seq differs from every number this boot's recent STATEs named, so no STATE written before the board
+        # took this BENCH_SET can carry it (A1a-2 r2)
+        recent = {s.state.last_rx_seq for s in b.samples[-256:] if s.state.boot_id == b.state.boot_id}
+        while (b.host.skip_seq(0) & 0xFFFF) in recent:
+            b.host.skip_seq(1)
         boot, conn = b.state.boot_id, b.conn
+        echo_us = b.state.mcu_time_us
         blocked = b.host.bench_set(self.run_id, ask, time.monotonic_ns())
         if blocked is not None:
             raise Refused(f"bench: BENCH_SET not queued ({blocked.reason})")
@@ -799,7 +819,7 @@ class CommissionSession(Session):
             # a STATE of this boot, received on this connection after the BENCH_SET's last byte went out, naming its
             # seq with no reject (never an older STATE that happens to carry the same number)
             st, rx = b.host.state, b.host.state_rx_ns
-            if st is None or rx is None or st.boot_id != boot or b.conn != conn:
+            if st is None or rx is None or st.boot_id != boot or not same_link() or st.mcu_time_us <= echo_us:
                 return False
             w = next((w for w in reversed(b.writes) if w.kind == "BENCH_SET" and (w.seq & 0xFFFF) == seq
                       and w.conn == conn), None)
@@ -816,6 +836,8 @@ class CommissionSession(Session):
 
     def request_arm(self, now_ns: int):
         if self.bench_image:
+            if self.b.conn > 1 or self.b.host.disconnects:
+                raise Refused("the link reconnected before the ARM: run it again to confirm")
             return self.b.host.request_bench_arm(self.run_id, now_ns)
         return self.b.host.request_arm(now_ns)
 
@@ -1796,7 +1818,7 @@ def main(argv=None) -> int:
                                     (args.dir_left, args.dir_right), motor_counts_confirmed=args.motor_counts_confirmed)
                     out_ = asdict(res)
                     _mark_absent_result(out_, _absent_of(args))
-                    _mark_diagnostic_cpr(out_, bench.host.usb_product)
+                    _mark_diagnostic_cpr(out_, bench.host.products_seen or [bench.host.usb_product])
                     print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **out_}))
                 return 0
             if args.cmd == "clear-faults":
@@ -2032,15 +2054,18 @@ def _absent_of(args) -> tuple:
     return tuple(sorted(set(getattr(args, "absent", None) or ())))
 
 
-def _mark_diagnostic_cpr(result: dict, product: str | None) -> None:
-    """A cpr measured on a diagnostic image (the bench image included, plan A1a) keeps its computed values but no
-    official pass: S2 reads ``valid``."""
-    if not judgement.diagnostic_image(product):
+def _mark_diagnostic_cpr(result: dict, products) -> None:
+    """A cpr measured with any opening on a diagnostic image (the bench image included, plan A1a) keeps its computed
+    values but no official pass: S2 reads ``valid``."""
+    products = [products] if isinstance(products, str) or products is None else list(products)
+    diag = [p for p in products if judgement.diagnostic_image(p)]
+    if not diag:
         return
     result["not_for_gate"] = True
-    result["board_product"] = product
-    if "valid" in result:
-        result["computed_valid"], result["valid"] = result["valid"], None
+    result["board_product"] = diag[0]
+    if "valid" in result and "computed_valid" not in result:
+        result["computed_valid"] = result["valid"]
+    result["valid"] = None
 
 
 def _mark_absent_result(result: dict, absent: tuple) -> None:
