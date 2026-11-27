@@ -13,6 +13,9 @@
 #define CLEAR_LEN 4u
 #define COMMISSION_LEN 19u
 #define STATE_LEN 84u
+#define BENCH_SET_LEN 52u   /* contract 8 */
+#define BENCH_ARM_LEN 16u
+#define BENCH_STATE_LEN 48u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
 typedef struct {
@@ -99,6 +102,14 @@ static size_t payload_len(uint8_t type)
         return COMMISSION_LEN;
     case LINK_STATE:
         return STATE_LEN;
+#if defined(FW_CORE_BENCH) /* every other image keeps these types unknown (plan A1, contract 8) */
+    case LINK_BENCH_SET:
+        return BENCH_SET_LEN;
+    case LINK_BENCH_ARM:
+        return BENCH_ARM_LEN;
+    case LINK_BENCH_STATE:
+        return BENCH_STATE_LEN;
+#endif
     default:
         return SIZE_MAX;
     }
@@ -176,6 +187,62 @@ static void put_payload(wr *w, const link_msg *m)
         }
         break;
     }
+#if defined(FW_CORE_BENCH)
+    case LINK_BENCH_SET: {
+        const link_bench_set *b = &m->u.bench_set;
+        put_u32(w, b->boot_id);
+        put_u64(w, b->echo_mcu_time_us);
+        put_u32(w, b->run_id);
+        put_u8(w, b->mode);
+        put_u8(w, b->axis);
+        put_u8(w, b->source);
+        put_u8(w, (uint8_t)b->count_sign);
+        put_u32(w, b->bypass);
+        for (int i = 0; i < 4; i++) {
+            put_u16(w, b->duty_max_e4[i]);
+        }
+        for (int i = 0; i < 4; i++) {
+            put_u32(w, b->time_ms[i]);
+        }
+        put_u32(w, (uint32_t)b->stop_counts);
+        break;
+    }
+    case LINK_BENCH_ARM: {
+        const link_bench_arm *a = &m->u.bench_arm;
+        put_u32(w, a->boot_id);
+        put_u64(w, a->echo_mcu_time_us);
+        put_u32(w, a->run_id);
+        break;
+    }
+    case LINK_BENCH_STATE: {
+        const link_bench_state *b = &m->u.bench_state;
+        put_u16(w, b->pair_seq);
+        put_u32(w, b->run_id);
+        put_u32(w, b->result_run_id);
+        put_u8(w, b->axis);
+        put_u8(w, b->source);
+        put_u8(w, b->count_state);
+        put_u8(w, b->kth_lost);
+        put_u16(w, b->raw_angle);
+        put_u32(w, (uint32_t)b->cumulative);
+        put_u32(w, (uint32_t)b->target);
+        put_u32(w, (uint32_t)b->distance_ref);
+        put_u32(w, (uint32_t)b->cut_position);
+        put_u8(w, b->stop_reason);
+        put_u8(w, b->distance_confirm);
+        put_u16(w, b->blocked);
+        put_u16(w, b->dropped_pairs);
+        put_u16(w, b->evidence_age_ms);
+        put_u16(w, b->end_evidence_age_ms);
+        put_u8(w, b->mcu_bypass);
+        put_u8(w, b->drive);
+        put_u8(w, b->conn_gen);
+        put_u8(w, b->reserved);
+        put_u8(w, b->result_axis);
+        put_u8(w, b->result_source);
+        break;
+    }
+#endif
     default:
         break;
     }
@@ -253,6 +320,62 @@ static void get_payload(rd *r, link_msg *m)
         }
         break;
     }
+#if defined(FW_CORE_BENCH)
+    case LINK_BENCH_SET: {
+        link_bench_set *b = &m->u.bench_set;
+        b->boot_id = get_u32(r);
+        b->echo_mcu_time_us = get_u64(r);
+        b->run_id = get_u32(r);
+        b->mode = get_u8(r);
+        b->axis = get_u8(r);
+        b->source = get_u8(r);
+        b->count_sign = (int8_t)get_u8(r);
+        b->bypass = get_u32(r);
+        for (int i = 0; i < 4; i++) {
+            b->duty_max_e4[i] = get_u16(r);
+        }
+        for (int i = 0; i < 4; i++) {
+            b->time_ms[i] = get_u32(r);
+        }
+        b->stop_counts = (int32_t)get_u32(r);
+        break;
+    }
+    case LINK_BENCH_ARM: {
+        link_bench_arm *a = &m->u.bench_arm;
+        a->boot_id = get_u32(r);
+        a->echo_mcu_time_us = get_u64(r);
+        a->run_id = get_u32(r);
+        break;
+    }
+    case LINK_BENCH_STATE: {
+        link_bench_state *b = &m->u.bench_state;
+        b->pair_seq = get_u16(r);
+        b->run_id = get_u32(r);
+        b->result_run_id = get_u32(r);
+        b->axis = get_u8(r);
+        b->source = get_u8(r);
+        b->count_state = get_u8(r);
+        b->kth_lost = get_u8(r);
+        b->raw_angle = get_u16(r);
+        b->cumulative = (int32_t)get_u32(r);
+        b->target = (int32_t)get_u32(r);
+        b->distance_ref = (int32_t)get_u32(r);
+        b->cut_position = (int32_t)get_u32(r);
+        b->stop_reason = get_u8(r);
+        b->distance_confirm = get_u8(r);
+        b->blocked = get_u16(r);
+        b->dropped_pairs = get_u16(r);
+        b->evidence_age_ms = get_u16(r);
+        b->end_evidence_age_ms = get_u16(r);
+        b->mcu_bypass = get_u8(r);
+        b->drive = get_u8(r);
+        b->conn_gen = get_u8(r);
+        b->reserved = get_u8(r);
+        b->result_axis = get_u8(r);
+        b->result_source = get_u8(r);
+        break;
+    }
+#endif
     default:
         break;
     }

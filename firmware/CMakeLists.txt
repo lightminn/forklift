@@ -22,6 +22,15 @@ target_link_libraries(fw_core PUBLIC m)
 # The host core carries single-axis commissioning (fw-single) for its tests and the MCU model; the
 # board compiles it in only for FW_SINGLE_AXIS (partial-parts plan 2026-11-25 PR-B).
 target_compile_definitions(fw_core PUBLIC FW_CORE_SINGLE_AXIS=1)
+# It also carries the bench extension (bench console plan A1, contract 8) for its tests and the MCU model; the
+# board compiles it in only for FW_BENCH, so every other image keeps the bench types unknown.
+target_compile_definitions(fw_core PUBLIC FW_CORE_BENCH=1)
+# The same core without the bench extension, as every non-bench image compiles it: its test shows the bench
+# types are unknown there (plan A1: a non-bench image never decodes 0x06/0x08).
+add_library(fw_core_nobench STATIC ${FW_CORE_SOURCES})
+target_include_directories(fw_core_nobench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+target_link_libraries(fw_core_nobench PUBLIC m)
+target_compile_definitions(fw_core_nobench PUBLIC FW_CORE_SINGLE_AXIS=1)
 
 # The vehicle model shared by the host model endpoint and the MCU's HIL build (board design 9).
 add_library(fw_plant STATIC ${CMAKE_CURRENT_SOURCE_DIR}/plant/plant.c)
@@ -37,6 +46,11 @@ foreach(test_source ${FW_TESTS})
     target_link_libraries(${test_name} PRIVATE fw_core)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+add_executable(test_link_nobench ${CMAKE_CURRENT_SOURCE_DIR}/core/test/variants/test_link_nobench.c)
+target_include_directories(test_link_nobench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
+target_link_libraries(test_link_nobench PRIVATE fw_core_nobench)
+add_test(NAME test_link_nobench COMMAND test_link_nobench)
 
 # Board logic that does not touch registers (reset cause, clock constants), host-tested.
 add_executable(test_weact_h743_reset_cause

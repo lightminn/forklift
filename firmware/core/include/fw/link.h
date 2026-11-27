@@ -18,6 +18,11 @@
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
 #define LINK_STATE 0x81u
+/* Bench extension (contract section 8, wire generation bench5): decoded only by a core compiled with
+   FW_CORE_BENCH (the bench image and the host tests); every other image drops these types as unknown. */
+#define LINK_BENCH_SET 0x06u
+#define LINK_BENCH_ARM 0x08u
+#define LINK_BENCH_STATE 0x82u
 
 #define LINK_DRIVE_FLAG_LIFT_HOLD 0x01u
 
@@ -67,6 +72,39 @@ typedef struct {
     uint16_t kth_frames[2], kth_crc_errors[2], kth_alt_crc_errors[2];
 } link_state;
 
+#if defined(FW_CORE_BENCH)
+/* Bench extension (contract 8): one run's settings, consumed once by the BENCH_ARM with its run_id. */
+typedef struct {
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
+    uint32_t run_id;
+    uint8_t mode, axis, source;
+    int8_t count_sign;
+    uint32_t bypass;
+    uint16_t duty_max_e4[4];
+    uint32_t time_ms[4];
+    int32_t stop_counts;
+} link_bench_set;
+
+typedef struct {
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
+    uint32_t run_id;
+} link_bench_arm;
+
+/* Sent right after its STATE (header seq pair_seq), as one write. Ages in ms, 0xFFFF = none yet. */
+typedef struct {
+    uint16_t pair_seq;
+    uint32_t run_id, result_run_id;
+    uint8_t axis, source, count_state, kth_lost;
+    uint16_t raw_angle;
+    int32_t cumulative, target, distance_ref, cut_position;
+    uint8_t stop_reason, distance_confirm;
+    uint16_t blocked, dropped_pairs, evidence_age_ms, end_evidence_age_ms;
+    uint8_t mcu_bypass, drive, conn_gen, reserved, result_axis, result_source;
+} link_bench_state;
+#endif
+
 typedef struct {
     uint8_t type;
     uint16_t seq;
@@ -76,6 +114,11 @@ typedef struct {
         link_clear clear;
         link_commission commission;
         link_state state;
+#if defined(FW_CORE_BENCH)
+        link_bench_set bench_set;
+        link_bench_arm bench_arm;
+        link_bench_state bench_state;
+#endif
     } u;
 } link_msg;
 
