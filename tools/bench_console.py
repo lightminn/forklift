@@ -1107,6 +1107,9 @@ class BenchConsole:
                "why": why, "cause": c.cause, "before": c.before, "after": after}
         self.host.drop_frames(("CLEAR_FAULTS",) if result == "cleared" else ("CLEAR_FAULTS", "DISARM"),
                               f"clear: {result}")  # a refused request's own unsent frames go with it (round 3 P2-3)
+        if c.disarm_seq is not None and c.disarm_seq not in self.written:
+            # its DISARM, even one partly out, loses its leave with the request: the link abandons the rest (r12 P2)
+            self.cleanup_seqs.discard(c.disarm_seq)
         try:
             c.rec.emit(out)
             c.rec.result(out)
