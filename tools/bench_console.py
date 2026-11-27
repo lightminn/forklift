@@ -1056,6 +1056,14 @@ class BenchConsole:
         w = self.written.get(seq) if seq is not None else None
         return w is not None and self.host.state_rx_ns is not None and self.host.state_rx_ns > w[1]
 
+    def _same_epoch(self, c: Clear) -> bool:
+        """The latest STATE is of the clear's own epoch: paired with its BENCH_STATE (so its board connection generation
+        is known, not the previous pair's) on the same host opening, generation and boot (Codex C round 8 P2)."""
+        st, bst = self.host.state, self.host.bench_state
+        return (st is not None and bst is not None and self.host.bench_state_of is st
+                and self.conn == c.binding.conn and bst.conn_gen == c.binding.conn_gen
+                and st.boot_id == c.binding.boot_id)
+
     def _clear_done(self, c: Clear, result: str, now: int, why: str | None = None) -> None:
         st = self.host.state
         last = c.clear_seq if c.clear_seq is not None and c.clear_seq in self.written else c.disarm_seq
@@ -1063,9 +1071,9 @@ class BenchConsole:
         # the state after the attempt: only one received after its last frame (Codex C round 5 P2-2); before any
         # frame went out, the state as it is. An unconfirmed clear has none: a STATE received after the CLEAR may
         # have been made before the board read it (round 6 P2)
-        moved = st is not None and (st.boot_id != c.binding.boot_id or self.conn != c.binding.conn)
-        after = None if st is None or moved or result == "unconfirmed" or (sent and not self._seen_after(last)) \
-            else _latch_view(st)
+        # and never one of another opening, generation or boot, nor a STATE whose pair is not in yet (round 8 P2)
+        after = None if st is None or not self._same_epoch(c) or result == "unconfirmed" \
+            or (sent and not self._seen_after(last)) else _latch_view(st)
         out = {"t": "clear_result", "request_id": c.request_id, "clear": c.rec.dir.name, "result": result,
                "why": why, "cause": c.cause, "before": c.before, "after": after}
         self.host.drop_frames(("CLEAR_FAULTS",) if result == "cleared" else ("CLEAR_FAULTS", "DISARM"),
@@ -1082,8 +1090,8 @@ class BenchConsole:
     def _echoed(self, seq: int, kind: str, c: Clear) -> bool:
         st, rx = self.host.state, self.host.state_rx_ns
         w = self.written.get(seq)
-        return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and st.boot_id == c.binding.boot_id
-                and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
+        return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and self._same_epoch(c)
+                and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
@@ -1146,7 +1154,7 @@ class BenchConsole:
                     self._clear_done(c, "unconfirmed", now, f"no echo of this CLEAR; the board is {st.mode.name} "
                                                             "(a CLEAR worked, not shown to be this one)")
         elif c.phase == "ready":
-            if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY:
+            if st.mode == Mode.DISARMED and st.flags & StateFlag.DRIVERS_READY and self._same_epoch(c):
                 self._clear_done(c, "cleared", now)
             elif now - c.phase_ns > CLEAR_READY_S * 1e9:
                 self._clear_done(c, "not_ready", now, f"after the clear: {st.mode.name}")
