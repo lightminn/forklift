@@ -527,8 +527,9 @@ def test_ctrl_c_or_sigterm_ends_the_model_console_cleanly(mcu_model, tmp_path, s
                         break
                     line += chunk
             line = line.decode(errors="replace")
-            assert '"t": "started"' in line, (line, log.read_text())
+            assert line.endswith("\n") and json.loads(line).get("t") == "started", (line, log.read_text())
             time.sleep(0.5)
+            assert proc.poll() is None, log.read_text()  # alive when the signal goes
             proc.send_signal(sig)
             assert proc.wait(timeout=10) == 0
         finally:
@@ -615,15 +616,26 @@ def test_a_state_made_before_the_clear_but_received_after_it_does_not_decide(rig
     assert out["result"] == "unconfirmed" and out["after"] is None, out
 
 
-def test_a_taken_clear_whose_echo_a_later_frame_replaced_is_still_seen(rig):
-    """The CLEAR taken, then a later frame's seq in last_rx_seq: the board out of FAULT in the same boot is the CLEAR's
-    reply, so the clear goes on to its ready check (Codex C round 6 P2)."""
+def test_a_board_out_of_fault_without_this_clears_echo_is_unconfirmed(rig):
+    """Out of FAULT with another seq in last_rx_seq: some CLEAR worked -- an old host's late one can (contract 8.4) --
+    but nothing ties it to this request, so it is 'unconfirmed', what was seen in its why (Codex C round 7 P2-1)."""
     c, b, run_until = rig("--fault-at-ms", "300")
     st = _after_the_clear_went_out(c, b, run_until)
     after = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED,
-                                last_rx_seq=(c.clear.clear_seq + 1) & 0xFFFF,
+                                last_rx_seq=(c.clear.clear_seq + 3979) & 0xFFFF,
                                 flags=st.flags | StateFlag.DRIVERS_READY, fault_flags=FaultFlag(0))
     c.host._state, c.host._state_rx_ns = after, int(c.clock())
     assert run_until(lambda: b.clears, 4.0)
     out = b.clears[-1]
-    assert out["result"] == "cleared" and out["after"]["mode"] == "DISARMED", out
+    assert out["result"] == "unconfirmed" and out["after"] is None and "DISARMED" in out["why"], out
+
+
+def test_a_link_change_after_the_clear_went_out_is_unconfirmed_not_refused(rig):
+    """The CLEAR written whole, then the link lost: the board may have taken it, so 'unconfirmed' with no 'after'
+    (Codex C round 7 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    _after_the_clear_went_out(c, b, run_until)
+    c.conn += 1  # the link the request was bound to is gone
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
