@@ -8,7 +8,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from forklift_core.mcu_link.messages import BenchDriveState, FaultFlag, Mode
+from forklift_core.mcu_link.messages import (BenchConfirm, BenchCountState, BenchDriveState, BenchRunFlag, FaultFlag,
+                                             Mode)
 
 
 @dataclass(frozen=True)
@@ -129,8 +130,11 @@ class ClearBinding:
                 and FaultFlag(fault_flags) == self.fault_flags)
 
 
+DISTANCE_ENDS = ("distance_reached", "distance_provisional")  # a distance run's own normal ends (bench6)
+
+
 def run_verdict(*, closed: str, stop_reason: str | None, aborted: str | None, cleanup_confirmed: bool,
-                last: Pair | None, record_errors: int, unexpected_faults=()) -> dict:
+                last: Pair | None, record_errors: int, unexpected_faults=(), distance: bool = False) -> dict:
     """Verdict ① (plan 3): the run and its cleanup -- ended by the run's own zero (the board's first cause
     ``end_zero``), no abort, the cleanup confirmed by the board's end sample then DISARMED, no fault outside the bench's
     ordinary ones, every axis at zero duty, no record row lost. ``closed``: ``ended`` (a run that drove, its result
@@ -138,8 +142,8 @@ def run_verdict(*, closed: str, stop_reason: str | None, aborted: str | None, cl
     why = []
     if closed != "ended":
         why.append(closed)
-    elif stop_reason != "end_zero":
-        why.append(f"stop_reason:{stop_reason}")
+    elif stop_reason != "end_zero" and not (distance and stop_reason in DISTANCE_ENDS):
+        why.append(f"stop_reason:{stop_reason}")  # a distance run also ends by its distance (its own verdict apart)
     if aborted:
         why.append(f"aborted:{aborted}")
     if not cleanup_confirmed:
@@ -170,5 +174,78 @@ def window_stop(value: float, window: tuple, *, kth_invalid_bypass: bool, range_
     return None if lo <= value <= hi else "window"  # the CLI's inclusive bounds (bringup early_stop)
 
 
-__all__ = ["ClearBinding", "Pair", "after_boundary", "pair_of", "reopen_action", "run_verdict", "seq_reached",
+def counts_diff(a: int, b: int) -> int:
+    """a - b of two modular 32-bit counts as a signed difference (contract 8.5: the count wraps)."""
+    d = (int(a) - int(b)) & 0xFFFFFFFF
+    return d - (1 << 32) if d >= 1 << 31 else d
+
+
+_STOPPED = {"no_progress", "kth_zero_suspect", "kth_lost"}
+
+
+def distance_verdict(*, stop_reason: str | None, confirm: int, run_flags: int, stop_counts: int,
+                     distance_ref: int, cut_position: int) -> dict:
+    """Verdict ② of a distance run (plan 4.2 A1b-1 decision 8), apart from the run and cleanup verdict:
+    ``reached`` (stop 8, or 9 confirmed reached), ``held`` (9 held by a rebound), ``waiting`` (9 with no confirmation
+    yet), ``failed_loss`` (9 whose confirmation ended by a loss), ``stopped:<reason>`` (the watch or the count),
+    ``missed`` (ended before the target: zero, time limit, expiry, ...). The reached position is the one at the cut
+    (or the first trusted sample after it), never the final rest."""
+    flags = BenchRunFlag(run_flags & 0x1F)
+    moved = counts_diff(cut_position, distance_ref)
+    out = {"stop_counts": int(stop_counts), "moved_at_cut": moved}
+    if BenchRunFlag.RES_UNCLEAN in flags:
+        return {**out, "result": "failed_continuity"}  # never with a distance end (the drive is refused), defensive
+    if stop_reason == "distance_reached":
+        return {**out, "result": "reached"}
+    if stop_reason == "distance_provisional":
+        if confirm == int(BenchConfirm.REACHED):
+            return {**out, "result": "reached", "confirmed_after_cut": True}
+        if confirm == int(BenchConfirm.HELD):
+            return {**out, "result": "failed_loss" if BenchRunFlag.RES_LOSS in flags else "held"}
+        return {**out, "result": "waiting"}
+    if stop_reason in _STOPPED:
+        return {**out, "result": f"stopped:{stop_reason}"}
+    return {**out, "result": "missed", "ended_by": stop_reason}
+
+
+def measure_verdict(*, run_flags: int, distance_ref: int, cut_position: int) -> dict:
+    """A measuring KTH run's end displacement and how far it is to be trusted (plan 4.2 A1b-1 decision 5): withheld
+    without a fresh reference at the drive start (bit4) or with the count broken (bit1), provisional when it ended on
+    a 0x0000 frame (bit3), else confirmed."""
+    flags = BenchRunFlag(run_flags & 0x1F)
+    moved = counts_diff(cut_position, distance_ref)
+    if BenchRunFlag.RES_NO_REF in flags:
+        return {"moved": moved, "status": "withheld:no_reference"}
+    if BenchRunFlag.RES_UNCLEAN in flags:
+        return {"moved": moved, "status": "withheld:continuity"}
+    if BenchRunFlag.RES_TENTATIVE in flags:
+        return {"moved": moved, "status": "provisional"}
+    return {"moved": moved, "status": "confirmed"}
+
+
+REST_SETTLE_US = 500_000  # 0.5 s with no change at 100 Hz
+REST_EVIDENCE_MS = 100
+
+
+def rest_position(samples) -> dict:
+    """The position after DISARMED (plan 4.2 A1b-1 decision 4): ``samples`` are (mcu_time_us, BenchState) of the
+    run axis after DISARMED, oldest first. Settled only when the live count stayed whole (bit0 clear, VALID), the
+    count did not change for 0.5 s of the 100 Hz samples and the evidence is fresh; worded as a 100 Hz observation.
+    Otherwise the last value is recorded as unconfirmed."""
+    if not samples:
+        return {"result": "unconfirmed", "why": "no_sample"}
+    t_last, last = samples[-1]
+    if last.run_flags & int(BenchRunFlag.UNCLEAN) or last.count_state != int(BenchCountState.VALID):
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "continuity"}
+    if last.evidence_age_ms > REST_EVIDENCE_MS:
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "evidence_age"}
+    window = [b for t, b in samples if t_last - t <= REST_SETTLE_US]
+    if samples[0][0] > t_last - REST_SETTLE_US or any(b.cumulative != last.cumulative for b in window):
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "not_settled"}
+    return {"result": "settled_at_100hz", "cumulative": last.cumulative,
+            "wording": "100 Hz 관측에서 0.5 s 동안 위치 변화 없음"}
+
+
+__all__ = ["DISTANCE_ENDS", "ClearBinding", "Pair", "after_boundary", "counts_diff", "distance_verdict",
+           "measure_verdict", "pair_of", "reopen_action", "rest_position", "run_verdict", "seq_reached",
            "stop_action", "window_stop"]
