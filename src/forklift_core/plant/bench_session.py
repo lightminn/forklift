@@ -115,15 +115,18 @@ def reopen_action(p: Pair) -> str:
 
 @dataclass(frozen=True)
 class ClearBinding:
-    """A clear-faults request kept with the link, boot and fault bits it was asked on (plan 3, 9th/10th round P2):
-    checked before its DISARM and again right before the CLEAR_FAULTS frame."""
+    """A clear-faults request kept with the link -- the host's opening and the board's connection generation (Codex
+    B1 round 4 P2-3) -- the boot and the fault bits it was asked on (plan 3, 9th/10th round P2): checked before its
+    DISARM is written and again right before the CLEAR_FAULTS frame."""
 
     conn: int
+    conn_gen: int
     boot_id: int
     fault_flags: FaultFlag
 
-    def holds(self, conn: int, boot_id: int, fault_flags) -> bool:
-        return conn == self.conn and boot_id == self.boot_id and FaultFlag(fault_flags) == self.fault_flags
+    def holds(self, conn: int, conn_gen: int, boot_id: int, fault_flags) -> bool:
+        return (conn == self.conn and conn_gen == self.conn_gen and boot_id == self.boot_id
+                and FaultFlag(fault_flags) == self.fault_flags)
 
 
 def run_verdict(*, closed: str, stop_reason: str | None, aborted: str | None, cleanup_confirmed: bool,

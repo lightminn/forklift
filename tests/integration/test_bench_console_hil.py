@@ -159,6 +159,23 @@ def written_kinds(c):
     return [k for _seq, (k, _ns) in sorted(c.written.items(), key=lambda kv: kv[1][1])]
 
 
+def record_rows(res):
+    return [json.loads(x) for x in (Path(res["record"]) / "run.jsonl").read_text().splitlines()]
+
+
+def assert_stopped_in_time(res, axis=0, bound_s=0.2):
+    """Plan 3 HIL acceptance: after the cancellation no non-zero frame is written, and the axis's duty in STATE is
+    zero within the command validity (150 ms) plus a margin after the last non-zero command written."""
+    rows = record_rows(res)
+    stop = next(r for r in rows if r.get("t") == "stop")
+    nonzero = [r for r in rows if r.get("t") == "written" and r.get("kind") == "COMMISSION" and r.get("duty_e4")]
+    assert not [r for r in nonzero if r["host_ns"] > stop["host_ns"]], "a non-zero COMMISSION after the cancel"
+    if nonzero:
+        last = nonzero[-1]["host_ns"]
+        zero = next(r for r in rows if r.get("t") == "state" and r["host_ns"] > last and r["duty_e4"][axis] == 0)
+        assert zero["host_ns"] - last <= bound_s * 1e9, (zero["host_ns"] - last) / 1e9
+
+
 RUN = dict(axis="L", duty=0.1, seconds=0.6, power_switch_in_hand=True)
 
 
@@ -200,6 +217,7 @@ def test_a_shared_stop_mid_drive_ends_with_a_zero_and_no_disarm(rig):
     assert run_until(lambda: b.results, 4.0)
     res = b.results[-1]
     assert res["aborted"] == "stop" and res["stop_reason"] == "end_zero" and res["cleanup_confirmed"], res
+    assert_stopped_in_time(res)
     after = [k for _s, (k, _n) in sorted(list(c.written.items())[n_before:], key=lambda kv: kv[1][1])]
     assert "DISARM" not in after  # driving: the zero ends it, the board brakes and disarms itself
     assert c.arbiter.mode == "PAUSED"  # the bench released the STOPPED lock once the stop was confirmed
@@ -213,6 +231,7 @@ def test_a_lost_lease_cancels_the_run(rig):
     assert run_until(lambda: b.results, 4.0)
     res = b.results[-1]
     assert res["aborted"] in ("lease_expired", "lease_lost") and res["cleanup_confirmed"], res
+    assert_stopped_in_time(res)
 
 
 def test_a_lost_connection_cancels_the_run(rig):
@@ -223,6 +242,7 @@ def test_a_lost_connection_cancels_the_run(rig):
     assert run_until(lambda: c.last_result is not None, 4.0)
     res = c.last_result
     assert res["aborted"] in ("lease_lost", "disconnected") and res["cleanup_confirmed"], res
+    assert_stopped_in_time(res)
 
 
 def test_a_bench_stop_before_the_arm_cancels_with_nothing_armed(rig):
@@ -323,6 +343,10 @@ def test_a_cut_transmit_stops_the_board_by_its_command_expiry(rig):
     res = b.results[-1]
     assert res["stop_reason"] == "command_timeout" and not res["verdict"]["run_cleanup"]["ok"], res
     assert c.host.state.mode in (Mode.DISARMED, Mode.FAULT)
+    rows = record_rows(res)
+    last = [r for r in rows if r.get("t") == "written" and r.get("kind") == "COMMISSION" and r.get("duty_e4")][-1]
+    zero = next(r for r in rows if r.get("t") == "state" and r["host_ns"] > last["host_ns"] and r["duty_e4"][0] == 0)
+    assert zero["host_ns"] - last["host_ns"] <= 0.25e9  # the board's own 150 ms expiry, with the pty's margin
 
 
 def test_a_short_written_command_then_stop_is_never_taken(rig):
@@ -426,7 +450,32 @@ def test_a_stop_right_after_the_arm_went_out_lets_the_arming_zero_land_and_never
     res = b.results[-1]
     assert res["closed"] == "no_drive" and res["aborted"] == "stop", res
     assert c.host.state.mode == Mode.DISARMED
-    rows = [json.loads(x) for x in (Path(res["record"]) / "run.jsonl").read_text().splitlines()]
+    rows = record_rows(res)
     commissions = [r for r in rows if r.get("t") == "written" and r.get("kind") == "COMMISSION"]
-    assert all("duty_e4" in r for r in commissions)
+    assert any(r["axis"] == 0 and r["duty_e4"] == 0 for r in commissions), commissions  # the arming zero went out
     assert not any(r["duty_e4"] != 0 for r in commissions), commissions
+    # the stop's own zero was taken while preparing, so the run's DISARM ended it, its answer confirmed
+    assert any(r.get("t") == "written" and r.get("kind") == "DISARM" for r in rows)
+    assert res["cleanup_confirmed"], res
+
+
+def test_a_reopening_whose_new_generation_shows_up_late_closes_and_the_next_run_goes(rig):
+    """The pair after the boundary arrives late (injected: the model keeps its generation, so the boundary is taken
+    as coming from another one): nothing is sent before it, the run closes once the board shows it stopped, and the
+    next request runs normally."""
+    c, b, run_until = rig()
+    b.send("bench_run", **{**RUN, "seconds": 1.4})
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written, 4.0)  # the board drives now
+    c.dev.extra_events.append(HostEvent("connected", {"path": "pty", "product": BENCH5}))
+    assert run_until(lambda: c.run is None or c.run.link_reopened, 1.0)
+    n = len([1 for v in c.fate.values() if v == "written"])
+    run_until(lambda: False, 0.2)  # no pair after the boundary yet: nothing is written
+    assert len([1 for v in c.fate.values() if v == "written"]) == n
+    boot, gen = c.last_seen
+    c.boundary_from = (boot, (gen + 1) & 0xFF)  # the board's new generation, as a real reopening would show
+    assert run_until(lambda: b.results, 6.0)
+    res = b.results[-1]
+    assert res["aborted"] == "link_reopened" and res["stop_reason"] == "command_timeout", res
+    rid = b.send("bench_run", **RUN)
+    assert run_until(lambda: len(b.results) == 2, 6.0), b.replies.get(rid)
+    assert b.results[-1]["verdict"]["run_cleanup"]["ok"], b.results[-1]

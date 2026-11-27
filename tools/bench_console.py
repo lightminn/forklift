@@ -26,7 +26,7 @@ import secrets
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -273,6 +273,7 @@ class Run:
     previous_result: dict | None = None
     record_errors: int = 0
     faults_at_drive: int = 0
+    nonzero_written: bool = False
 
 
 @dataclass
@@ -343,6 +344,10 @@ class BenchConsole:
     # --- the board's host callbacks -----------------------------------------------------------------------------------
     def _host_log(self, what, now_ns, data, info) -> None:
         fields = {}
+        if info and what == "queued":
+            seq = int(info["seq"]) & 0xFFFF
+            self.fate.pop(seq, None)  # a seq queued again after the ring wrapped starts with no fate (round 4 P2-1)
+            self.written.pop(seq, None)
         if info and what in ("written", "dropped", "abandoned"):
             seq = int(info["seq"]) & 0xFFFF
             if what == "written":
@@ -352,6 +357,9 @@ class BenchConsole:
                     fields = {k: getattr(m, k) for k in ("axis", "duty_e4", "arm_gen", "boot_id") if hasattr(m, k)}
             self.fate[seq] = what
             self.cleanup_seqs.discard(seq)
+            if what == "written" and info.get("kind") == "COMMISSION" and fields.get("duty_e4"):
+                if self.run is not None and fields.get("axis") == self.run.ask.axis:
+                    self.run.nonzero_written = True  # a duty actually went out (no_drive vs result_lost)
         r = self.run
         if r is not None and info and what in ("written", "dropped", "abandoned", "event"):
             self._emit(r, {"t": what, "host_ns": int(self.clock()), **dict(info), **fields})
@@ -470,7 +478,7 @@ class BenchConsole:
         except OSError as exc:
             return "record_unavailable", {"detail": str(exc)}
         c = Clear(request_id=msg["request_id"], cause=cause.strip(),
-                  binding=bs.ClearBinding(self.conn, st.boot_id, FaultFlag(st.fault_flags)), rec=rec,
+                  binding=bs.ClearBinding(*self._binding_now()), rec=rec,
                   started_ns=now, phase_ns=now, floor_us=st.mcu_time_us, before=_latch_view(st))
         try:
             rec.emit({"t": "clear_request", "host_ns": now, "cause": c.cause, "before": c.before,
@@ -480,6 +488,12 @@ class BenchConsole:
             return "record_unavailable", {"detail": str(exc)}
         self.clear = c
         return None, {"clear": rec.dir.name}
+
+    def _binding_now(self) -> tuple:
+        """(host opening, board connection generation, boot, fault bits) now -- what a clear is bound to."""
+        st, bst = self.host.state, self.host.bench_state
+        return (self.conn, None if bst is None else bst.conn_gen, None if st is None else st.boot_id,
+                FaultFlag(0) if st is None else FaultFlag(st.fault_flags))
 
     # --- the write boundary ------------------------------------------------------------------------------------------
     def cancel_reason(self, r: Run, now_ns: int) -> str | None:
@@ -511,6 +525,9 @@ class BenchConsole:
         seq = int(f.seq) & 0xFFFF
         zero = f.kind == "COMMISSION" and not f.nonzero
         if seq in self.cleanup_seqs and (f.kind == "DISARM" or zero):
+            c = self.clear
+            if c is not None and f.kind == "DISARM" and seq == c.disarm_seq:
+                return c.binding.holds(*self._binding_now())  # the clear's DISARM: its request still holds (r4 P2-3)
             return True  # this session's own stop frame, by its seq and its kind (round 3 P1-1)
         arming_zero = f.echo is not None or (self.host.arming_zero_seq is not None
                                              and seq == self.host.arming_zero_seq & 0xFFFF)
@@ -523,7 +540,7 @@ class BenchConsole:
         if f.kind == "CLEAR_FAULTS":
             c, st = self.clear, self.host.state
             return (c is not None and c.clear_seq == seq and st is not None
-                    and c.binding.holds(self.conn, st.boot_id, st.fault_flags))
+                    and c.binding.holds(*self._binding_now()))
         r = self.run
         if r is None or f.kind not in RUN_KINDS or r.phase in ("stop", "closed"):
             return False
@@ -543,6 +560,10 @@ class BenchConsole:
         self.serial = self.link.begin(now / 1e9)
         for e in self.dev.receive(self.host, now):
             self._device_event(e, now)
+        if now_ns is None:
+            # every decision below is taken after the read (round 4 P1): a STATE read late never lends its command
+            # the cycle start's longer validity
+            now = int(self.clock())
         self._observe(now)
         if self.run is not None:
             self._step(self.run, now)
@@ -634,6 +655,10 @@ class BenchConsole:
             why = self.cancel_reason(r, now)
             if why is not None:
                 self._enter_stop(r, why, now)
+        elif r.phase == "stop" and r.aborted is None:
+            # a STOP, a lost lease or connection during the run's own end changes nothing that is sent, but the run
+            # was interrupted: it is not a pass (round 4 P2-4)
+            r.aborted = self.cancel_reason(r, now)
         if r.phase in ("recover", "set", "arm", "prep"):
             # every sample from the request to the first non-zero is judged (round 3 P2-4)
             v = self._window_out(r, states)
@@ -937,14 +962,22 @@ class BenchConsole:
 
     def _close(self, r: Run, now: int, closed: str | None) -> None:
         p = self.pair()
-        drove = r.drive_start_ns is not None
+        # the run's own frames still queued go with it (round 4 P2-2): an unsent stop DISARM would otherwise be
+        # refused at every gate and handed back to the queue head, in front of the next run's BENCH_SET
+        self.host.drop_frames(("COMMISSION", "DISARM", "BENCH_SET", "BENCH_ARM"), "run closed")
         result_seen = p is not None and r.run_id is not None and p.result_run_id == r.run_id
         stop_reason = _stop_name(p.stop_reason) if result_seen else None
         if closed is None:
-            if drove:
-                closed = "ended" if result_seen else "result_lost"  # drove, but the board's record was not read
+            if result_seen:
+                closed = "ended"  # the board drove this run and recorded how it ended
+            elif r.nonzero_written:
+                closed = "result_lost"  # a duty went out but the board's record of the run was not read
             else:
                 closed = "no_drive"
+        st = self.host.state
+        if p is not None and st is not None and st.boot_id == p.boot_id and st.mcu_time_us >= p.mcu_time_us:
+            # the verdict reads the latest STATE too: a FAULT after the last pair is not a clean end (round 4 P2-4)
+            p = replace(p, mode=st.mode, fault_flags=st.fault_flags, duty_e4=tuple(st.duty_e4))
         if closed == "ended" and r.window_stop is not None:
             r.aborted = r.aborted or r.window_stop
         faults = []
@@ -1006,12 +1039,14 @@ class BenchConsole:
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
-        if self.conn != c.binding.conn or st is None or st.boot_id != c.binding.boot_id:
+        conn_gen = None if self.host.bench_state is None else self.host.bench_state.conn_gen
+        if self.conn != c.binding.conn or conn_gen != c.binding.conn_gen or st is None \
+                or st.boot_id != c.binding.boot_id:
             self._clear_done(c, "refused", now, "the link or the boot changed: ask again")
             return
         if c.phase == "disarm":
             if c.disarm_seq is None:
-                if not c.binding.holds(self.conn, st.boot_id, st.fault_flags):
+                if not c.binding.holds(*self._binding_now()):
                     # judged before the DISARM too (round 2 P2-3): a request asked on other bits is not run
                     self._clear_done(c, "refused", now, "the fault bits changed before the DISARM: ask again")
                     return
@@ -1022,8 +1057,12 @@ class BenchConsole:
                 c.disarm_seq = self.host.queued_disarm_seq()
                 self.cleanup_seqs.add(c.disarm_seq)
                 c.phase_ns = now
+            elif self._pending(c.disarm_seq) and not c.binding.holds(*self._binding_now()):
+                # still unsent and the request no longer holds: refused, its DISARM out of the queue (round 4 P2-3)
+                self._clear_done(c, "refused", now, "the board changed before the DISARM went out: ask again")
+                return
             elif self._echoed(c.disarm_seq, "DISARM", c):
-                if not c.binding.holds(self.conn, st.boot_id, st.fault_flags):
+                if not c.binding.holds(*self._binding_now()):
                     self._clear_done(c, "refused", now, "the fault bits changed: ask again")
                     return
                 blocked = self.host.request_clear_faults(now)
@@ -1036,7 +1075,7 @@ class BenchConsole:
                 self._clear_done(c, "no_echo", now, "the DISARM before the clear was not echoed")
         elif c.phase == "clear":
             if not self._echoed(c.clear_seq, "CLEAR_FAULTS", c) and self._pending(c.clear_seq) \
-                    and not c.binding.holds(self.conn, st.boot_id, st.fault_flags):
+                    and not c.binding.holds(*self._binding_now()):
                 # still unsent and the bits changed: refused for good, the frame out of the queue (round 3 P2-3)
                 self._clear_done(c, "refused", now, "the fault bits changed before the CLEAR: ask again")
                 return
@@ -1121,7 +1160,7 @@ def main(argv=None) -> int:
     from real_mcu_link import BenchTtyLink, ReconnectingLink
 
     holder = {}
-    dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True,
+    dev = ReconnectingLink(args.device, baud=args.baud, exclusive=True, clock=time.monotonic_ns,
                            link_factory=lambda fd: BenchTtyLink(fd, gate=lambda f, w: holder["c"].gate(f, w)))
     console = BenchConsole(dev, runs_root=Path(args.runs_root))
     holder["c"] = console

@@ -129,11 +129,12 @@ def test_after_a_reopen_the_mode_decides_and_no_disarm_is_sent(mode, action):
 
 # --- the clear-faults binding (plan 3, 9th/10th round P2) ---------------------------------------------------------------
 def test_a_clear_is_bound_to_the_link_boot_and_fault_bits_it_was_asked_on():
-    asked = bs.ClearBinding(conn=1, boot_id=7, fault_flags=FaultFlag.OVERCURRENT_M)
-    assert asked.holds(1, 7, FaultFlag.OVERCURRENT_M)
-    assert not asked.holds(2, 7, FaultFlag.OVERCURRENT_M)  # reopened
-    assert not asked.holds(1, 8, FaultFlag.OVERCURRENT_M)  # rebooted
-    assert not asked.holds(1, 7, FaultFlag.OVERCURRENT_M | FaultFlag.DRIVER_FAULT_M)  # a new bit on the DISARM's answer
+    asked = bs.ClearBinding(conn=1, conn_gen=4, boot_id=7, fault_flags=FaultFlag.OVERCURRENT_M)
+    assert asked.holds(1, 4, 7, FaultFlag.OVERCURRENT_M)
+    assert not asked.holds(2, 4, 7, FaultFlag.OVERCURRENT_M)  # the host reopened
+    assert not asked.holds(1, 5, 7, FaultFlag.OVERCURRENT_M)  # the board's connection generation moved (same fd)
+    assert not asked.holds(1, 4, 8, FaultFlag.OVERCURRENT_M)  # rebooted
+    assert not asked.holds(1, 4, 7, FaultFlag.OVERCURRENT_M | FaultFlag.DRIVER_FAULT_M)  # a new bit
 
 
 # --- the first verdict (plan 3: run and cleanup) --------------------------------------------------------------------------
