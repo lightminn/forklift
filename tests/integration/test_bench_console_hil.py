@@ -504,3 +504,48 @@ def test_the_result_carries_the_peak_current_from_the_runs_states(rig):
     rows = record_rows(res)
     peak = [max(abs(r["current_ma"][k]) for r in rows if r.get("t") == "state") for k in range(4)]
     assert res["peak_current_ma"] == peak
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+def test_ctrl_c_or_sigterm_ends_the_model_console_cleanly(mcu_model, tmp_path, sig):  # noqa: F811
+    """Both signals only ask (Codex C round 4 P1): the loop ends at a cycle boundary, exit 0, the model child gone."""
+    proc = subprocess.Popen([sys.executable, str(REPO / "tools" / "bench_console.py"), "--model", str(mcu_model),
+                             "--port", "0", "--runs-root", str(tmp_path / "runs")],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env={**os.environ, "PYTHONPATH": f"{REPO / 'src'}:{REPO}"})
+    try:
+        line = proc.stdout.readline()
+        assert '"t": "started"' in line, (line, proc.stderr.read() if proc.poll() is not None else "")
+        time.sleep(0.5)
+        proc.send_signal(sig)
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    out = subprocess.run(["pgrep", "-f", f"{mcu_model} --link"], capture_output=True, text=True)
+    assert out.stdout.strip() == ""
+
+
+def test_a_model_ending_after_its_first_state_is_one_lost_device(mcu_model, tmp_path):  # noqa: F811
+    from forklift_core.plant.mcu_host import HostEvent  # noqa: F401
+
+    holder = {}
+    dev = bench_console.ModelDevice(str(mcu_model), gate=lambda f, w: holder["c"].gate(f, w))
+    c = bench_console.BenchConsole(dev, runs_root=tmp_path / "runs")
+    holder["c"] = c
+    events = []
+    real = c._device_event
+    c._device_event = lambda e, now: (events.append(e.kind), real(e, now))
+    try:
+        end = time.monotonic() + 5.0
+        while c.not_ready() is not None and time.monotonic() < end:
+            c.cycle()
+            time.sleep(0.002)
+        assert c.not_ready() is None
+        dev.proc.terminate()
+        dev.proc.wait(timeout=5)
+        for _ in range(5):
+            c.cycle()
+        assert events.count("disconnected") == 1 and c.not_ready() is not None
+    finally:
+        dev.close()

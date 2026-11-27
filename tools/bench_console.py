@@ -1182,15 +1182,17 @@ class ModelDevice:
 
         from real_mcu_link import BenchTtyLink
 
-        self.master, self.slave = os.openpty()
-        tty.setraw(self.slave)
-        os.set_blocking(self.master, False)
-        self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
-                                      "--bench", "1"])
+        self.master = self.slave = None
+        self.proc = None
         try:
+            self.master, self.slave = os.openpty()
+            tty.setraw(self.slave)
+            os.set_blocking(self.master, False)
+            self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
+                                          "--bench", "1"])
             self.link = BenchTtyLink(self.master, gate=gate)
         except BaseException:
-            self.close()  # the child never outlives a failed construction (round 3 P3-1)
+            self.close()  # neither the child nor the pty outlives a failed construction (round 3 P3-1, 4 P3-2)
             raise
         self.opened = False
         self.dead = False
@@ -1204,8 +1206,7 @@ class ModelDevice:
         if self.proc.poll() is not None:
             # the model ended: a lost device, as a board unplugged (round 3 P2-5) -- the console stops being ready
             self.dead = True
-            events.append(HostEvent("disconnected", {"path": "model", "exit": self.proc.returncode}))
-            return events + host.disconnected(now)
+            return events + host.disconnected(now)  # the host's own disconnected event: one per loss
         if not self.opened:
             self.opened = True
             events.append(HostEvent("connected", {"path": "model", "product": MODEL_PRODUCT}))
@@ -1224,12 +1225,15 @@ class ModelDevice:
     def close(self) -> None:
         import os
 
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except Exception:  # noqa: BLE001
-            self.proc.kill()
+        if self.proc is not None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                self.proc.kill()
         for fd in (self.master, self.slave):
+            if fd is None:
+                continue
             try:
                 os.close(fd)
             except OSError:
@@ -1273,6 +1277,7 @@ def main(argv=None) -> int:
         stop_asked["v"] = True  # never in the middle of a frame's bookkeeping, and the stop cleanup then runs
 
     signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)  # Ctrl-C too (round 4 P1): never an exception mid-frame
     holder = {}
     gate = lambda f, w: holder["c"].gate(f, w)  # noqa: E731 -- bound at every opening, a reopening too
     dev = None
@@ -1325,10 +1330,16 @@ def main(argv=None) -> int:
         finally:
             if console.run is not None and console.run.cancel is None:
                 console.run.cancel = "tool_exit"
+            c = console.clear
+            if c is not None and (c.clear_seq is None or console._pending(c.clear_seq)):
+                # its CLEAR never went out: the request ends here, recorded (round 4 P2-4)
+                console._clear_done(c, "cancelled", int(console.clock()), "the tool was stopped before the CLEAR")
             stop_end = time.monotonic() + STOP_WAIT_S + 1.0
-            while console.run is not None and time.monotonic() < stop_end:
+            while (console.run is not None or console.clear is not None) and time.monotonic() < stop_end:
                 console.cycle()
                 time.sleep(CYCLE_S)
+            if console.clear is not None:  # its CLEAR went out but its end was not seen before the exit
+                console._clear_done(console.clear, "unconfirmed", int(console.clock()), "the tool was stopped")
     finally:
         if server is not None:
             server.stop()
