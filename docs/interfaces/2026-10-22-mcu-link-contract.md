@@ -201,6 +201,8 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 
 ## 7. 버전 관리
 
+- **벤치 확장(8 절, 2026-11-27, bench console plan A1a)**: 운영 `version` 3 은 그대로이고, 벤치 이미지 전용 메시지 셋(0x06·0x08·0x82)을 더했다. 그 세대는 제품 토큰 `bench5` 로 정한다. 다른 이미지는 이 type 을 모른다.
+
 필드를 바꾸면 `version` 을 올린다. 한 버전 안에서 필드 의미를 바꾸지 않는다.
 
 - 2026-11-25 정정(필드·version 무변경, 총괄 결정 — 설계 `2026-11-25-bench-commission-limits`): 3.4 의 시운전 한계가 축별·빌드별 상수가 됐다. 열린 시운전 빌드의 L·R 은 1.0 과 검증기 ms 상한이다. 출력 구간 안의 축 변경은 11 이고, 듀티 한계는 정수로 비교한다.
@@ -217,3 +219,94 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   - `STATE` 끝에 `reset_cause` 를 붙였다.
   - 승강 원점 비트는 승강 방식 결정(계획 3.5) 뒤 version 3 으로 미룬다.
   - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.2·3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다(래치 유지, 보류 만료 시각 고정, 보류는 구동 재개 금지일 뿐 제동·정지가 아님 — Codex 동의). 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
+
+## 8. 벤치 확장 (wire 세대 `bench5`)
+
+벤치 이미지 전용 메시지다(계획 `docs/plans/2026-11-27-bench-console.md` 1 절). 운영 `version` 3 의 메시지·필드·고정 벡터(3–6 절)는 바꾸지 않는다. 프레임(1 절)과 `version` 3 은 같다. 벤치 확장의 세대는 USB 제품 문자열 끝 토큰 `bench5` 로 정한다.
+
+- **벤치 이미지**: `FW_BUILD=commission`, `FW_MOTOR_OUTPUT=1`, `FW_LINK=usb`, `FW_BENCH=1` 이고 fw-single 이 아니다. 제품 문자열은 `… lim=lr1 bench5` 로 끝난다. 다른 조합은 configure 가 거부한다.
+- **다른 이미지**: 0x06·0x08·0x82 를 모르는 `type` 으로 버린다(`rx_errors`). 코어를 `FW_CORE_BENCH` 없이 컴파일하기 때문이다. 받아 들이지도, 보내지도 않는다.
+- **벤치 이미지는 운영 `ARM` 을 `wrong_build` 로 거부한다.** 무장은 `BENCH_ARM` 으로만 한다.
+
+| type | 이름 | 방향 | payload |
+|---|---|---|---|
+| 0x06 | `BENCH_SET` | 호스트 → MCU | 52 바이트 `<IQIBBBbI4H4Ii` |
+| 0x08 | `BENCH_ARM` | 호스트 → MCU | 16 바이트 `<IQI` |
+| 0x82 | `BENCH_STATE` | MCU → 호스트 | 48 바이트 `<HIIBBBBHiiiiBBHHHHBBBBBB` |
+
+### 8.1 `BENCH_SET`
+
+한 실행의 설정이다. `DISARMED` 이고 시운전 출력 구간이 닫혀 있을 때만 받는다. 같은 `run_id` 의 `BENCH_ARM` 이 **한 번** 소비한다.
+
+| 필드 | 형 | 뜻 |
+|---|---|---|
+| `boot_id` | u32 | 지금 부팅 ID |
+| `echo_mcu_time_us` | u64 | 받은 `STATE` 의 시각. `command_timeout_ms` 안이고, 마지막 연결 변경(8.4) 이후여야 한다 |
+| `run_id` | u32 | 호스트가 실행마다 새로 뽑는 값, 0 아님 |
+| `mode` | u8 | 1 `duty`(시간 상한 듀티 구동). 2 `hold` 는 다음 세대(A1b) |
+| `axis` | u8 | 0 L, 1 R, 2 M, 3 H — 이 실행에서 0 이 아닌 출력을 낼 수 있는 유일한 축 |
+| `source` | u8 | 0 없음. 1 `kth`·2 `mt` 는 다음 세대 |
+| `count_sign` | i8 | ±1, 듀티 부호와 원천 카운트 증가 방향의 관계(측정 원천이 생기는 세대에서 씀) |
+| `bypass` | u32 | bit0 `steer_range`(M 범위 검사 끔, KTH 유효 검사는 유지), bit1 `lift_range`(H). 나머지 비트는 0. 멈추는 쪽(과전류·전류센서·드라이버 결함·STOP/DISARM·명령 만료·IWDG·사이클 초과)은 비트가 없다 |
+| `duty_max_e4[4]` | u16 ×4 | 축별 듀티 상한, 1…10000 |
+| `time_ms[4]` | u32 ×4 | 축별 연속 출력 시간 상한, 1…2147483 |
+| `stop_counts` | i32 | 거리 정지, 0 = 없음(다음 세대) |
+
+거부 이유(처음 걸린 것): 벤치 이미지 아님 → `wrong_build`, `DISARMED` 아님·출력 구간 열림 → `not_disarmed`, `boot_id` → `boot_mismatch`, echo → `stale_echo`, 값 → `bad_value`(이 세대가 받지 않는 `mode`·`source`·`stop_counts` 포함). 받아들이면 그 설정을 대기시키고 `last_rx_seq` 를 올린다. 대기 설정은 1 s 뒤 만료되고, `DISARM`·결함·연결 변경에서 버려진다.
+
+### 8.2 `BENCH_ARM`
+
+`ARM` 과 같은 검사(3.2: `boot_id`, 신선도, 모드, 시간 상한 보류, 전류 측정)에 더해, echo 가 마지막 연결 변경 이후여야 하고(`stale_echo`), 대기 중인 `BENCH_SET` 이 같은 연결에서 왔고 만료되지 않았으며 `run_id` 가 같아야 한다(`bad_value`). 받아들이면 `ARM` 처럼 무장하고 그 설정을 소비한다. 우회 비트와 축별 상한은 **이 무장 동안만** 쓰이고, 모드가 `ARMED`·`STOPPING` 을 벗어나면 빌드 기본값으로 돌아간다. 이전 실행의 결과(8.3)는 이때 비워진다.
+
+### 8.3 실행과 결과
+
+- **준비**: 무장 뒤 첫 `COMMISSION` 은 0 이어야 한다(3.4 `zero_first`). 실행 축이 아닌 축의 0(무장 직후 L(0) 등)은 준비로 받는다. 실행 축이 아닌 축의 0 이 아닌 듀티는 `bad_value`.
+- **구동 시작**: 실행 축의 0 이 아닌 `COMMISSION` 을 처음 받아들인 때.
+- **끝 전이**(처음 일어난 것이 결과의 정지 사유): 구동 시작 뒤 받아들인 0 `COMMISSION`(1 `end_zero`), 명령 만료(2), 시간 상한(3), `DISARM`(4), 결함(5), 비상정지(6), 연결 변경(7). `end_zero` 와 연결 변경에서는 MCU 가 스스로 `STOPPING` 의 전기제동을 거쳐 `DISARMED` 로 가며, 이때 `command_timeout` 비트는 서지 않는다. 결함·비상정지는 결과만 남기고 출력과 래치는 3.2 그대로다. 끝난 뒤의 명령은 `stopping`·`not_armed` 로 거부되고 그 수를 결과에 센다.
+- **결과**: 구동한 실행만 결과를 남긴다(`result_run_id`, 정지 사유, 결과의 축·원천, 차단한 요청 수). 최초 원인은 덮어쓰지 않으며, 다음 `BENCH_ARM` 이 새 설정을 소비할 때까지 남는다. 구동 없이 끝난 실행은 결과가 없다(`result_run_id` 가 그 실행이 아님).
+
+### 8.4 연결 변경 (USB)
+
+보드의 연결 생명주기 콜백(주 루프)이 연결 세대를 시작 표시로 올리고, TinyUSB 수신 FIFO 를 비운 뒤 세대를 확정한다. 송신 FIFO 는 비우지 않는다(보드 설계 5.1). 제어 주기는 세대가 바뀌는 중에는 한 바이트도 읽지 않는다. 확정되면 수신 링에 남은 이전 연결의 바이트와 반쪽 프레임을 버리고, 다음을 한다.
+
+- 대기 중인 `BENCH_SET` 을 버린다.
+- `ARMED` 면 실행을 끝내고(정지 사유 7) `STOPPING` 으로 간다. 무장은 연결을 넘지 못한다.
+- 벤치 명령은 이 시각 이후의 `STATE` 를 echo 해야 받는다(그 주기 뒤에 보낸 `STATE` 부터).
+
+### 8.5 `BENCH_STATE`
+
+벤치 이미지는 `STATE` 마다 바로 뒤에 `BENCH_STATE` 를 붙여 **한 번에** 송신 버퍼에 넣는다. 자리가 모자라면 둘 다 버리고 `dropped_pairs` 를 올린다. `BENCH_STATE` 의 헤더 seq 는 공통 송신 seq 를 이어 받는다(짝 `STATE` + 1). 송신 seq 는 넣기에 성공할 때만 오르므로, 짝을 통째로 잃으면 seq 공백 없이 `mcu_time_us` 만 건너뛴다.
+
+| 필드 | 형 | 뜻 |
+|---|---|---|
+| `pair_seq` | u16 | 짝 `STATE` 의 헤더 seq |
+| `run_id` | u32 | 마지막으로 소비한 실행(없으면 0) |
+| `result_run_id` | u32 | 결과가 있는 실행(없으면 0) |
+| `axis`, `source` | u8, u8 | 마지막 실행의 축·원천 |
+| `count_state` | u8 | 0 `none_yet`, 1 `valid`, 2 `lost` (이 세대는 0) |
+| `kth_lost` | u8 | bit0 M, bit1 H (이 세대는 0) |
+| `raw_angle` | u16 | 측정 축의 같은 주기 원시각 (이 세대는 0) |
+| `cumulative`, `target`, `distance_ref`, `cut_position` | i32 ×4 | 원천 카운트 값들 (이 세대는 0) |
+| `stop_reason` | u8 | 8.3 의 정지 사유(0 없음; 8–12 는 다음 세대) |
+| `distance_confirm` | u8 | 0 없음, 1 도달, 2 보류 (이 세대는 0) |
+| `blocked` | u16 | 끝난 뒤 차단한 구동 요청 수(포화) |
+| `dropped_pairs` | u16 | 버린 짝 수(포화) |
+| `evidence_age_ms`, `end_evidence_age_ms` | u16, u16 | 증거 나이(포화, 0xFFFF = 아직 없음; 이 세대는 0xFFFF) |
+| `mcu_bypass` | u8 | 지금 무장에서 쓰이는 우회 비트(8.1) |
+| `drive` | u8 | bit0–1 실행 상태(0 없음, 1 준비, 2 구동, 3 끝), bit4–5 모드 |
+| `conn_gen` | u8 | 연결 변경 수(mod 256) |
+| `reserved` | u8 | 0 |
+| `result_axis`, `result_source` | u8, u8 | 결과의 축·원천 |
+
+운영 `STATE.fault_flags` 의 bit 25–31 은 벤치 이미지에서도 0 이다. 우회 표식은 `mcu_bypass` 에만 있다.
+
+### 8.6 고정 시험 벡터
+
+`tests/unit/mcu_link/test_bench_messages.py` 와 `firmware/core/test/test_bench_link.c` 가 함께 쓴다.
+
+- `bench_set_000b` — seq 0x000B, boot 0xDEADBEEF, echo 0x0000000100ABCDEF, run 0x12345678, mode 1, axis 2, source 0, count_sign 1, bypass 1, duty (10000, 10000, 2500, 1500), time (2147483, 2147483, 30000, 2000), stop 0:
+  `0403060b08efbeaddeefcdab020101010778563412010203010101010c10271027c409dc059bc420049bc4200330750103d007010101010103e94200`
+- `bench_arm_000c` — seq 0x000C, boot 0xDEADBEEF, echo 0x0000000100ABCDEF, run 0x12345678:
+  `0403080c08efbeaddeefcdab0201010107785634124c7300`
+- `bench_state_0103` — seq 0x0103, 필드 순서대로 `0x0102, 0x12345678, 0x11223344, 2, 0, 0, 0, 0x0ABC, −123456, 654321, −7, 8, 1, 0, 3, 4, 0xFFFF, 250, 1, 0x13, 5, 0, 2, 0`:
+  `1003820301020178563412443322110201010abc0ac01dfefff1fb0906f9ffffff08010102010203020404fffffa04011305020203659700`
