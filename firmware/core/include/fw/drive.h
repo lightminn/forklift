@@ -205,6 +205,19 @@ typedef struct {
     bool nfault_low[DRIVE_CH_COUNT];
     bool estop_active;
     bool cycle_overrun; /* this cycle started late (set by the app) */
+#if defined(FW_CORE_BENCH)
+    /* bench7 (plan 4.3 A1b-2 decision 6): the motor output HAL's report at read_inputs (fw/bench_pwm.h). Without it
+       (pwm_report false) the core takes its own last duty as written at its tick time. */
+    bool pwm_report;
+    int16_t applied_e4[DRIVE_CH_COUNT]; /* active now, physical sign x compare value (0 when cut) */
+    bool applied_any[DRIVE_CH_COUNT];   /* a non-zero may have been active since the last read */
+    uint32_t applied_window_us;         /* HAL clock from the last read to this one */
+    bool run_valid[DRIVE_CH_COUNT];     /* the written values form one sign's unbroken non-zero run */
+    uint32_t run_since_us[DRIVE_CH_COUNT]; /* HAL clock after that run's first write */
+    int8_t run_sign[DRIVE_CH_COUNT];       /* physical */
+    uint32_t abs_start_us[2];              /* each fresh frame's bundle start: a lower bound of its acquisition */
+    bool abs_start_known[2];
+#endif
 } drive_inputs;
 
 typedef struct {

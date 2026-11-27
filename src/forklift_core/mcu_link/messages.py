@@ -24,12 +24,15 @@ _ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
 _STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
-# Bench extension (contract section 8, wire generation bench6): the bench image only; the operating v3 messages above
+# Bench extension (contract section 8, wire generation bench7): the bench image only; the operating v3 messages above
 # are unchanged. BENCH_SET: boot_id, echo, run_id, mode, axis, source, count_sign, bypass, duty_max_e4[4], time_ms[4],
-# stop_counts. BENCH_ARM: boot_id, echo, run_id. BENCH_STATE: 48 bytes, the order of the contract's table.
+# stop_counts. BENCH_ARM: boot_id, echo, run_id. BENCH_HOLD (bench7): boot_id, arm_gen, echo, valid_after_echo_ms,
+# run_id, axis, source, target_kind, target_value, cpr, kp, ki, kd, deadband_counts, duty_max_e4, min_duty_e4, sign.
+# BENCH_STATE: 51 bytes (bench7), the order of the contract's table.
 _BENCH_SET = struct.Struct("<IQIBBBbI4H4Ii")
 _BENCH_ARM = struct.Struct("<IQI")
-_BENCH_STATE = struct.Struct("<HIIBBBBHiiiiBBHHHHBBBBBB")
+_BENCH_HOLD = struct.Struct("<IHQHIBBBiHfffHHHb")
+_BENCH_STATE = struct.Struct("<HIIBBBBHiiiiBBHHHHBBBBBBHB")
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
@@ -37,6 +40,7 @@ TYPE_DISARM = 0x03
 TYPE_CLEAR_FAULTS = 0x04
 TYPE_COMMISSION = 0x05
 TYPE_BENCH_SET = 0x06  # bench extension (contract 8): the bench image only, unknown to every other image
+TYPE_BENCH_HOLD = 0x07  # bench7: a hold run's command (plan 4.3 A1b-2)
 TYPE_BENCH_ARM = 0x08  # bench extension: ARM with the run id of the BENCH_SET it consumes
 TYPE_STATE = 0x81
 TYPE_BENCH_STATE = 0x82  # bench extension: sent by the bench image right after each STATE, as one pair
@@ -204,6 +208,17 @@ class BenchRunFlag(IntFlag):
     RES_LOSS = 1 << 2  # the result: the provisional confirmation ended by a loss
     RES_TENTATIVE = 1 << 3  # the result: the last counted frame at the end was 0x0000
     RES_NO_REF = 1 << 4  # the result: no fresh non-zero frame at the drive start
+    RES_HOLD = 1 << 5  # bench7: the result run was a hold run
+    RES_DISTANCE = 1 << 6  # bench7: the result run was a distance run
+
+
+class BenchHoldTarget(IntEnum):
+    """bench7: how the first accepted BENCH_HOLD fixes its target (plan 4.3 A1b-2 decision 4)."""
+
+    ZERO = 0  # the sensor's zero, the shortest way
+    ABS = 1  # a raw angle 0..4095, the shortest way
+    HERE = 2  # where the axis is
+    REL = 3  # a signed count from where the axis is
 
 
 _FAULT_MASK = (1 << 25) - 1
@@ -372,6 +387,51 @@ class BenchSet:
 
 
 @dataclass(frozen=True)
+class BenchHold:
+    """bench7 (plan 4.3 A1b-2 decision 2): a hold run's command. The run's first accepted one fixes the target and the
+    settings; the later ones must be identical and only extend the deadline. Gains are duty per rad, per rad*s and
+    per rad/s; ``sign`` must equal the run's ``count_sign``."""
+
+    boot_id: int
+    arm_gen: int
+    echo_mcu_time_us: int
+    valid_after_echo_ms: int
+    run_id: int
+    axis: int
+    source: int
+    target_kind: int
+    target_value: int
+    cpr: int
+    kp: float
+    ki: float
+    kd: float
+    deadband_counts: int
+    duty_max_e4: int
+    min_duty_e4: int
+    sign: int
+
+    def __post_init__(self) -> None:
+        _check_range("boot_id", self.boot_id, 1, U32_MAX)
+        _check_range("arm_gen", self.arm_gen, 0, 0xFFFF)
+        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U64_MAX)
+        _check_range("valid_after_echo_ms", self.valid_after_echo_ms, 0, 0xFFFF)
+        _check_range("run_id", self.run_id, 1, U32_MAX)
+        _check_range("axis", self.axis, 0, 0xFF)
+        _check_range("source", self.source, 0, 0xFF)
+        _check_range("target_kind", self.target_kind, 0, 0xFF)
+        _check_range("target_value", self.target_value, -(2**31), 2**31 - 1)
+        _check_range("cpr", self.cpr, 0, 0xFFFF)
+        for name in ("kp", "ki", "kd"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"{name} must be a number")
+        _check_range("deadband_counts", self.deadband_counts, 0, 0xFFFF)
+        _check_range("duty_max_e4", self.duty_max_e4, 0, 0xFFFF)
+        _check_range("min_duty_e4", self.min_duty_e4, 0, 0xFFFF)
+        _check_range("sign", self.sign, -128, 127)
+
+
+@dataclass(frozen=True)
 class BenchArm:
     """Bench extension (contract 8): ARM for the bench image, naming the run whose BENCH_SET it consumes."""
 
@@ -414,6 +474,8 @@ class BenchState:
     run_flags: int  # BenchRunFlag (bench6)
     result_axis: int
     result_source: int
+    deadband_entries: int = 0  # bench7: a hold run's deadband entries (out -> in), mod 65536, until the next ARM
+    result_bypass: int = 0  # bench7: the result run's bypass bits, fixed at its end
 
     @property
     def drive_state(self) -> BenchDriveState:
@@ -424,7 +486,7 @@ class BenchState:
         return (self.drive >> 4) & 0x03
 
 
-Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState | BenchSet | BenchArm | BenchState
+Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState | BenchSet | BenchHold | BenchArm | BenchState
 
 
 def _kth(message: McuState) -> tuple[int, ...]:
@@ -466,6 +528,11 @@ def _payload(message: Message) -> tuple[int, bytes]:
         return TYPE_BENCH_SET, _BENCH_SET.pack(
             message.boot_id, message.echo_mcu_time_us, message.run_id, message.mode, message.axis, message.source,
             message.count_sign, message.bypass, *message.duty_max_e4, *message.time_ms, message.stop_counts)
+    if isinstance(message, BenchHold):
+        return TYPE_BENCH_HOLD, _BENCH_HOLD.pack(
+            message.boot_id, message.arm_gen, message.echo_mcu_time_us, message.valid_after_echo_ms, message.run_id,
+            message.axis, message.source, message.target_kind, message.target_value, message.cpr, message.kp,
+            message.ki, message.kd, message.deadband_counts, message.duty_max_e4, message.min_duty_e4, message.sign)
     if isinstance(message, BenchArm):
         return TYPE_BENCH_ARM, _BENCH_ARM.pack(message.boot_id, message.echo_mcu_time_us, message.run_id)
     if isinstance(message, BenchState):
@@ -475,7 +542,7 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.distance_ref, message.cut_position, message.stop_reason, message.distance_confirm,
             message.blocked, message.dropped_pairs, message.evidence_age_ms, message.end_evidence_age_ms,
             message.mcu_bypass, message.drive, message.conn_gen, message.run_flags, message.result_axis,
-            message.result_source)
+            message.result_source, message.deadband_entries, message.result_bypass)
     if isinstance(message, Arm):
         return TYPE_ARM, _ARM.pack(message.boot_id, message.echo_mcu_time_us)
     if isinstance(message, Disarm):
@@ -568,6 +635,7 @@ def decode(body: bytes) -> tuple[int, Message]:
         TYPE_STATE: _STATE,
         TYPE_COMMISSION: _COMMISSION,
         TYPE_BENCH_SET: _BENCH_SET,
+        TYPE_BENCH_HOLD: _BENCH_HOLD,
         TYPE_BENCH_ARM: _BENCH_ARM,
         TYPE_BENCH_STATE: _BENCH_STATE,
     }
@@ -596,6 +664,8 @@ def decode(body: bytes) -> tuple[int, Message]:
             message = Commission(*fields)
         elif type_ == TYPE_BENCH_SET:
             message = BenchSet(*fields[:8], tuple(fields[8:12]), tuple(fields[12:16]), fields[16])
+        elif type_ == TYPE_BENCH_HOLD:
+            message = BenchHold(*fields)
         elif type_ == TYPE_BENCH_ARM:
             message = BenchArm(*fields)
         elif type_ == TYPE_BENCH_STATE:
