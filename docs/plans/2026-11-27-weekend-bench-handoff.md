@@ -78,11 +78,18 @@ ssh <계정>@forklift-jetson.local    # 비밀번호는 사람이 입력
 |---|---|---|
 | `~/forklift-fw-bench2` | 태그 `diag-fw-bench-2` 의 `git archive` 를 푼 것(git 없음) | bench-2 보드의 도구 |
 | `~/forklift-fw-bench3` | 태그 `diag-fw-bench-3` 의 `git archive`(git 없음) | bench-3 보드의 도구 |
-| `~/forklift-fw-bench` | 태그 `diag-fw-bench-1`(옛 세대) | 쓰지 않음 |
-| `~/forklift` (24a0475f) | Jetson 의 기본 체크아웃(git). 그 `.venv` 가 모든 벤치 도구를 실행하는 Python 이다 | **venv 만 쓴다. 폴더 내용은 바꾸지 않는다** |
-| `~/forklift-diag-commission-long` | 11-26 L 긴 시운전(진단 이미지 `diag-commission-long-1`)용 도구 | 쓰지 않음 |
-| `~/fwbench_flash/` | 예전에 옮겨 둔 이미지(`diag-fw-bench-3.bin` 등)와 sha256 파일 | 5.2 의 값과 같으면 굽기에 써도 됨 |
-| `~/arrival_1124/` | 11-24 이후 벤치 기록 폴더(`run.jsonl` 등) | 새 기록은 `~/bench_runs/` 에 둔다 |
+| `~/forklift-fw-bench` | 태그 `diag-fw-bench-1`(옛 세대, 표식 `bench2`) | 쓰지 않음 |
+| `~/forklift` | 커밋 24a0475fe8e9 를 옮겨 둔 폴더(**git 없음**, 폴더의 `SYNCED_FROM` 파일에 커밋). 그 `.venv`(Python 3.12.3, `forklift-core` 편집 설치·NumPy·PyYAML)가 모든 벤치 도구를 실행하는 Python 이다 | **venv 만 쓴다. 폴더 내용은 바꾸지 않는다** |
+| `~/forklift-diag-commission-long` | 11-26 L 긴 시운전용 도구. 태그가 아니라 브랜치 `diag/commission-long`(11-24)에서 옮긴 것이라 태그 `diag-commission-long-1` 과 세 파일이 다르다(`SYNCED_FROM`) | 쓰지 않음 |
+| `~/fwbench_flash/` | 예전에 옮겨 둔 이미지·검증 사본·로그. `diag-fw-bench-2.bin`·`diag-fw-bench-3.bin` 의 sha256 은 5.2 Release 값과 같다(11-27 확인) | 굽기에 그대로 써도 됨 |
+| `~/arrival_1124/` | 11-24 이후 벤치 기록 폴더(`run.jsonl` 등, 11-27 에 65 MB) | 새 기록은 `~/bench_runs/` 에 둔다 |
+
+**Jetson 환경(11-27 확인)**:
+- 계정 `zetin` 은 `dialout` 그룹이라 `/dev/forklift-mcu` 를 sudo 없이 연다(udev 규칙 `99-forklift-mcu.rules` 설치됨).
+- `sudo` 는 비밀번호를 묻는다(굽기 `dfu-util` 만 sudo).
+- `dfu-util` 0.11, `cmake` 3.28.3. 디스크 여유 약 211 GB.
+- 시계는 NTP 로 맞는다. 예전 기록 폴더 이름에 `0101` 이 붙은 것은 부팅 직후 시계가 맞기 전이라서다. `/dev/forklift-mcu` 링크 시각이 1970 으로 보이는 것도 같은 이유이고 문제없다.
+- Arm 툴체인: 11-27 에 `~/opt/arm-gnu-toolchain-13.3.rel1-aarch64-arm-none-eabi` 로 설치했고, 빌드 전용 클론 `~/forklift-fw-src`(태그 `diag-fw-bench-3`)도 있다 — 5.1.
 
 도구 폴더는 `git archive` 라 git 이 없다. 그래서 venv 는 `~/forklift/.venv` 를 쓰고, `PYTHONPATH` 로 그 폴더의 `src` 를 먼저 읽게 한다. 아래 함수를 셸에 한 번 정의해 두고 쓴다(bash·zsh 둘 다 됨).
 
@@ -112,7 +119,7 @@ curl -sL https://github.com/lightminn/forklift/archive/refs/tags/$TAG.tar.gz | t
 diff -rq --no-dereference -x __pycache__ -x '*.pyc' -x build "/tmp/tagcheck/forklift-$TAG" "$B" && echo UNCHANGED
 ```
 
-   판정: 마지막 줄이 `UNCHANGED` 여야 한다. 다른 줄이 나오면 그 파일이 바뀐 것이므로 사람에게 보인다(펌웨어·도구를 일부러 고친 경우가 아니면 쓰지 않는다). 이 GitHub 압축본은 `git archive <태그>` 와 같은 내용이다(2026-11-27 노트북에서 대조).
+   판정: 마지막 줄이 `UNCHANGED` 여야 한다. 다른 줄이 나오면 그 파일이 바뀐 것이므로 사람에게 보인다(펌웨어·도구를 일부러 고친 경우가 아니면 쓰지 않는다). 이 GitHub 압축본은 `git archive <태그>` 와 같은 내용이다(2026-11-27 노트북에서 대조). 11-27 Jetson 에서 실제로 돌려 `~/forklift-fw-bench2`·`~/forklift-fw-bench3`(·`~/forklift-fw-bench`) 모두 차이 0 줄이었다.
 
 ### 4.3 보드를 팀원 노트북에 직접 꽂는 경우 (2.2)
 
@@ -178,7 +185,11 @@ sha256sum fw-bench.bin
 ```
 
 - 태그 그대로 빌드하면 제품 문자열은 3 절 표와 같다. 펌웨어를 고치면 끝 토큰은 같고 가운데가 `diag-fw-bench-3-<n>-g<해시>`(커밋했을 때) 또는 `-dirty` 로 바뀐다.
-- 노트북(x86_64)에서 11-27 에 빌드한 태그 이미지의 크기·sha256 은 5.2 표와 같다. 같은 툴체인 판이면 Jetson 빌드도 크기가 같아야 한다(sha256 은 다를 수 있음).
+- **11-27 Jetson 에서 실제로 했다:**
+  - 툴체인 받기·검사·풀기는 약 18 분 걸렸다(받기가 대부분).
+  - 태그 `diag-fw-bench-3` 빌드 결과는 제품 문자열이 3 절 표와 같고 크기 36,396 B 로 Release 와 같았다.
+  - sha256 은 `1dc4f0792ef9bce55fc95eef79485dfd049be5cc9ce22bc56b0f27e5f3c636bf` 로, 노트북 빌드(Release, `b61d4bb2…`)와 **다르다**(호스트가 달라서). Jetson 빌드는 sha256 대신 **제품 문자열과 크기**로 확인한다.
+  - 툴체인과 `~/forklift-fw-src` 는 이미 있으므로, 다음부터는 위 빌드 블록의 `git clone` 줄만 건너뛰면 된다.
 
 ### 5.2 Release bin (빌드가 안 될 때)
 
@@ -362,20 +373,26 @@ chk $D
 ```
 
 - `--hold-target`: `here`(지금 자리), `zero`(가장 가까운 센서 원시 0), 또는 `±카운트`(지금 자리에서 상대, 4096 = 한 바퀴).
-- **선택 시험 — 비틀어 복원 보기:** 위 명령에서 `--hold-target here --seconds 10` 으로 두고, 실행 중 축을 손으로 비틀었다 놓는다. 비튼 시각을 적어 둔다(로그에는 표시가 없다). 11-27 기록: kp 1.0·상한 0.20 에서 축을 잡고 버티자 오차 +127 카운트, 듀티 0.19·I_M 4.8 A 에서 `DRIVER_FAULT_M`(6.5 로 해제). kp 0.1·상한 0.12 는 −2,348 카운트 비틀림에서 278 카운트만 복원했다(코깅).
-- **권장 시작값:** 상한 `--duty 0.15`, `--hold-kp 0.5`, `--hold-kd 0.02`(bench-3 만), 데드밴드 12, 10 s.
-  - **감쇠 항은 실물 미시험이다.** 호스트 시험은 kp 2.0·kd 0.05 에서 넘침을 줄였다. 진동이 남으면 kd 를 0.05 → 0.1 로 올려 본다. 축이 떨거나 엉뚱하게 밀면 멈추고(Ctrl-C) kd 를 0 으로 되돌린다.
+- **선택 시험 — 흔들어 복원 보기:** `--hold-target zero --seconds 30` 으로 두고, 실행 중 축을 손으로 **짧게** 흔들었다 바로 놓는다. 흔든 시각을 적어 둔다(로그에는 표시가 없다). **몇 초씩 붙잡고 버티면 드라이버 과열 차단(TSD)으로 `DRIVER_FAULT_M` 이 난다**(아래 11-27 결과).
+- **권장 시작값(11-27 bench-2 결과 기준):** 상한 `--duty 0.15`, `--hold-kp 0.5`, `--hold-deadband 12`, **`--hold-min-duty 0.12`**, 목표 `zero`, 30 s.
+  - bench-3 이면 감쇠 `--hold-kd 0.02` 부터 더해 본다. **실물 미시험**이다(호스트 시험은 kp 2.0·kd 0.05 에서 넘침을 줄임). 흔들기 뒤 지나침이 남으면 0.05 → 0.1 로 올린다. 축이 떨거나 엉뚱하게 밀면 멈추고(Ctrl-C) kd 를 0 으로 되돌린다.
   - bench-2 이면 `--hold-kd` 를 빼야 한다.
+- **11-27 결과(bench-2, 위 권장값, 기록 Jetson `~/arrival_1124/hold30_zero_md012_*`):**
+  - **손대지 않은 zero:** 시작 원시각 2,533 → +1,563 카운트 이동. 한 번 146 카운트 지나쳤다가 0.12 s 만에 정착했다. 최종 오차 +8 카운트(약 0.7°, 데드밴드 안)로 30 s 내내 유지, 진동 없음. 정지 유지 전류 25–30 mA, 이동 중 최고 1.95 A.
+  - **흔들기(짧게 흔들고 놓기):** 데드밴드 밖 구간 11 개, 최대 오차 ±1,600–2,700 카운트(140–240°). 모두 복귀했고 대부분 0.15–0.7 s 걸렸다. 다만 5 번은 반대쪽으로 1,341–2,281 카운트(120–200°) 크게 지나쳤다가 돌아왔다(복귀 1.2–5.8 s). 결함 없음, 드라이버 0xC0, 최고 3.5 A. **감쇠 항(D, bench-3)이 필요한 근거**다.
+  - **붙잡고 버티기:** 사용자가 축을 붙잡고 흔든 실행은 15 s 에 `DRIVER_FAULT_M` 이 났다. FAULT 중 상태 바이트 M = **0xE2(FAULT+TSD)**, 리셋 없음. 11-27 앞선 `DRIVER_FAULT_M`(4.8 A)도 0xE2 였다. 6.5 참고.
 - **판정(`chk` 의 `hold` 줄):**
   - `abs(final_error_counts) < 12`(데드밴드, 약 1°)이고 `in_deadband_share_after_settle` 가 0.8 이상이면 잘 머문 것이다. `settled_after_s` 가 `null` 이면 정착하지 못한 것이다.
   - 진동 여부는 `max_abs_error_after_settle_counts` 가 데드밴드보다 훨씬 크면(예: 100 이상) 진동으로 본다. 11-27 kp 0.5·kd 0 은 ±1,000–2,000 카운트를 왕복했다. 부호 전환 횟수 같은 자세한 분석은 기록을 돌려받아 한다(8 절).
   - 결함 판정: `chk` 의 "faults other than the bench's usual" 이 비어 있어야 한다(`DRIVER_FAULT_M` 이 있으면 6.5).
-- `zero` 목표는 11-27 에 목표를 24 카운트(약 2°) **지나서** 멈췄다. `--hold-min-duty 0.05` 나 `--hold-ki` 로 밀어 볼 수 있다(미시험).
+- `zero` 목표는 최소 듀티 없이는 11-27 오전에 목표를 24 카운트(약 2°) **지나서** 멈췄다. 최소 듀티 0.12 로 데드밴드 안(+8)에 섰다(위).
 
 ### 6.5 정지·고장 해제
 
 - **멈추기:** 실행 중 `Ctrl-C`(도구가 DISARM 을 보내고 끝냄). 급하면 **차단 스위치**.
 - **고장 해제**(`FAULT`·`ESTOP` 일 때만). 펌웨어는 원인이 없어졌는지 스스로 확인하지 않고 드라이버를 다시 초기화한다. 그래서 순서를 지킨다.
+  - **원인 비트 읽기:** `DRIVER_FAULT_M` 이면 해제 전에 6.1 상태 읽기(3 s)로 `driver_status` 를 본다. 드라이버 SDO 상태 바이트(데이터시트 SLVSG24C 표 8-21)이며 비트는 0x20 FAULT·0x10 VMOV·0x08 VMUV·0x04 OCP·0x02 TSD·0x01 SPI_ERR(0xC0 이 정상)이다. FAULT 로 바뀐 바로 그 STATE 에는 아직 0xC0 으로 보일 수 있다(20 ms 마다 읽음). FAULT 중 다시 읽으면 보인다.
+  - **TSD(과열 차단)는 래치다:** 펌웨어가 CONFIG1 을 쓰지 않아 `TSD_RETRY=0`(데이터시트 8.6.1.7)이고, 저절로 풀리지 않는다. `clear-faults` 로만 풀린다. TTSD 155/170/185 °C, 히스테리시스 30 °C(7.5.10).
   1. **VM 차단.**
   2. 원인 확인과 조치: 축이 걸렸는지(구속), 배선·커넥터·점퍼, 전류가 컸던 이유.
   3. 원인과 조치를 `--cause` 에 적어 해제한다.
@@ -393,8 +410,8 @@ cat $D/stdout.json
 근거 기록: [11-27 fw-bench](../validation/2026-11-27-bench-fw-bench-m-hold.md), [11-27 KTH LVDS](../validation/2026-11-27-bench-kth-lvds.md), [11-26 L 실모터](../validation/2026-11-26-bench-l-real-motor.md).
 
 - M 3바퀴: 0.20 정상(`kth_turns` 정지), 0.12 코깅에 걸림.
-- **hold 진동:** P 만(kp 0.5)이면 ±1,000–2,000 카운트 왕복. 감쇠 항(bench-3)은 이를 줄이려고 넣었고 미시험이다.
-- **zero 2° 지나 정지:** 목표를 24 카운트(약 2°) 지나서 멈췄다. 남은 오차에서 P 출력이 코깅을 못 넘는 것으로 본다(추정).
+- **hold:** 11-27 오전 P 만(kp 0.5, 최소 듀티 없음, here)은 ±1,000–2,000 카운트를 왕복했다. 오후 최소 듀티 0.12·zero 는 손대지 않으면 +8 카운트에 섰다. 흔들면 매번 돌아오지만 5/11 번 크게 지나쳤다 — 감쇠 항(bench-3) 미시험.
+- **붙잡고 버티면 TSD:** 몇 초 붙잡으면 `DRIVER_FAULT_M`, 상태 바이트 0xE2(FAULT+TSD), 래치(`clear-faults`).
 - **MISO low 고착 위험:** bench-2/3 은 직전 각이 원시 0 근처(±512)이면 0x0000 프레임도 센다. 이때 MISO 가 low 로 붙으면 카운터가 가짜 이동(예: −256)을 읽고, hold 가 듀티 상한까지 밀 수 있다. 3 ms 손실 정지도 걸리지 않는다.
 - **KTH 점퍼 납땜 이탈:** 사용자가 납땜한 점퍼가 약해 떨어졌다. CRC 오류가 늘면 여기부터 본다.
 - **R/M/H 초기화 실패:** 핀헤더 접촉 불량. 1 절 절차로 회복.
