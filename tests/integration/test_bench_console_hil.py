@@ -682,3 +682,48 @@ def test_a_state_whose_pair_is_not_in_yet_never_clears(rig):
     assert run_until(lambda: b.clears, 6.0)
     out = b.clears[-1]
     assert out["result"] != "cleared" and out["after"] is None, out
+
+
+def test_the_clear_is_not_written_on_a_state_whose_pair_is_not_in(rig):
+    """The CLEAR's bytes go out only on the latest STATE's own pair: a newer STATE with its BENCH_STATE not in yet (a
+    new generation is possible) holds the frame, refusing nothing; its pair arriving frees it (Codex C round 9 P2-1)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    assert c.frame_allowed(frame)
+    newer = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000)
+    c.host._state, c.host._state_rx_ns = newer, int(c.clock())  # its pair not in
+    assert not c.frame_allowed(frame)
+    _inject_pair(c, newer, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+    assert not c.frame_allowed(frame)  # its pair names a new generation: the request no longer holds
+    _inject_pair(c, newer, bst)
+    assert c.frame_allowed(frame)
+    bench_console.shutdown(c, wait_s=0.0)  # the request closed with its record
+
+
+def test_an_echo_pair_followed_in_the_same_read_by_a_newer_state_is_kept(rig):
+    """CLEAR echo STATE + its BENCH_STATE + a newer STATE naming a later frame, in one read: the echo of the completed
+    pair is kept, and the clear goes on to its ready check (Codex C round 9 P2-2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    bst = c.host.bench_state
+    echo = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 500, mode=Mode.BOOT, last_rx_seq=c.clear.clear_seq,
+                               fault_flags=FaultFlag(0))
+    _inject_pair(c, echo, bst)
+    newer = dataclasses.replace(echo, mcu_time_us=echo.mcu_time_us + 500, last_rx_seq=(c.clear.clear_seq + 7) & 0xFFFF)
+    c.host._state, c.host._state_rx_ns = newer, int(c.clock())
+    assert run_until(lambda: c.clear is None or c.clear.phase == "ready", 2.0)
+    assert c.clear is not None and c.clear.phase == "ready"
+    ready = dataclasses.replace(newer, mcu_time_us=newer.mcu_time_us + 500, mode=Mode.DISARMED,
+                                flags=newer.flags | StateFlag.DRIVERS_READY)
+    _inject_pair(c, ready, bst)
+    assert run_until(lambda: b.clears, 2.0)
+    assert b.clears[-1]["result"] == "cleared", b.clears[-1]
