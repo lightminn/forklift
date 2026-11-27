@@ -26,6 +26,10 @@
   --bench 1: the bench image (bench console plan A1, mcu-link contract 8): an open commissioning model that takes
   BENCH_SET/BENCH_ARM (one run per arming) and sends a BENCH_STATE with every STATE; the board's product string ends
   " lim=lr1 bench6". The model has no connection changes (no link_conn).
+  --kth-start-raw M,H: the KTH raw angles (0..4095) of M and H at their joint zero (each axis's zero offset), so a
+  distance run can start on a non-zero frame (bench console plan 4.2 A1b-1b). --kth-zero-at-ms AXIS:MS (AXIS M or
+  H): from MS on, that axis's reported KTH frame is 0x0000 (a MISO stuck low) while the plant goes on moving; the
+  real position is in --axis-log.
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-frozen W: wheel W's counts never move (a wheel with no encoder
    fitted, design 2026-11-25-bench-commission-limits 4). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
@@ -81,6 +85,8 @@ typedef struct {
     bool resync_after_cut; /* a frame was cut mid-way at a STATE cut: the poison goes first when it ends */
     long short_write_at_ms; /* test injection (see --short-write-at-ms) */
     bool short_written;
+    int kth_zero_axis; /* --kth-zero-at-ms: 0 M, 1 H, -1 none */
+    long kth_zero_at_ms;
 } board;
 
 static board B;
@@ -140,6 +146,9 @@ static void hal_read(void *ctx, drive_inputs *in)
     }
     plant_inputs(&B.p, in);
     long t = elapsed_ms();
+    if (B.kth_zero_axis >= 0 && t >= B.kth_zero_at_ms) {
+        in->abs_frame[B.kth_zero_axis] = 0x0000u; /* stuck low: the plant moves on, the frame says 0 */
+    }
     in->estop_active = B.estop_at_ms >= 0 && t >= B.estop_at_ms &&
                        (B.estop_release_ms < 0 || t < B.estop_release_ms);
 }
@@ -481,6 +490,28 @@ int main(int argc, char **argv)
     cfg.bench_build = arg_long(argc, argv, "--bench", 0) != 0; /* the bench image (core refuses it off commissioning) */
     if (cfg.bench_build) {
         cfg.command_timeout_ms = 150; /* as the board (board_config.c): the echo bounds of SET/ARM match it */
+    }
+    const char *kth_start = arg_str(argc, argv, "--kth-start-raw");
+    if (kth_start) {
+        unsigned m_raw = 0, h_raw = 0;
+        if (sscanf(kth_start, "%u,%u", &m_raw, &h_raw) != 2 || m_raw > 4095u || h_raw > 4095u) {
+            fprintf(stderr, "--kth-start-raw M,H: two raw angles 0..4095\n");
+            return 2;
+        }
+        cfg.steer.zero_offset_rad = (float)((double)m_raw * TWO_PI / 4096.0);
+        cfg.lift.zero_offset_rad = (float)((double)h_raw * TWO_PI / 4096.0);
+    }
+    B.kth_zero_axis = -1;
+    const char *kth_zero = arg_str(argc, argv, "--kth-zero-at-ms");
+    if (kth_zero) {
+        char ax = 0;
+        long at = -1;
+        if (sscanf(kth_zero, "%c:%ld", &ax, &at) != 2 || (ax != 'M' && ax != 'H') || at < 0) {
+            fprintf(stderr, "--kth-zero-at-ms AXIS:MS: AXIS M or H, MS >= 0\n");
+            return 2;
+        }
+        B.kth_zero_axis = ax == 'M' ? 0 : 1;
+        B.kth_zero_at_ms = at;
     }
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
