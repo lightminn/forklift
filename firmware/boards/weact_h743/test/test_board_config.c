@@ -54,9 +54,23 @@ int main(void)
 #else
     CHECK(!c->commission_single_axis);
 #endif
+#if defined(FW_BENCH_IMAGE)
+    CHECK(c->bench_build); /* the bench image (bench console plan A1) */
+#else
+    CHECK(!c->bench_build);
+#endif
+    {
+        /* The core refuses the bench image on anything but an open commissioning build. */
+        drive_config bench = *c;
+        bench.bench_build = true;
+        bench.commission_single_axis = false;
+        CHECK(drive_config_valid(&bench) ==
+              (bench.commission_build && !bench.outputs_locked && !bench.hil_plant));
+    }
     /* The core refuses single-axis on anything but an open commissioning build. */
     drive_config sa = *c;
     sa.commission_single_axis = true;
+    sa.bench_build = false; /* fw-single and the bench image are two images */
     CHECK(drive_config_valid(&sa) == (sa.commission_build && !sa.outputs_locked && !sa.hil_plant));
     /* Every locked build reports outputs_locked (bit6), the IWDG stall test build included (lead
        condition 2026-11-12): the real executor then refuses teleop and autonomy. The output
@@ -100,6 +114,7 @@ int main(void)
     open.hil_plant = false;
     open.estop_waived = false;
     open.commission_single_axis = false; /* a normal build: single-axis is not for it */
+    open.bench_build = false;            /* nor the bench extension */
     CHECK(!board_config_valid(&open));
     open.estop_waived = true;
     CHECK(board_config_valid(&open));

@@ -59,6 +59,30 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_FAULT_ENCODER_JUMP(w) (1u << (22 + (w)))     /* v2 */
 #define DRIVE_FAULT_COMMISSION_TIME_LIMIT (1u << 24)       /* v2 */
 
+/* Bench extension (contract section 8, bench console plan A1): the checks a BENCH_SET may turn off for one
+   run. The stopping side (overcurrent, current sense, driver faults, STOP/DISARM, command expiry, IWDG,
+   cycle overrun) has no bit and never will. */
+#define DRIVE_BENCH_STEER_RANGE (1u << 0) /* M: the steering joint range (KTH validity stays) */
+#define DRIVE_BENCH_LIFT_RANGE (1u << 1)  /* H: the lift joint range (KTH validity stays) */
+#define DRIVE_BENCH_KNOWN (DRIVE_BENCH_STEER_RANGE | DRIVE_BENCH_LIFT_RANGE)
+#define DRIVE_BENCH_MODE_DUTY 1u
+#define DRIVE_BENCH_SOURCE_NONE 0u
+/* BENCH_STATE.drive bits 0-1. */
+#define DRIVE_BENCH_RUN_NONE 0u    /* no run consumed since boot */
+#define DRIVE_BENCH_RUN_PREP 1u    /* armed, no accepted non-zero COMMISSION yet */
+#define DRIVE_BENCH_RUN_DRIVING 2u /* from the first accepted non-zero COMMISSION */
+#define DRIVE_BENCH_RUN_ENDED 3u
+/* BENCH_STATE.stop_reason: the first cause that ended a run that drove. */
+#define DRIVE_BENCH_STOP_NONE 0u
+#define DRIVE_BENCH_STOP_END_ZERO 1u
+#define DRIVE_BENCH_STOP_COMMAND_TIMEOUT 2u
+#define DRIVE_BENCH_STOP_TIME_LIMIT 3u
+#define DRIVE_BENCH_STOP_DISARM 4u
+#define DRIVE_BENCH_STOP_FAULT 5u
+#define DRIVE_BENCH_STOP_ESTOP 6u
+#define DRIVE_BENCH_STOP_LINK_BOUNDARY 7u
+#define DRIVE_BENCH_SET_TTL_MS 1000u /* an unconsumed BENCH_SET expires */
+
 /* STATE.flags bits. */
 #define DRIVE_STATE_LIMITED 0x01u
 #define DRIVE_STATE_COMMAND_FRESH 0x02u
@@ -124,6 +148,12 @@ typedef struct {
        keep their bytes. */
 #if defined(FW_CORE_SINGLE_AXIS)
     bool commission_single_axis;
+#endif
+    /* Bench image (contract 8, plan A1): an open commissioning build that takes BENCH_SET/BENCH_ARM instead of
+       ARM, one run per arming. Compiled only with FW_CORE_BENCH (the bench image and the host tests), so the
+       other images keep their bytes. */
+#if defined(FW_CORE_BENCH)
+    bool bench_build;
 #endif
     float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */
     /* Encoder fault detection (plan 3.3); board values wait for S3/S4 measurements. */
@@ -198,6 +228,26 @@ typedef struct drive {
 #if defined(FW_CORE_SINGLE_AXIS)
     uint8_t sa_last_axis; /* single-axis build: the axis an arming last fixed (kept across DISARM) */
 #endif
+#if defined(FW_CORE_BENCH)
+    /* Bench image: the pending BENCH_SET (until a BENCH_ARM consumes it), the consumed run and its result. */
+    bool bset_valid;
+    link_bench_set bset;
+    uint64_t bset_at_us;
+    uint8_t bset_gen; /* the connection generation it arrived on */
+    bool run_active;  /* from the BENCH_ARM until the mode leaves ARMED/STOPPING */
+    uint32_t run_id, run_bypass;
+    uint8_t run_axis, run_mode, run_source, run_drive;
+    uint16_t run_duty_max_e4[DRIVE_CH_COUNT];
+    uint32_t run_time_ms[DRIVE_CH_COUNT];
+    uint32_t res_run_id; /* 0: no run has driven since boot */
+    uint8_t res_stop, res_axis, res_source;
+    uint16_t res_blocked; /* drive requests refused after the run ended (saturating) */
+    uint8_t conn_gen;     /* link connection changes seen (mod 256) */
+    uint64_t boundary_us; /* after every STATE sent before the last one: bench commands echo a later STATE */
+    uint32_t cm_on_limit_ms; /* the open output interval's time limit, fixed when it opened (a run's own) */
+    bool lc_pending, lc_settled; /* a link change noted for the next drive_begin */
+    uint32_t lc_since32;         /* HAL clock when it began */
+#endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
     bool first_cycle; /* no gap judgement before the first drive_begin */
@@ -245,5 +295,17 @@ void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint32_t tag);
 
 /* Fills everything but rx_errors and cycle_overruns (owned by the app). */
 void drive_fill_state(const drive *d, link_state *s);
+
+#if defined(FW_CORE_BENCH)
+/* A link connection change (bench image, contract 8.4), noted before drive_begin, which applies it with the
+   tick's own time: one that began (since_hal_us) while armed ends the arming through STOPPING unless the command
+   deadline or the output interval's time limit had passed before it began (then that is the first cause); once
+   settled, the pending BENCH_SET is dropped and bench commands must echo a STATE sent from this tick on. No
+   effect on other builds. */
+void drive_note_link_change(drive *d, uint32_t since_hal_us, bool settled);
+
+/* Fills everything but pair_seq and dropped_pairs (owned by the app). */
+void drive_fill_bench_state(const drive *d, link_bench_state *s);
+#endif
 
 #endif

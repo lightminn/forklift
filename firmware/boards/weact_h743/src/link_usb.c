@@ -20,6 +20,9 @@
 #include "board/link_cfg.h"
 #include "stm32h7xx.h"
 #include "tusb.h"
+#if defined(FW_BENCH_IMAGE)
+#include "device/dcd.h" /* dcd_int_disable/enable around the receive FIFO clear */
+#endif
 
 #define USB_IRQ_PRIORITY 3u
 
@@ -74,9 +77,38 @@ void link_init(void)
     g_link_stats.usb33rdy = (PWR->CR3 & PWR_CR3_USB33RDY) != 0u;
 }
 
+#if defined(FW_BENCH_IMAGE)
+static void conn_event_from_isr(void);
+static volatile bool g_otg_in_isr; /* the tick (priority 2) may preempt this interrupt (3) mid-way */
+static volatile uint32_t g_otg_isr_seq; /* bumped at every OTG interrupt entry: tells one held-up call from two */
+
+static uint32_t usb_dev_addr(void)
+{
+    const USB_OTG_DeviceTypeDef *dev = (const USB_OTG_DeviceTypeDef *)(USB2_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE);
+    return dev->DCFG & USB_OTG_DCFG_DAD_Msk;
+}
+#endif
+
 void OTG_FS_IRQHandler(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    /* A bus reset handled in this interrupt zeroes the device address (TinyUSB handle_bus_reset): an address that
+       was set before and is 0 after is a connection change, counted here whatever TinyUSB's event queue does
+       (Codex A1a rounds 5-6). While this runs, the tick reads no byte (link_read). */
+    g_otg_isr_seq++;
+    g_otg_in_isr = true;
+    if ((USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        conn_event_from_isr(); /* before TinyUSB clears it and waits on the FIFO flushes (round 8) */
+    }
+    uint32_t addr_before = usb_dev_addr();
     tud_int_handler(BOARD_TUD_RHPORT);
+    if (addr_before != 0u && usb_dev_addr() == 0u) {
+        conn_event_from_isr();
+    }
+    g_otg_in_isr = false;
+#else
+    tud_int_handler(BOARD_TUD_RHPORT);
+#endif
 }
 
 static bool sink_connected(void *ctx)
@@ -109,30 +141,201 @@ static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_
    the ring and marks the next opening for a resynchronising delimiter (link_tx_pump), so the
    only old bytes a reopened port sees are TinyUSB's FIFO plus one packet in the controller's TX
    FIFO, even when the poll never saw the port closed (Codex B3 review 3). */
-static void lifecycle(void)
+#if defined(FW_BENCH_IMAGE)
+/* Bench image (contract 8): the connection generation. The main loop bumps begin first, empties TinyUSB's
+   receive FIFO, then settles end; the control tick (TIM6, which preempts the main loop) reads nothing while
+   they differ and, once settled on a new value, drops what the receive ring still holds. The send FIFO is
+   left alone: a DWC2 IN transfer reads it in place (board design 5.1). */
+static volatile uint32_t g_conn_begin, g_conn_end;
+/* Each context counts changes in its own counter and stamps its own start time, single writer each (Codex A1a
+   rounds 2-8): the OTG interrupt (bus reset, unplug, suspend), the tick (a USBRST still pending, or the OTG
+   interrupt seen mid-way two ticks running) and the main loop's lifecycle (DTR, mount; it also settles the
+   others). The tick takes the earliest start of whatever is pending. */
+static volatile uint32_t g_conn_events, g_conn_handled, g_since_isr;
+static volatile uint32_t g_conn_tick_events, g_conn_tick_handled, g_since_tick;
+static volatile uint32_t g_since_main;    /* the earliest start of the change the lifecycle settles */
+static volatile uint32_t g_conn_observed; /* the generation the tick last saw settled */
+static bool g_last_dtr;
+
+static uint32_t earlier(uint32_t a, uint32_t b)
 {
+    return (int32_t)(a - b) < 0 ? a : b;
+}
+
+static void conn_event_from_isr(void)
+{
+    if (g_conn_events == g_conn_handled) {
+        g_since_isr = timebase_now_us();
+    }
+    g_conn_events++;
+}
+
+static void conn_event_from_tick(void)
+{
+    if (g_conn_tick_events == g_conn_tick_handled) {
+        g_since_tick = timebase_now_us();
+    }
+    g_conn_tick_events++;
+}
+
+void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
+{
+    (void)rhport;
+    if (in_isr && (eventid == DCD_EVENT_BUS_RESET || eventid == DCD_EVENT_UNPLUGGED ||
+                   eventid == DCD_EVENT_SUSPEND)) {
+        conn_event_from_isr();
+    }
+}
+
+/* Control tick only. */
+uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
+{
+    static uint8_t in_isr_ticks;
+    static uint32_t in_isr_seq;
+    if (g_link_stats.usb_started && (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        conn_event_from_tick();
+    }
+    /* An OTG interrupt is a few microseconds: one still mid-way at two ticks in a row is held up (e.g. in
+       TinyUSB's reset FIFO flushes); the arming ends rather than waiting for it (round 8). */
+    uint32_t seq = g_otg_isr_seq;
+    if (!g_otg_in_isr) {
+        in_isr_ticks = 0u;
+    } else if (in_isr_ticks == 0u || seq != in_isr_seq) {
+        in_isr_ticks = 1u; /* a new call (two short calls in a row are not one held-up call) */
+    } else if (in_isr_ticks < 255u) {
+        in_isr_ticks++;
+    }
+    in_isr_seq = seq;
+    if (in_isr_ticks == 2u) {
+        conn_event_from_tick();
+    }
+    bool isr_pending = g_conn_events != g_conn_handled;
+    bool tick_pending = g_conn_tick_events != g_conn_tick_handled;
+    uint32_t begin = g_conn_begin, end = g_conn_end;
+    bool main_pending = begin != end;
+    *busy = isr_pending || tick_pending || main_pending;
+    uint32_t since = g_since_main;
+    if (*busy) {
+        uint32_t now = timebase_now_us();
+        since = now;
+        if (isr_pending) {
+            since = earlier(since, g_since_isr);
+        }
+        if (tick_pending) {
+            since = earlier(since, g_since_tick);
+        }
+        if (main_pending || end != g_conn_observed) { /* incl. a settled change the tick has not seen yet */
+            since = earlier(since, g_since_main);
+        }
+    } else {
+        g_conn_observed = end;
+    }
+    *since_us = since;
+    return end;
+}
+#endif
+
+#if defined(FW_BENCH_IMAGE)
+static uint32_t g_lc_events, g_lc_tick_events; /* the snapshot lifecycle_begin took, settled by lifecycle_finish */
+
+/* With every interrupt off (the caller's mask): the event snapshot, the start stamp and the begin mark, so the
+   tick never runs between a change being decided and the mark it reads (Codex A1a rounds 4, 10). Short. */
+static void lifecycle_begin_masked(void)
+{
+    g_lc_tick_events = g_conn_tick_events;
+    g_lc_events = g_conn_events;
+    uint32_t start = timebase_now_us(); /* this change's start: the earliest of what it settles */
+    if (g_lc_tick_events != g_conn_tick_handled) {
+        start = earlier(start, g_since_tick);
+    }
+    if (g_lc_events != g_conn_handled) {
+        start = earlier(start, g_since_isr);
+    }
+    if (g_conn_end != g_conn_observed) { /* the last settled change not yet seen by the tick: keep its start */
+        start = earlier(start, g_since_main);
+    }
+    g_since_main = start;
+    g_conn_begin = g_conn_end + 1u;
+}
+#endif
+
+/* The rest, with the tick running again: the receive ring (whose consumer, the tick, reads nothing while
+   begin != end) and FIFO dropped, then the change settled. */
+static void lifecycle_finish(void)
+{
+#if defined(FW_BENCH_IMAGE)
+    (void)link_ring_drop_all(&g_rx);
+    dcd_int_disable(0); /* the receive FIFO, which the OTG interrupt writes in place, cleared on whole indices */
+    if (tud_mounted()) { /* unmounted (reset, unplug): the class reset closed the stream; re-arming it would fail */
+        tud_cdc_read_flush();
+    }
+    dcd_int_enable(0);
+#endif
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
     g_resync = true;
+#if defined(FW_BENCH_IMAGE)
+    g_conn_handled = g_lc_events;
+    g_conn_tick_handled = g_lc_tick_events;
+    g_conn_end = g_conn_begin;
+#endif
+}
+
+static void lifecycle(void)
+{
+#if defined(FW_BENCH_IMAGE)
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    lifecycle_begin_masked();
+    __set_PRIMASK(primask);
+#endif
+    lifecycle_finish();
 }
 
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void)itf;
     (void)rts;
+#if defined(FW_BENCH_IMAGE)
+    /* Only a change of DTR is a connection change: TinyUSB calls this for every SET_CONTROL_LINE_STATE, and an
+       RTS-only request or the same DTR again must not end a run (Codex A1a round 3). The check and lifecycle's
+       begin mark run with every interrupt off, so the tick never runs between a DTR change and the mark (round
+       10); lifecycle saves and restores PRIMASK, so it nests. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    bool changed = dtr != g_last_dtr;
+    if (changed) {
+        g_last_dtr = dtr;
+        lifecycle_begin_masked(); /* first: the mark, before the tick can run again */
+    }
+    __set_PRIMASK(primask);
+    if (changed) {
+        lifecycle_finish(); /* the FIFO work with the tick running (round 11) */
+        if (dtr) {
+            g_link_stats.reopened++;
+        }
+    }
+#else
     if (dtr) {
         g_link_stats.reopened++;
     }
     lifecycle();
+#endif
 }
 
 void tud_mount_cb(void)
 {
     lifecycle();
+#if defined(FW_BENCH_IMAGE)
+    g_last_dtr = false; /* a new configuration starts with DTR low (TinyUSB's class reset): its first open counts */
+#endif
 }
 
 void tud_umount_cb(void)
 {
-    lifecycle();
+    lifecycle(); /* the mark first (round 12) */
+#if defined(FW_BENCH_IMAGE)
+    g_last_dtr = false;
+#endif
 }
 
 void tud_suspend_cb(bool remote_wakeup_en)
@@ -152,8 +355,25 @@ void link_poll(void)
         return;
     }
     tud_task();
+#if defined(FW_BENCH_IMAGE)
+    /* A USB bus reset clears the device state without an unmount callback (TinyUSB usbd), so the bench
+       image also takes the loss of the configuration as a connection change (Codex A1a P1). */
+    static bool was_mounted;
+    bool mounted = tud_mounted();
+    if ((was_mounted && !mounted) || g_conn_events != g_conn_handled ||
+        g_conn_tick_events != g_conn_tick_handled) {
+        lifecycle();
+    }
+    was_mounted = mounted;
+#endif
     uint8_t buf[CFG_TUD_CDC_EP_BUFSIZE];
+#if defined(FW_BENCH_IMAGE)
+    /* Unconfigured: the class reset closed the stream but kept its FIFO, whose bytes belong to the connection that
+       just ended; they are never copied, and the next mount's stream open starts the FIFO afresh (round 12). */
+    for (; tud_mounted();) {
+#else
     for (;;) {
+#endif
         uint32_t n = link_ring_space(&g_rx);
         uint32_t avail = tud_cdc_available();
         if (n > avail) {
@@ -176,6 +396,13 @@ void link_poll(void)
 
 size_t link_read(uint8_t *buf, size_t cap)
 {
+#if defined(FW_BENCH_IMAGE)
+    /* Not one byte while the OTG interrupt is mid-way (a reset it handles is counted when it returns) or while a
+       USBRST waits for it; the USB registers only once the clock is on (RM0433). */
+    if (g_otg_in_isr || !g_link_stats.usb_started || (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        return 0;
+    }
+#endif
     return link_ring_get(&g_rx, buf, (uint32_t)cap);
 }
 

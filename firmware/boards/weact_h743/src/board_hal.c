@@ -64,6 +64,14 @@ static void hal_kick(void *ctx)
     iwdg_kick();
 }
 
+#if defined(FW_BENCH_IMAGE)
+static uint32_t hal_link_conn(void *ctx, bool *busy, uint32_t *since_us)
+{
+    (void)ctx;
+    return link_conn_gen(busy, since_us);
+}
+#endif
+
 static const fw_hal g_hal = {
     .ctx = 0,
     .now_us = hal_now,
@@ -74,6 +82,9 @@ static const fw_hal g_hal = {
     .drv_spi_start = hal_spi_start,
     .drv_spi_take = hal_spi_take,
     .watchdog_kick = hal_kick,
+#if defined(FW_BENCH_IMAGE)
+    .link_conn = hal_link_conn,
+#endif
 };
 
 const fw_hal *board_hal_init(const drive_config *cfg)

@@ -28,6 +28,12 @@ typedef struct {
        expiry it found just before handling it (-1: none) -- the MCU model's --accept-log (real HIL 6a). */
     void (*frame_handled)(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
                           const drive *after);
+#if defined(FW_CORE_BENCH)
+    /* Optional, bench image only (contract 8.4): the link's connection generation, settled when a change is
+       done; *busy while one is in progress (the tick then reads no byte); *since_us the HAL clock when the
+       latest one began. NULL: no connection changes. */
+    uint32_t (*link_conn)(void *ctx, bool *busy, uint32_t *since_us);
+#endif
 } fw_hal;
 
 typedef struct {
@@ -39,6 +45,10 @@ typedef struct {
     uint32_t last_tick_us;
     uint16_t cycle_overruns; /* saturating */
     uint32_t state_drops;    /* STATE frames the link could not take */
+#if defined(FW_CORE_BENCH)
+    uint32_t conn_seen;     /* the link_conn generation last handled */
+    uint16_t bench_dropped; /* STATE/BENCH_STATE pairs the link could not take (saturating) */
+#endif
 } fw_app;
 
 /* false for an invalid drive config, boot_id 0, state_period_ms 0 or an unknown reset_cause.

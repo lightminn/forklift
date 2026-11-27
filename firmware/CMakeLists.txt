@@ -22,6 +22,15 @@ target_link_libraries(fw_core PUBLIC m)
 # The host core carries single-axis commissioning (fw-single) for its tests and the MCU model; the
 # board compiles it in only for FW_SINGLE_AXIS (partial-parts plan 2026-11-25 PR-B).
 target_compile_definitions(fw_core PUBLIC FW_CORE_SINGLE_AXIS=1)
+# It also carries the bench extension (bench console plan A1, contract 8) for its tests and the MCU model; the
+# board compiles it in only for FW_BENCH, so every other image keeps the bench types unknown.
+target_compile_definitions(fw_core PUBLIC FW_CORE_BENCH=1)
+# The same core without the bench extension, as every non-bench image compiles it: its test shows the bench
+# types are unknown there (plan A1: a non-bench image never decodes 0x06/0x08).
+add_library(fw_core_nobench STATIC ${FW_CORE_SOURCES})
+target_include_directories(fw_core_nobench PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+target_link_libraries(fw_core_nobench PUBLIC m)
+target_compile_definitions(fw_core_nobench PUBLIC FW_CORE_SINGLE_AXIS=1)
 
 # The vehicle model shared by the host model endpoint and the MCU's HIL build (board design 9).
 add_library(fw_plant STATIC ${CMAKE_CURRENT_SOURCE_DIR}/plant/plant.c)
@@ -37,6 +46,11 @@ foreach(test_source ${FW_TESTS})
     target_link_libraries(${test_name} PRIVATE fw_core)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+add_executable(test_link_nobench ${CMAKE_CURRENT_SOURCE_DIR}/core/test/variants/test_link_nobench.c)
+target_include_directories(test_link_nobench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
+target_link_libraries(test_link_nobench PRIVATE fw_core_nobench)
+add_test(NAME test_link_nobench COMMAND test_link_nobench)
 
 # Board logic that does not touch registers (reset cause, clock constants), host-tested.
 add_executable(test_weact_h743_reset_cause
@@ -92,7 +106,7 @@ if(FW_PYTHON)
     add_test(NAME test_weact_h743_motor_out_e2e COMMAND test_weact_h743_motor_out_e2e)
 
     # One configuration test per build kind (board design 2.2, 9).
-    foreach(kind normal commission hil iwdg_stall commission_open normal_waived commission_single)
+    foreach(kind normal commission hil iwdg_stall commission_open normal_waived commission_single commission_bench)
         set(t test_weact_h743_board_config_${kind})
         add_executable(${t}
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
@@ -104,6 +118,9 @@ if(FW_PYTHON)
             target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_TEST_IWDG_STALL_S=5)
         elseif(kind STREQUAL "commission_open") # behind the gate (motor output design 2)
             target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1)
+        elseif(kind STREQUAL "commission_bench") # the bench image (bench console plan A1)
+            target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1
+                                                    FW_BENCH_IMAGE=1)
         elseif(kind STREQUAL "commission_single") # fw-single (partial-parts plan 2026-11-25)
             target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1
                                                     FW_COMMISSION_SINGLE=1)

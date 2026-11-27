@@ -1982,6 +1982,567 @@ static void s25_each_axis_reads_its_own_time_limit(void)
     }
 }
 
+/* ---- bench image (contract 8, bench console plan A1a) --------------------------------- */
+static void mod_bench(drive_config *c)
+{
+    mod_commission(c);
+    c->bench_build = true;
+}
+
+static link_bench_set bench_defaults(uint32_t run_id, uint8_t axis)
+{
+    link_bench_set b = {.boot_id = d.boot_id,
+                        .echo_mcu_time_us = echo_now(),
+                        .run_id = run_id,
+                        .mode = DRIVE_BENCH_MODE_DUTY,
+                        .axis = axis,
+                        .source = DRIVE_BENCH_SOURCE_NONE,
+                        .count_sign = 1,
+                        .bypass = 0,
+                        .stop_counts = 0};
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        b.duty_max_e4[ch] = 1500;
+        b.time_ms[ch] = 2000;
+    }
+    return b;
+}
+
+static link_msg bench_set_msg(uint16_t seq, link_bench_set b)
+{
+    link_msg m = {.type = LINK_BENCH_SET, .seq = seq};
+    m.u.bench_set = b;
+    return m;
+}
+
+static link_msg bench_arm_msg(uint16_t seq, uint32_t run_id, uint64_t echo)
+{
+    link_msg m = {.type = LINK_BENCH_ARM, .seq = seq};
+    m.u.bench_arm = (link_bench_arm){.boot_id = d.boot_id, .echo_mcu_time_us = echo, .run_id = run_id};
+    return m;
+}
+
+static link_bench_state bench_state_now(void)
+{
+    link_bench_state s;
+    drive_fill_bench_state(&d, &s);
+    return s;
+}
+
+/* A connection change that began now and settled, applied by the next tick (as app.c does). */
+static void link_change(void)
+{
+    drive_note_link_change(&d, in.now_us, true);
+    tick();
+}
+
+/* SET + BENCH_ARM for one run on axis; true when armed. */
+static bool bench_arm_run(uint32_t run_id, uint8_t axis, uint32_t bypass)
+{
+    link_bench_set b = bench_defaults(run_id, axis);
+    b.bypass = bypass;
+    send(bench_set_msg(10, b));
+    if (d.reject_reason != DRIVE_REJECT_NONE) {
+        return false;
+    }
+    send(bench_arm_msg(11, run_id, echo_now()));
+    return d.mode == DRIVE_MODE_ARMED;
+}
+
+static void bench_config_validation(void)
+{
+    drive_config c = make_config();
+    mod_bench(&c);
+    CHECK(drive_config_valid(&c));
+    c.commission_build = false; /* a bench image is a commissioning build */
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    mod_bench(&c);
+    c.commission_single_axis = true; /* and never fw-single */
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    mod_bench(&c);
+    c.outputs_locked = true;
+    CHECK(!drive_config_valid(&c));
+}
+
+static void bench_set_refusals(void)
+{
+    boot_with(mod_commission); /* a commissioning build that is not the bench image */
+    send(bench_set_msg(10, bench_defaults(1, DRIVE_CH_M)));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    send(bench_arm_msg(11, 1, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+
+    boot_with(mod_bench);
+    link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+    b.boot_id = d.boot_id + 1u;
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BOOT_MISMATCH);
+    b = bench_defaults(1, DRIVE_CH_M);
+    b.echo_mcu_time_us = d.time_us + 5000u; /* from the future */
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
+    b = bench_defaults(1, DRIVE_CH_M);
+    ticks(300); /* older than command_timeout_ms (200) */
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
+
+    struct {
+        int field;
+    } bad[11];
+    for (int i = 0; i < 11; i++) {
+        bad[i].field = i;
+    }
+    for (int i = 0; i < 11; i++) {
+        b = bench_defaults(1, DRIVE_CH_M);
+        switch (bad[i].field) {
+        case 0: b.run_id = 0; break;
+        case 1: b.mode = 2; break; /* hold: A1b */
+        case 2: b.axis = 4; break;
+        case 3: b.source = 1; break; /* kth: A1b */
+        case 4: b.count_sign = 0; break;
+        case 5: b.bypass = 1u << 4; break;
+        case 6: b.stop_counts = 5; break; /* distance stop: A1b */
+        case 7: b.duty_max_e4[2] = 0; break;
+        case 8: b.duty_max_e4[2] = 10001; break;
+        case 9: b.time_ms[1] = 0; break;
+        default: b.time_ms[3] = 0x7FFFFFFFu / 1000u + 1u; break;
+        }
+        send(bench_set_msg(10, b));
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+        CHECK(!d.bset_valid);
+    }
+    CHECK(bench_arm_run(7, DRIVE_CH_M, 0));
+    send(bench_set_msg(12, bench_defaults(8, DRIVE_CH_M))); /* armed: no SET */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_DISARMED);
+}
+
+static void bench_arm_needs_its_set(void)
+{
+    boot_with(mod_bench);
+    send(arm_msg(1, d.boot_id, echo_now())); /* the bench image never takes a plain ARM */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(bench_arm_msg(2, 1, echo_now())); /* no SET */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(bench_set_msg(3, bench_defaults(5, DRIVE_CH_M)));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(bench_arm_msg(4, 6, echo_now())); /* another run's id */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    ticks((int)DRIVE_BENCH_SET_TTL_MS + 1); /* expired */
+    send(bench_arm_msg(5, 5, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+
+    send(bench_set_msg(6, bench_defaults(9, DRIVE_CH_M)));
+    link_change(); /* a SET from the last connection cannot be consumed */
+    send(bench_arm_msg(7, 9, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+
+    CHECK(bench_arm_run(10, DRIVE_CH_M, 0));
+    send(simple(LINK_DISARM, 12));
+    send(bench_arm_msg(13, 10, echo_now())); /* consumed once */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(bench_set_msg(14, bench_defaults(11, DRIVE_CH_M)));
+    send(simple(LINK_DISARM, 15)); /* a DISARM drops an unconsumed SET */
+    send(bench_arm_msg(16, 11, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+static void bench_duty_run_ends_itself(void)
+{
+    boot_with(mod_bench);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.drive & 3u, DRIVE_BENCH_RUN_NONE);
+    CHECK(bench_arm_run(42, DRIVE_CH_M, 0));
+    s = bench_state_now();
+    CHECK_EQ_U(s.run_id, 42);
+    CHECK_EQ_U(s.drive, DRIVE_BENCH_RUN_PREP | (DRIVE_BENCH_MODE_DUTY << 4));
+    CHECK_EQ_U(s.result_run_id, 0);
+    send(commission_msg(20, DRIVE_CH_L, 0, 150, echo_now())); /* the arming's L(0): preparation */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(commission_msg(21, DRIVE_CH_L, 500, 150, echo_now())); /* not the run's axis */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(bench_state_now().drive & 3u, DRIVE_BENCH_RUN_PREP);
+    send(commission_msg(23, DRIVE_CH_M, 1000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(bench_state_now().drive & 3u, DRIVE_BENCH_RUN_DRIVING);
+    tick();
+    CHECK(out.duty[DRIVE_CH_M] > 0.05f);
+    send(commission_msg(24, DRIVE_CH_M, 0, 150, echo_now())); /* the end */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(d.last_rx_seq, 24);
+    s = bench_state_now();
+    CHECK_EQ_U(s.drive & 3u, DRIVE_BENCH_RUN_ENDED);
+    CHECK_EQ_U(s.result_run_id, 42);
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+    CHECK_EQ_U(s.result_axis, DRIVE_CH_M);
+    CHECK((d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT) == 0);
+    send(commission_msg(25, DRIVE_CH_M, 0, 150, echo_now())); /* refused and counted */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    send(commission_msg(26, DRIVE_CH_M, 900, 150, echo_now()));
+    CHECK_EQ_U(bench_state_now().blocked, 2);
+    ticks(150); /* past stop_grace_ms: DISARMED by itself, no COMMAND_TIMEOUT */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK((d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT) == 0);
+    CHECK(!d.run_active);
+    s = bench_state_now();
+    CHECK_EQ_U(s.result_run_id, 42); /* kept for the host */
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+    send(commission_msg(27, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_ARMED);
+    CHECK_EQ_U(bench_state_now().blocked, 3);
+    CHECK(bench_arm_run(43, DRIVE_CH_M, 0)); /* the next run consumed: the last result is gone */
+    s = bench_state_now();
+    CHECK_EQ_U(s.result_run_id, 0);
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_NONE);
+    CHECK_EQ_U(s.blocked, 0);
+}
+
+/* Each first cause of a run that drove, and the first one kept. */
+static void bench_run_end_causes(void)
+{
+    /* the command expiry */
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 50, echo_now()));
+    ticks(60);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_COMMAND_TIMEOUT);
+    ticks(150);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_COMMAND_TIMEOUT); /* first cause kept */
+
+    /* the run's own time limit (shorter than the build's) */
+    boot_with(mod_bench);
+    link_bench_set b = bench_defaults(2, DRIVE_CH_M);
+    b.time_ms[DRIVE_CH_M] = 30;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 2, echo_now()));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    for (int i = 0; i < 50 && d.mode == DRIVE_MODE_ARMED; i++) {
+        send(commission_msg((uint16_t)(21 + i), DRIVE_CH_M, 800, 150, echo_now()));
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
+
+    /* a host DISARM while driving */
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(3, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(simple(LINK_DISARM, 22));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_DISARM);
+
+    /* a driver fault before any result: FAULT keeps its outputs and latch, the result says fault */
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(4, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    in.nfault_low[DRIVE_CH_H] = true;
+    tick();
+    in.nfault_low[DRIVE_CH_H] = false; /* one cycle only */
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK(all_drvoff());
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.result_run_id, 4);
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_FAULT);
+    send(bench_set_msg(12, bench_defaults(5, DRIVE_CH_M))); /* no new run before an explicit clear */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_DISARMED);
+    send(bench_arm_msg(13, 5, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_LATCHED);
+
+    /* a run that ends before it drove leaves no result */
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(6, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_L, 0, 150, echo_now()));
+    send(simple(LINK_DISARM, 21));
+    s = bench_state_now();
+    CHECK_EQ_U(s.result_run_id, 0);
+    CHECK_EQ_U(s.drive & 3u, DRIVE_BENCH_RUN_ENDED);
+}
+
+static void bench_range_bypass_is_the_runs(void)
+{
+    boot_with(mod_bench);
+    set_steer(0.7); /* outside the steering joint range (+-0.5) */
+    ticks(5);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    send(simple(LINK_DISARM, 21));
+
+    CHECK(bench_arm_run(2, DRIVE_CH_M, DRIVE_BENCH_STEER_RANGE));
+    CHECK_EQ_U(bench_state_now().mcu_bypass, DRIVE_BENCH_STEER_RANGE);
+    CHECK((d.fault_flags & (1u << 31)) == 0); /* v3 reserved bits stay 0 (plan A1) */
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    for (int i = 0; i < 20; i++) {
+        send(commission_msg((uint16_t)(21 + i), DRIVE_CH_M, 800, 150, echo_now()));
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED); /* no out-of-range fault while bypassed */
+    in.abs_fresh[0] = false; /* KTH validity is not bypassed */
+    for (int i = 0; i < 6 && d.mode == DRIVE_MODE_ARMED; i++) {
+        send(commission_msg((uint16_t)(41 + i), DRIVE_CH_M, 800, 150, echo_now()));
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    in.abs_fresh[0] = true;
+    ticks(5);
+    send(simple(LINK_CLEAR_FAULTS, 50));
+    for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(bench_state_now().mcu_bypass, 0);
+
+    CHECK(bench_arm_run(3, DRIVE_CH_M, 0)); /* the bypass was run 2's only */
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+}
+
+static void bench_link_boundary(void)
+{
+    boot_with(mod_bench);
+    CHECK_EQ_U(bench_state_now().conn_gen, 0);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    uint64_t old_echo = echo_now(); /* the last STATE of the old connection */
+    tick();
+    link_change(); /* an arming never outlives its connection */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.conn_gen, 1);
+    CHECK_EQ_U(s.result_run_id, 1);
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_LINK_BOUNDARY);
+    send(commission_msg(22, DRIVE_CH_M, 800, 150, old_echo)); /* a late frame of the old host */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    link_bench_set b = bench_defaults(2, DRIVE_CH_M);
+    b.echo_mcu_time_us = old_echo; /* echoes a STATE from before the change */
+    send(bench_set_msg(23, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
+    send(bench_set_msg(24, bench_defaults(2, DRIVE_CH_M)));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(bench_arm_msg(25, 2, old_echo));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
+    send(bench_arm_msg(26, 2, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+
+    /* a boundary while preparing: the arming ends, no result */
+    send(simple(LINK_DISARM, 27));
+    CHECK(bench_arm_run(3, DRIVE_CH_M, 0));
+    link_change();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().result_run_id, 0);
+
+    /* other builds ignore it */
+    boot_with(mod_commission);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    link_change();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+}
+
+
+/* Codex A1a round 1: the bench image never cuts a STOPPING brake short with a DISARM. */
+static void bench_disarm_keeps_the_brake(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now())); /* the end: STOPPING */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    send(simple(LINK_DISARM, 23));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING); /* the brake goes on */
+    CHECK_EQ_U(d.last_rx_seq, 23);
+    CHECK(!out.drvoff[DRIVE_CH_M]);
+    ticks(50);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    ticks(60);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+
+    CHECK(bench_arm_run(2, DRIVE_CH_M, 0)); /* a connection change's STOPPING, then a late DISARM */
+    send(commission_msg(30, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(31, DRIVE_CH_M, 800, 150, echo_now()));
+    tick();
+    link_change();
+    send(simple(LINK_DISARM, 32));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+}
+
+/* Codex A1a round 1: an output interval keeps the run's limit after the run ends. */
+static void bench_run_limit_outlives_the_run(void)
+{
+    for (int via_fault = 0; via_fault < 2; via_fault++) {
+        boot_with(mod_bench); /* the build's M limit is 2000 ms */
+        link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+        b.time_ms[DRIVE_CH_M] = 30000;
+        send(bench_set_msg(10, b));
+        send(bench_arm_msg(11, 1, echo_now()));
+        send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+        for (int i = 0; i < 2500; i++) { /* 2.5 s of output: past the build's limit, inside the run's */
+            send(commission_msg((uint16_t)(21 + i), DRIVE_CH_M, 800, 150, echo_now()));
+        }
+        CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+        if (via_fault) {
+            in.nfault_low[DRIVE_CH_R] = true;
+            tick();
+            in.nfault_low[DRIVE_CH_R] = false;
+            CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+        } else {
+            send(simple(LINK_DISARM, 9000));
+            CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+        }
+        ticks(3);
+        CHECK((d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT) == 0);
+        CHECK_EQ_U(bench_state_now().stop_reason, via_fault ? DRIVE_BENCH_STOP_FAULT : DRIVE_BENCH_STOP_DISARM);
+        if (!via_fault) {
+            CHECK(bench_arm_run(2, DRIVE_CH_M, 0)); /* no re-arm hold either */
+        }
+    }
+}
+
+/* Codex A1a round 1: an unconsumed SET does not outlive an e-stop and its clear. */
+static void bench_set_does_not_outlive_an_estop(void)
+{
+    boot_with(mod_bench);
+    send(bench_set_msg(10, bench_defaults(3, DRIVE_CH_M)));
+    CHECK(d.bset_valid);
+    in.estop_active = true;
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ESTOP);
+    in.estop_active = false;
+    tick();
+    send(simple(LINK_CLEAR_FAULTS, 11));
+    for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(bench_arm_msg(12, 3, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+/* Codex A1a round 1: blocked counts only what the end refused (stopping, not armed). */
+static void bench_blocked_counts_the_end_only(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(23, DRIVE_CH_L, 500, 150, echo_now())); /* another axis: bad_value */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    link_msg m = commission_msg(24, DRIVE_CH_M, 0, 150, echo_now());
+    m.u.commission.boot_id = d.boot_id + 1u; /* another boot */
+    send(m);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BOOT_MISMATCH);
+    CHECK_EQ_U(bench_state_now().blocked, 0);
+    send(commission_msg(25, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
+
+/* Codex A1a round 2: the brake a connection change starts lasts the full stop_grace_ms of the tick's own time. */
+static void bench_change_brake_is_full_length(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    drive_note_link_change(&d, in.now_us, true);
+    in.now_us += 15000; /* a long gap before the tick that applies it */
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    uint64_t start = d.time_us;
+    while (d.mode == DRIVE_MODE_STOPPING) {
+        tick();
+    }
+    CHECK(d.time_us - start >= 100000u); /* stop_grace_ms 100 from the applying tick */
+}
+
+/* Codex A1a round 2: the first cause between a change and the command expiry follows their real order. */
+static void bench_change_versus_expiry_order(void)
+{
+    for (int change_first = 0; change_first < 2; change_first++) {
+        boot_with(mod_bench);
+        CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+        send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+        send(commission_msg(21, DRIVE_CH_M, 800, 40, echo_now())); /* deadline 40 ms after its echo */
+        ticks(30);
+        uint32_t t_change = change_first ? in.now_us + 5000u : in.now_us + 15000u; /* before / after the deadline */
+        in.now_us += 19000; /* one tick past the deadline, under the encoder gap limit */
+        drive_note_link_change(&d, t_change, true);
+        tick_msgs(NULL, 0);
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        CHECK_EQ_U(bench_state_now().stop_reason,
+                   change_first ? DRIVE_BENCH_STOP_LINK_BOUNDARY : DRIVE_BENCH_STOP_COMMAND_TIMEOUT);
+        CHECK(((d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT) != 0) == !change_first);
+    }
+}
+
+/* Codex A1a round 3: an output time limit passed before the change began is the first cause. */
+static void bench_change_versus_time_limit(void)
+{
+    boot_with(mod_bench);
+    link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+    b.time_ms[DRIVE_CH_M] = 30;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 1, echo_now()));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    ticks(25); /* the interval opened ~25 ms ago; its limit is 30 ms */
+    uint32_t t_change = in.now_us + 12000u; /* after the limit (5 ms from now), before the command deadline */
+    in.now_us += 15000;
+    drive_note_link_change(&d, t_change, true);
+    tick_msgs(NULL, 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
+}
+
+/* Codex A1a round 4: limit -> change -> deadline, all before the applying tick: the limit is still the first cause. */
+static void bench_limit_change_deadline_order(void)
+{
+    boot_with(mod_bench);
+    link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+    b.time_ms[DRIVE_CH_M] = 30;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 1, echo_now()));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 40, echo_now())); /* deadline <= 40 ms */
+    ticks(25);
+    uint32_t t_change = in.now_us + 8000u; /* after the limit (~5 ms from now), before the deadline (~15 ms) */
+    in.now_us += 19000; /* the applying tick is past both */
+    drive_note_link_change(&d, t_change, true);
+    tick_msgs(NULL, 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
+}
+
+/* Codex A1a round 2: another axis's request is not counted as blocked in DISARMED either. */
+static void bench_blocked_other_axis_after_disarm(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now()));
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(commission_msg(23, DRIVE_CH_L, 500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_ARMED);
+    CHECK_EQ_U(bench_state_now().blocked, 0);
+    send(commission_msg(24, DRIVE_CH_M, 500, 150, echo_now()));
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2037,5 +2598,21 @@ int main(void)
     s25_disarm_alone_keeps_the_interval_axis();
     s25_axis_change_inside_an_interval();
     s25_each_axis_reads_its_own_time_limit();
+    bench_config_validation();
+    bench_set_refusals();
+    bench_arm_needs_its_set();
+    bench_duty_run_ends_itself();
+    bench_run_end_causes();
+    bench_range_bypass_is_the_runs();
+    bench_link_boundary();
+    bench_disarm_keeps_the_brake();
+    bench_run_limit_outlives_the_run();
+    bench_set_does_not_outlive_an_estop();
+    bench_blocked_counts_the_end_only();
+    bench_change_brake_is_full_length();
+    bench_change_versus_expiry_order();
+    bench_change_versus_time_limit();
+    bench_limit_change_deadline_order();
+    bench_blocked_other_axis_after_disarm();
     return FW_TEST_RESULT();
 }
