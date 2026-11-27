@@ -44,6 +44,7 @@ def test_bench_requests_on_the_real_loop_write_nothing(operating, with_token):
         sent_ids.append(msg["request_id"])
     r.tick(10)
     after = frames(r, n1)
+    assert baseline == []  # the idle loop writes nothing in this window: the claim is "nothing at all"
     assert after == baseline, (after, baseline)  # no frame caused by them, a DISARM included
     answered = [m for m in r.console_out if m.get("request_id") in sent_ids]
     assert answered == []  # not reliable requests here: never answered, nothing run

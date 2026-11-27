@@ -1187,13 +1187,25 @@ class ModelDevice:
         os.set_blocking(self.master, False)
         self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
                                       "--bench", "1"])
-        self.link = BenchTtyLink(self.master, gate=gate)
+        try:
+            self.link = BenchTtyLink(self.master, gate=gate)
+        except BaseException:
+            self.close()  # the child never outlives a failed construction (round 3 P3-1)
+            raise
         self.opened = False
+        self.dead = False
 
     def receive(self, host, now):
         from forklift_core.plant.mcu_host import HostEvent
 
         events = []
+        if self.dead:
+            return events + host.tick(now)
+        if self.proc.poll() is not None:
+            # the model ended: a lost device, as a board unplugged (round 3 P2-5) -- the console stops being ready
+            self.dead = True
+            events.append(HostEvent("disconnected", {"path": "model", "exit": self.proc.returncode}))
+            return events + host.disconnected(now)
         if not self.opened:
             self.opened = True
             events.append(HostEvent("connected", {"path": "model", "product": MODEL_PRODUCT}))
@@ -1205,7 +1217,8 @@ class ModelDevice:
         return events
 
     def transmit(self, host, now):
-        self.link.pump_writes(host, now)
+        if not self.dead:
+            self.link.pump_writes(host, now)
         return []
 
     def close(self) -> None:
@@ -1254,8 +1267,10 @@ def main(argv=None) -> int:
 
     import signal
 
-    def _terminate(signum, frame):  # noqa: ARG001 -- SIGTERM ends the loop the way Ctrl-C does: the finally runs
-        raise KeyboardInterrupt
+    stop_asked = {"v": False}
+
+    def _terminate(signum, frame):  # noqa: ARG001 -- only asks: the loop ends at a cycle's boundary (round 3 P1),
+        stop_asked["v"] = True  # never in the middle of a frame's bookkeeping, and the stop cleanup then runs
 
     signal.signal(signal.SIGTERM, _terminate)
     holder = {}
@@ -1268,7 +1283,7 @@ def main(argv=None) -> int:
             console = BenchConsole(dev, runs_root=Path(args.runs_root))
             holder["c"] = console
             end_wait = time.monotonic() + 3.0
-            while console.host.state is None and time.monotonic() < end_wait:
+            while console.host.state is None and time.monotonic() < end_wait and not stop_asked["v"]:
                 console.cycle()
                 time.sleep(CYCLE_S)
             if console.host.state is None:
@@ -1302,7 +1317,7 @@ def main(argv=None) -> int:
                           "console_lan": bool(args.console_lan)}), flush=True)
         end = None if args.duration_s is None else time.monotonic() + args.duration_s
         try:
-            while end is None or time.monotonic() < end:
+            while (end is None or time.monotonic() < end) and not stop_asked["v"]:
                 console.cycle()
                 time.sleep(CYCLE_S)
         except KeyboardInterrupt:
