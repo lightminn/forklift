@@ -324,18 +324,18 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 
 void tud_mount_cb(void)
 {
+    lifecycle();
 #if defined(FW_BENCH_IMAGE)
     g_last_dtr = false; /* a new configuration starts with DTR low (TinyUSB's class reset): its first open counts */
 #endif
-    lifecycle();
 }
 
 void tud_umount_cb(void)
 {
+    lifecycle(); /* the mark first (round 12) */
 #if defined(FW_BENCH_IMAGE)
     g_last_dtr = false;
 #endif
-    lifecycle();
 }
 
 void tud_suspend_cb(bool remote_wakeup_en)
@@ -367,7 +367,13 @@ void link_poll(void)
     was_mounted = mounted;
 #endif
     uint8_t buf[CFG_TUD_CDC_EP_BUFSIZE];
+#if defined(FW_BENCH_IMAGE)
+    /* Unconfigured: the class reset closed the stream but kept its FIFO, whose bytes belong to the connection that
+       just ended; they are never copied, and the next mount's stream open starts the FIFO afresh (round 12). */
+    for (; tud_mounted();) {
+#else
     for (;;) {
+#endif
         uint32_t n = link_ring_space(&g_rx);
         uint32_t avail = tud_cdc_available();
         if (n > avail) {
