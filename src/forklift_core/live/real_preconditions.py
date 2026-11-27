@@ -175,6 +175,12 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     on an unreadable settings file (``GATHER_ERRORS``): the caller turns it into a reason."""
 
     record, record_error = load_record(record_path)
+    # the vehicle file a link points at, fixed once before it is read: its bytes and the chassis beside it come from
+    # the same directory (Codex U3e-2 round 5 P2)
+    try:
+        vehicle_path = Path(vehicle_path).resolve()
+    except (OSError, RuntimeError):
+        pass
     paths = {"s10a": s10a_path, "settings": settings_path, "vehicle": vehicle_path, "watch": watch_path,
              "layer": layer_path, "budget": budget_path, "lidar": lidar_path, "imu": imu_path}
     parsed, hashes = {}, {}
@@ -190,6 +196,7 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     from forklift_core.plant.real_vehicle import chassis_path_from
 
     s10a = s10a_from_mapping(parsed["s10a"])
+    hashes["chassis_params"] = None  # filled only from the bytes parsed (round 5 P3); unread: a missing fact
     try:  # one chassis path, from the vehicle bytes hashed, for its parameters and its URDF (Codex U3e-2 r4 P2-1)
         params = chassis_path_from(vehicle_path, parsed["vehicle"])
     except (ValueError, TypeError):
@@ -210,7 +217,6 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
         from forklift_core.live.real_run import mission_geometry
 
         urdf = params.parent / "forklift.urdf"
-        hashes.setdefault("chassis_params", _sha_or_none(params))
         hashes["chassis_urdf"] = None  # unread: a missing fact, never compared away
         urdf_raw = urdf.read_bytes()  # hashed and parsed once (U3e-2 Codex round 3)
         hashes["chassis_urdf"] = hashlib.sha256(urdf_raw).hexdigest()

@@ -629,3 +629,30 @@ def test_the_judgement_builds_s10a_vehicle_and_lidar_from_the_bytes_it_hashed(si
     monkeypatch.setattr(lc_, "load_lidar_config", reread)
     monkeypatch.setattr(rv_, "chassis_model_path", reread)  # round 4 P2-1: the chassis path from the bytes too
     assert rp.operating_preconditions(site.facts()) == []
+
+
+def test_the_judgement_reads_the_vehicle_and_its_chassis_files_once_each(site, monkeypatch):
+    """U3e-2 (Codex round 5): vehicle.yaml, the chassis parameters and the URDF are each read once -- hashed and
+    parsed from that read."""
+    from pathlib import Path as P
+
+    counts: dict = {}
+    real_bytes, real_text = P.read_bytes, P.read_text
+
+    def note(self):
+        name = P(self).name
+        if name in ("vehicle.yaml", "parameters.yaml", "forklift.urdf"):
+            counts[name] = counts.get(name, 0) + 1
+
+    def read_bytes(self):
+        note(self)
+        return real_bytes(self)
+
+    def read_text(self, *a, **k):
+        note(self)
+        return real_text(self, *a, **k)
+
+    monkeypatch.setattr(P, "read_bytes", read_bytes)
+    monkeypatch.setattr(P, "read_text", read_text)
+    site.facts()
+    assert counts == {"vehicle.yaml": 1, "parameters.yaml": 1, "forklift.urdf": 1}, counts

@@ -425,14 +425,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         except (ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as err:
             raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
         data = read_settings(paths.settings, raw=bound(paths.settings, "settings"))
-        vehicle_raw = bound(paths.vehicle, "vehicle")
+        try:  # the file a link points at, fixed once before it is read (Codex U3e-2 round 5 P2)
+            vehicle_real = Path(paths.vehicle).resolve()
+        except (OSError, RuntimeError) as err:
+            raise AssemblyRefused([f"config_unreadable:vehicle:{type(err).__name__}"]) from err
+        vehicle_raw = bound(vehicle_real, "vehicle")
         try:  # the chassis model the bytes just read name (relative to the file it really is, Codex U3e-2 r4 P2-2)
             from forklift_core.plant.real_vehicle import chassis_path_from
 
-            chassis_p = chassis_path_from(paths.vehicle, yaml.safe_load(vehicle_raw.decode("utf-8")))
+            chassis_p = chassis_path_from(vehicle_real, yaml.safe_load(vehicle_raw.decode("utf-8")))
         except (ValueError, KeyError, TypeError, yaml.YAMLError) as err:
             raise AssemblyRefused([f"vehicle_unreadable:{type(err).__name__}:{err}"]) from err
-        vehicle, kin = read_vehicle(paths.vehicle, raw=vehicle_raw, chassis_raw=bound(chassis_p, "chassis_params"))
+        vehicle, kin = read_vehicle(vehicle_real, raw=vehicle_raw, chassis_raw=bound(chassis_p, "chassis_params"))
         watch_raw = bound(paths.watch, "watch")
         try:
             with tempfile.TemporaryDirectory(prefix="forklift-prep-") as snap_:
