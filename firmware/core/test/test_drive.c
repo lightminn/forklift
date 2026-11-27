@@ -2601,7 +2601,7 @@ static void bench_distance_reached(void)
     CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
     CHECK_EQ_I(s.cut_position - ref, 40);
     CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_NONE);
-    CHECK_EQ_U(s.run_flags, 0);
+    CHECK_EQ_U(s.run_flags, DRIVE_BENCH_FLAG_RES_DISTANCE); /* bench7: the result names its kind */
     CHECK(s.end_evidence_age_ms <= 1u);
     cm(1000); /* refused after the cut, counted */
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
@@ -3020,6 +3020,405 @@ static void bench_distance_across_the_clock_wrap(void)
     CHECK_EQ_I(n, 10);
 }
 
+/* ---- bench7: hold (plan 4.3 A1b-2) ------------------------------------------------------------------------- */
+
+static link_bench_hold hcfg;
+
+/* a hold run on M (KTH index 0); bypass: the steering range */
+static bool hold_arm(uint32_t run_id, int8_t count_sign, uint32_t bypass)
+{
+    link_bench_set b = bench_defaults(run_id, DRIVE_CH_M);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.count_sign = count_sign;
+    b.bypass = bypass;
+    send(bench_set_msg(10, b));
+    if (d.reject_reason != DRIVE_REJECT_NONE) {
+        return false;
+    }
+    send(bench_arm_msg(11, run_id, echo_now()));
+    hcfg = (link_bench_hold){.boot_id = d.boot_id,
+                             .arm_gen = d.arm_gen,
+                             .valid_after_echo_ms = 100,
+                             .run_id = run_id,
+                             .axis = DRIVE_CH_M,
+                             .source = DRIVE_BENCH_SOURCE_KTH,
+                             .target_kind = BENCH_HOLD_TARGET_HERE,
+                             .cpr = 4096,
+                             .kp = 0.5f,
+                             .deadband_counts = 12,
+                             .duty_max_e4 = 1500,
+                             .min_duty_e4 = 1200,
+                             .sign = count_sign};
+    return d.mode == DRIVE_MODE_ARMED;
+}
+
+static link_msg hold_msg(void)
+{
+    link_msg m = {.type = LINK_BENCH_HOLD, .seq = cm_seq++}; /* one seq space with the COMMISSIONs */
+    m.u.bench_hold = hcfg;
+    m.u.bench_hold.echo_mcu_time_us = echo_now();
+    m.u.bench_hold.arm_gen = d.arm_gen;
+    return m;
+}
+
+static void hold(void)
+{
+    send(hold_msg());
+}
+
+/* SET + ARM + M(0) + the first HOLD at raw; true when driving */
+static bool hold_start(uint32_t run_id, uint16_t raw, uint8_t kind, int32_t value)
+{
+    kraw(0, raw);
+    ticks(3);
+    if (!hold_arm(run_id, 1, DRIVE_BENCH_STEER_RANGE)) {
+        return false;
+    }
+    cm(0);
+    hcfg.target_kind = kind;
+    hcfg.target_value = value;
+    hold();
+    return d.reject_reason == DRIVE_REJECT_NONE && (bench_state_now().drive & 3u) == DRIVE_BENCH_RUN_DRIVING;
+}
+
+static void hold_set_rules(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    link_bench_set b = bench_defaults(80, DRIVE_CH_M);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    send(bench_set_msg(10, b)); /* no source */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.stop_counts = 100; /* no distance in a hold */
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    b.stop_counts = 0;
+    b.axis = DRIVE_CH_L;
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    b.axis = DRIVE_CH_M;
+    b.mode = 3;
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    CHECK(hold_arm(81, 1, DRIVE_BENCH_STEER_RANGE));
+    CHECK_EQ_U((bench_state_now().drive >> 4) & 3u, DRIVE_BENCH_MODE_HOLD);
+}
+
+/* M run: L(0) refused (bad_value, ZERO_SEEN stays off), then the correct M HOLD answers zero_first; M(0), then the
+   first HOLD drives and hands the run axis to the output checks (independent review P1-3, round 4 P2) */
+static void hold_readiness_on_the_run_axis(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(hold_arm(82, 1, DRIVE_BENCH_STEER_RANGE));
+    send(commission_msg(cm_seq++, DRIVE_CH_L, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    link_state st;
+    drive_fill_state(&d, &st);
+    CHECK((st.flags & DRIVE_STATE_ZERO_SEEN) == 0);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_ZERO_FIRST);
+    cm(0);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    cm(500); /* a hold run takes no non-zero COMMISSION */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(bench_state_now().drive & 3u, DRIVE_BENCH_RUN_DRIVING);
+    CHECK_EQ_U(d.cm_axis, DRIVE_CH_M);
+}
+
+/* the first HOLD needs a non-zero frame counted in its tick; a wrong sign, axis or run is bad_value */
+static void hold_first_needs_a_fresh_frame(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(hold_arm(83, 1, DRIVE_BENCH_STEER_RANGE));
+    cm(0);
+    in.abs_fresh[0] = false;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    in.abs_fresh[0] = true;
+    hcfg.sign = -1;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hcfg.sign = 1;
+    hcfg.run_id = 84;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hcfg.run_id = 83;
+    hcfg.duty_max_e4 = 1501; /* above the run's M limit (1500) */
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hcfg.duty_max_e4 = 1500;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    /* a duty run's HOLD */
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(85, 0, 1));
+    cm(0);
+    hcfg.run_id = 85;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+/* the targets, fixed once and kept in BENCH_STATE until the next ARM */
+static void hold_targets_in_state(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(86, 1000, BENCH_HOLD_TARGET_REL, 40));
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_I(s.target - s.cumulative, 40);
+    boot_with(mod_bench);
+    CHECK(hold_start(87, 4000, BENCH_HOLD_TARGET_ZERO, 0));
+    s = bench_state_now();
+    CHECK_EQ_I(s.target - s.cumulative, 96);
+    boot_with(mod_bench);
+    CHECK(hold_start(88, 4095, BENCH_HOLD_TARGET_ABS, 1));
+    s = bench_state_now();
+    CHECK_EQ_I(s.target - s.cumulative, 2);
+}
+
+/* toward the target at the minimum duty, 0 inside the deadband; a different HOLD is refused and the drive goes on */
+static void hold_drives_and_settles(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(89, 1000, BENCH_HOLD_TARGET_REL, 100));
+    CHECK(fabsf(out.duty[DRIVE_CH_M] - 0.12f) < 1e-6f); /* kp 0.5 x 0.153 rad = 0.077: raised to the minimum 0.12 */
+    link_bench_hold keep = hcfg;
+    hcfg.kp = 0.6f;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    hcfg = keep;
+    for (uint16_t raw = 1010; raw <= 1080; raw += 10) {
+        kraw(0, raw);
+        hold();
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        CHECK(out.duty[DRIVE_CH_M] > 0.0f);
+    }
+    kraw(0, 1092); /* 8 counts short: inside the deadband */
+    hold();
+    CHECK(out.duty[DRIVE_CH_M] == 0.0f);
+    for (int k = 0; k < 2000; k++) { /* seconds at rest inside the deadband: no stop (lead's request) */
+        if (k % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(bench_state_now().deadband_entries, 1);
+}
+
+/* a stalled axis outside the deadband: no_progress at 0.3 s; the result names a hold run and its bypass */
+static void hold_stall_stops(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(90, 1000, BENCH_HOLD_TARGET_REL, 100));
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        if (n % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+        n++;
+    }
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK(n >= 298 && n <= 302);
+    CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_HOLD);
+    CHECK((s.run_flags & DRIVE_BENCH_FLAG_RES_DISTANCE) == 0);
+    CHECK_EQ_U(s.result_bypass, DRIVE_BENCH_STEER_RANGE);
+    hold(); /* the run's late HOLD after its end: blocked */
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+    hcfg.axis = DRIVE_CH_H; /* another axis: not this run's */
+    hold();
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
+/* the host's zero ends it (end_zero); target and result stay after DISARMED */
+static void hold_end_zero(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(91, 1000, BENCH_HOLD_TARGET_REL, 5));
+    ticks(5);
+    cm(0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+    CHECK_EQ_I(s.target - s.cut_position, 5);
+    CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_HOLD);
+}
+
+/* a tentative 0x0000 makes no output: 256 -> 0 -> 256 on a here hold (independent review P1-1) */
+static void hold_tentative_zero_drives_nothing(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(92, 256, BENCH_HOLD_TARGET_HERE, 0));
+    int nonzero = 0;
+    for (int k = 0; k < 200; k++) {
+        kraw(0, k % 7 == 3 ? 0 : 256);
+        if (k % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+        nonzero += out.duty[DRIVE_CH_M] != 0.0f;
+    }
+    CHECK_EQ_I(nonzero, 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+}
+
+/* here at raw 16, kp 1, ki = kd = min = 0, deadband 12, then 0 frames only: stopped within 0.3 s as 11 */
+static void hold_stuck_zero_stops(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 16);
+    ticks(3);
+    CHECK(hold_arm(93, 1, DRIVE_BENCH_STEER_RANGE));
+    cm(0);
+    hcfg.kp = 1.0f;
+    hcfg.min_duty_e4 = 0;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    kraw(0, 0);
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        if (n % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT);
+    CHECK(n <= 302);
+}
+
+/* the hold axis's range is judged every tick: without the bypass a hold leaving the range faults */
+static void hold_range_is_judged(void)
+{
+    for (int bypass = 0; bypass < 2; bypass++) {
+        boot_with(mod_bench);
+        kraw(0, 300); /* about 0.46 rad: inside the steering range (+-0.5) */
+        ticks(3);
+        CHECK(hold_arm(94, 1, bypass ? DRIVE_BENCH_STEER_RANGE : 0u));
+        cm(0);
+        hcfg.target_kind = BENCH_HOLD_TARGET_REL;
+        hcfg.target_value = 100;
+        hold();
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        kraw(0, 340); /* about 0.52 rad: out of range */
+        ticks(5);
+        if (bypass) {
+            CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+        } else {
+            CHECK(d.mode != DRIVE_MODE_ARMED);
+            CHECK(d.fault_flags & DRIVE_FAULT_STEER_OUT_OF_RANGE);
+        }
+    }
+}
+
+/* the echo must be of a STATE after the last connection change */
+static void hold_echo_boundary(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(hold_arm(95, 1, DRIVE_BENCH_STEER_RANGE));
+    cm(0);
+    uint64_t old = echo_now();
+    drive_note_link_change(&d, in.now_us, true);
+    tick();
+    link_msg m = hold_msg();
+    m.u.bench_hold.echo_mcu_time_us = old;
+    send(m);
+    CHECK(d.reject_reason == DRIVE_REJECT_STALE_ECHO || d.mode != DRIVE_MODE_ARMED);
+}
+
+/* the HAL report: an armed interval closes only on a reported whole zero window, not on a requested 0 (decision 6) */
+static void hold_interval_closes_on_the_report(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(96, 1000, BENCH_HOLD_TARGET_REL, 100));
+    tick();
+    CHECK(d.cm_on);
+    uint64_t since = d.cm_on_since_us;
+    in.pwm_report = true;
+    in.applied_window_us = 1000;
+    in.abs_start_known[0] = true;
+    in.applied_e4[DRIVE_CH_M] = 1200;
+    in.applied_any[DRIVE_CH_M] = true;
+    kraw(0, 1095); /* inside the deadband: the request goes to 0 */
+    in.abs_start_us[0] = in.now_us + cfg.period_us;
+    tick();
+    CHECK(out.duty[DRIVE_CH_M] == 0.0f);
+    CHECK(d.cm_on); /* the 0 is requested, not yet reported active */
+    in.applied_e4[DRIVE_CH_M] = 0;
+    in.abs_start_us[0] = in.now_us + cfg.period_us;
+    tick(); /* 0 active now, but the window held the 1200 */
+    CHECK(d.cm_on);
+    CHECK_EQ_U(d.cm_on_since_us, since);
+    in.applied_any[DRIVE_CH_M] = false;
+    in.abs_start_us[0] = in.now_us + cfg.period_us;
+    tick();
+    CHECK(!d.cm_on);
+    in.pwm_report = false;
+}
+
+/* DISARM ends a hold as 4; another arming's HOLD (old arm_gen) is refused; run A's late HOLD leaves B's blocked */
+static void hold_disarm_generation_and_attribution(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(97, 1000, BENCH_HOLD_TARGET_HERE, 0));
+    link_msg old = hold_msg();
+    send(simple(LINK_DISARM, cm_seq++));
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_DISARM);
+    ticks(3);
+    CHECK(hold_start(98, 1000, BENCH_HOLD_TARGET_HERE, 0)); /* run B */
+    old.seq = cm_seq++;
+    old.u.bench_hold.echo_mcu_time_us = echo_now();
+    send(old); /* A's HOLD: A's arm_gen and run id */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_ARM_GEN_MISMATCH);
+    cm(0); /* B ends */
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+    old.seq = cm_seq++;
+    old.u.bench_hold.echo_mcu_time_us = echo_now();
+    send(old); /* A's late HOLD while B stops: not B's */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(bench_state_now().blocked, 0);
+    hold(); /* B's own late HOLD */
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
+static void bench_hold_tests(void)
+{
+    hold_disarm_generation_and_attribution();
+    hold_set_rules();
+    hold_readiness_on_the_run_axis();
+    hold_first_needs_a_fresh_frame();
+    hold_targets_in_state();
+    hold_drives_and_settles();
+    hold_stall_stops();
+    hold_end_zero();
+    hold_tentative_zero_drives_nothing();
+    hold_stuck_zero_stops();
+    hold_range_is_judged();
+    hold_echo_boundary();
+    hold_interval_closes_on_the_report();
+}
+
 static void bench_review_round1_tests(void)
 {
     bench_watch_counts_from_the_last_progress();
@@ -3103,5 +3502,6 @@ int main(void)
     bench_blocked_other_axis_after_disarm();
     bench_bench6_tests();
     bench_review_round1_tests();
+    bench_hold_tests();
     return FW_TEST_RESULT();
 }
