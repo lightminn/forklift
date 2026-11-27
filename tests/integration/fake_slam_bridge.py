@@ -7,6 +7,9 @@ instance's first scan's odometry, the seventh start scan followed by the end sta
 ``hold_end``: ids whose end state waits for ``release(id)``. ``hold_replies()`` / ``release_replies()``: scan
 replies kept from now until released. ``closing()``: the test is ending the run -- a broken
 connection after it ends the thread quietly; before it, it is the bridge's error.
+``laser`` (with ``map_id``): the real bridge's comparison (operating plan 2.3, U3e-1) -- a hello whose map or
+base_from_laser does not match is a ``fault``; a matching one's digest rides on every ``ready`` of the session
+(``laser_checked``), as the operating executor requires. Without it, no comparison and no digest (an older bridge).
 Not slam_toolbox: nothing here is evidence of matching or of the bridge's timing."""
 
 from __future__ import annotations
@@ -24,8 +27,10 @@ from forklift_core.localization.slam_pose import compose, invert
 
 class FakeBridge(threading.Thread):
     def __init__(self, path, *, seed_delay_s=0.0, seed_end="ready", fault_after=None, reply_delay_s=0.0,
-                 hold_end=()):
+                 hold_end=(), map_id=None, laser=None):
         super().__init__(daemon=True)
+        self.map_id, self.laser = map_id, None if laser is None else tuple(float(v) for v in laser)
+        self.digest = None  # the hello's base_from_laser digest once compared (laser mode)
         self.path, self.seed_delay_s, self.seed_end, self.fault_after = str(path), seed_delay_s, seed_end, fault_after
         self.reply_delay_s = float(reply_delay_s)
         self._held = {int(i): threading.Event() for i in hold_end}
@@ -81,7 +86,8 @@ class FakeBridge(threading.Thread):
 
     def _state(self, ident, kind, reason=None):
         self.sent.append((time.monotonic(), kind, ident))
-        self._send(rl.encode_state(rl.State(ident, kind, reason)))
+        checked = self.digest if kind == "ready" else None
+        self._send(rl.encode_state(rl.State(ident, kind, reason, laser_checked=checked)))
 
     def run(self):
         try:
@@ -130,6 +136,15 @@ class FakeBridge(threading.Thread):
 
     def _on(self, f):
         now = time.monotonic()
+        if isinstance(f, rl.Hello) and self.laser is not None:
+            # the real bridge's hello comparison (real_bridge_core.on_frame): the map, then the mount
+            if self.map_id is not None and f.map_id != self.map_id:
+                self._state(f.start_id, "fault", f"map_mismatch: {f.map_id}")
+                return
+            if f.base_from_laser is None or not rl.laser_matches(f.base_from_laser, self.laser):
+                self._state(f.start_id, "fault", f"laser_mismatch: {f.base_from_laser}")
+                return
+            self.digest = rl.laser_digest(f.base_from_laser)
         if isinstance(f, (rl.Hello, rl.Seed)):
             ident = f.start_id if isinstance(f, rl.Hello) else f.seed_id
             self.got.append((now, type(f).__name__, ident))

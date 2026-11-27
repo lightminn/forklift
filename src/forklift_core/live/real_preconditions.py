@@ -52,7 +52,8 @@ ITEMS = {
                      "pallet_mass_kg")),
     "firmware_build": ("C12", ("product", "firmware_vehicle_calibration_id", "readback_sha256",
                                "board_lift_rate_max_mps")),
-    "stop_model": ("C13", ("stop_files",)),
+    # the stop model's latency takes lidar.yaml's scan_period_s too: its approval is bound to that file (U3e-1)
+    "stop_model": ("C13", ("stop_files", "lidar_sha256")),
     "jetson_load": ("C14", ("stop_files",)),
 }
 # the preconditions the assembly judges (plan 3): every one but the run-time C7 (IMU) and C8 (D5), which readiness and
@@ -60,7 +61,9 @@ ITEMS = {
 ASSEMBLY_CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6", "C9", "C10", "C11", "C12", "C13", "C14")
 # the files whose values the stop model, the timing and the watches read (plan 2.4 binds)
 STOP_FILES = ("layer", "budget", "odometry_age", "vehicle", "watch")
-PROVENANCE_FILES = ("vehicle", "budget", "watch")  # their measured: false entries need a measurement or an exception
+# their measured: false entries need a measurement or an exception; "layer" (obstacle_layer_real.yaml): the stop
+# model the run's layer uses (permission.latency_s / decel_mps2, C13 -- operating plan 6.1, U3e-1)
+PROVENANCE_FILES = ("vehicle", "budget", "watch", "layer")
 # entries the autonomy never reads as a C12/C13 precondition: the teleop bridge's own, and the IMU watch (C7, runtime)
 NOT_C12_C13 = {("vehicle", "teleop_speed_limit"), ("watch", "tilt"), ("watch", "imu")}
 # entries that must carry a provenance at all (a deleted or null provenance is not a pass)
@@ -69,6 +72,7 @@ REQUIRED_PROVENANCE = {
                 "steering_control"),
     "budget": ("latency_budget", "overdue_end"),
     "watch": ("current", "wheel"),
+    "layer": ("permission.stop_model.latency_s", "permission.stop_model.decel_mps2"),
 }
 GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError,
                  ET.ParseError)
@@ -98,6 +102,7 @@ class Facts:
     file_hashes: dict = field(default_factory=dict)  # name -> sha256 (HASHED), from the bytes parsed
     changed: list = field(default_factory=list)  # files that changed while gathered
     board: dict = field(default_factory=dict)  # usb_serial, usb_product, drive_refusal (None: none), first STATE seen
+    layer_permission: dict = field(default_factory=dict)  # obstacle_layer_real.yaml permission: (the stop model, C13)
 
 
 def _read(path) -> tuple:
@@ -221,12 +226,17 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
                  imu=parsed["imu"] if isinstance(parsed["imu"], dict) else {},
                  settings=parsed["settings"] if isinstance(parsed["settings"], dict) else {}, s10a=s10a,
                  stop_files=stop, provenance=prov, vehicle_calibration_id=calib, inserted_offset_m=inserted,
-                 file_hashes=hashes, changed=changed, board=dict(board or {}))
+                 file_hashes=hashes, changed=changed, board=dict(board or {}),
+                 layer_permission=dict((layer.get("permission") or {}) if isinstance(layer.get("permission"), dict)
+                                       else {}))
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
 def _finite(*vals) -> bool:
-    return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
+    try:
+        return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
+    except OverflowError:  # an integer no float can hold (Codex U3e-1 impl round 2 P3)
+        return False
 
 
 def _positive(*vals) -> bool:
@@ -394,7 +404,9 @@ def _c5_scan(f: Facts) -> list:
 
 def _provenance_reasons(f: Facts) -> list:
     """C12 (vehicle) / C13 (layer budget, watches): an unmeasured or missing provenance needs a lead exception."""
-    exc = {(e["file"], e["key"]) for e in (f.record or {}).get("config_exceptions") or () if e.get("decision_id")}
+    # a lead exception names its decision: a blank decision_id is none (Codex U3e-1 implementation round 1 P2-5)
+    exc = {(e["file"], e["key"]) for e in (f.record or {}).get("config_exceptions") or ()
+           if isinstance(e.get("decision_id"), str) and e["decision_id"].strip()}
     out = []
     for name in PROVENANCE_FILES:
         c = "C12" if name == "vehicle" else "C13"
@@ -506,6 +518,19 @@ def imu_qualified(f: Facts, opened_profile_fits: bool | None = None) -> bool:
                 and level and all(isinstance(prov, dict) and prov.get("measured") is True for prov in level))
 
 
+def _stop_model_values(f: Facts) -> list:
+    """C13 (operating plan 6.1, Codex U3e-1 round 3 P1): the stop model's own values, whatever their provenance or a
+    lead exception says -- the latency a finite number >= 0 and the deceleration a finite number > 0 (the stopping
+    distance grows with the one and divides by the other; a bool is not a number here)."""
+    out = []
+    p = f.layer_permission if isinstance(f.layer_permission, dict) else {}
+    for key, ok in (("latency_s", lambda v: v >= 0.0), ("decel_mps2", lambda v: v > 0.0)):
+        v = p.get(key)
+        if not (_finite(v) and ok(float(v))):
+            out.append(f"precondition:C13:layer:{key}:invalid")
+    return out
+
+
 def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
     out = [UNLOCK_INCOMPLETE]
@@ -527,6 +552,7 @@ def operating_preconditions(f: Facts) -> list:
         except (TypeError, AttributeError, ValueError):
             out.append("precondition:record:limits_malformed")
     out += _provenance_reasons(f)
+    out += _stop_model_values(f)
     if f.stop_files.get("odometry_age") is None:
         out.append("precondition:C13:odometry_age:missing")
     return out

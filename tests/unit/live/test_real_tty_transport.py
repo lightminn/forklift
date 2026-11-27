@@ -74,6 +74,18 @@ def test_a_hil_or_commissioning_build_revokes(flags):
     assert t.grant([], 7) is False  # a revocation is final for the run
 
 
+@pytest.mark.parametrize("flags", [StateFlag.HIL_PLANT, StateFlag.COMMISSION_BUILD, StateFlag.OUTPUTS_LOCKED])
+def test_a_build_change_after_the_grant_revokes_a_held_permission(flags):
+    """Plan 6.1 merge table (Codex U3e-1 round 2 P2-4): the permission actually held first, then a STATE of another
+    build kind takes it away -- not a grant refused because the bad STATE came before it."""
+    m, t = make()
+    feed(m, t, state())
+    assert t.grant([], 7) is True and t.real_operating is True
+    feed(m, t, state(flags=flags))
+    assert t.real_operating is False and t.revoked == "board_build_changed"
+    assert motion_allowed(t) is False
+
+
 def test_another_boot_revokes():
     m, t = make()
     feed(m, t, state(boot=7))
