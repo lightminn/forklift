@@ -112,6 +112,56 @@ def test_a_short_path_end_still_limits_the_speed():
     assert speed <= max(STOP.speed_for(0.01 + STOP.margin_m), CONFIG.end_creep_mps) + 1e-12
 
 
+def path_end(perm, t, slack, cap=0.05):
+    return perm.allowed_speed(t, {"low": t}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                              footprint=FOOT, own_footprint=BODY, speed_cap_mps=cap, path_end_slack_m=slack)
+
+
+def test_an_end_slack_moves_only_a_clear_ends_target():
+    """U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): a path verified to its end, unblocked, lets a stop end
+    ``path_end_slack_m`` past it; 0 is as before."""
+    perm = DrivePermission(CONFIG)
+    perm.update(snapshot(), np.array([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]), FOOT, BODY, current_pose=(0, 0, 0))
+    target, _ = path_end(perm, 0.05, 0.0)
+    slack, why = path_end(perm, 0.05, 0.008, cap=0.6)
+    assert target <= max(STOP.speed_for(0.01 + STOP.margin_m), CONFIG.end_creep_mps) + 1e-12  # as before
+    assert math.isclose(slack, STOP.speed_for(0.018 + STOP.margin_m)) and why == "ok"
+    assert allowed(perm, 0.05, cap=0.05) == path_end(perm, 0.05, 0.0)  # the default is no slack
+    perm.advance(0.015)  # 5 mm past the end: no creep for the command, a stop within the slack for the motion
+    assert path_end(perm, 0.05, 0.0)[0] == 0.0
+    assert math.isclose(path_end(perm, 0.05, 0.008, cap=0.6)[0], STOP.speed_for(0.003 + STOP.margin_m))
+    perm.advance(0.0025)  # 7.5 mm past: 0.5 mm of slack left -- no end creep floor (Codex U3e-1b round 4 P1)
+    left = path_end(perm, 0.05, 0.008, cap=0.6)[0]
+    assert math.isclose(left, STOP.speed_for(0.0005 + STOP.margin_m)) and left < CONFIG.end_creep_mps
+    assert STOP.distance_m(left) - STOP.margin_m <= 0.0005 + 1e-12
+
+
+def test_the_nearer_of_path_left_and_the_callers_distance_counts():
+    """U3e-1b (Codex round 5 P2): the caller's own distance to the end, when nearer than this check's path_left."""
+    perm = DrivePermission(CONFIG)
+    perm.update(snapshot(), np.array([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]), FOOT, BODY, current_pose=(0, 0, 0))
+    near = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                              footprint=FOOT, own_footprint=BODY, speed_cap_mps=0.6, path_end_slack_m=0.008,
+                              path_end_ahead_m=0.004)[0]
+    far = perm.allowed_speed(0.05, {"low": 0.05}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                             footprint=FOOT, own_footprint=BODY, speed_cap_mps=0.6, path_end_slack_m=0.008,
+                             path_end_ahead_m=0.02)[0]
+    assert math.isclose(near, STOP.speed_for(0.012 + STOP.margin_m))
+    assert math.isclose(far, STOP.speed_for(0.018 + STOP.margin_m))  # path_left 0.01 is the nearer
+
+
+def test_an_end_slack_leaves_a_blocked_or_unfinished_path_as_it_is():
+    perm = DrivePermission(CONFIG)
+    snap = snapshot()
+    set_cell(snap, 1.40, 0.0, OCCUPIED)  # in the path's sweep: blocked short of its end
+    perm.update(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
+    assert perm.path_check.blocked == "occupied"
+    assert path_end(perm, 0.05, 0.008) == path_end(perm, 0.05, 0.0)
+    perm.update(snapshot(), STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))  # 6 m: the walk ends before the path
+    assert not perm.path_check.reached_end
+    assert path_end(perm, 0.05, 0.008, cap=0.6) == path_end(perm, 0.05, 0.0, cap=0.6)
+
+
 def test_unknown_ahead_blocks_but_the_cells_under_the_body_do_not():
     perm = DrivePermission(CONFIG)
     snap = snapshot()

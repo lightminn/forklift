@@ -121,11 +121,14 @@ def core_rule(limit_fn, speed, direction, cap, commanded):
 
     stub = SimpleNamespace(_real_vehicle=lambda: True, _commanded_now=lambda: commanded)
     stub._possible_motion = lambda sp: MissionCore._possible_motion(stub, sp)  # 5d: the motion rule apart
+    stub._motion_covered = lambda *a: MissionCore._motion_covered(stub, *a)  # U3e-1b (no slack here: as before)
     return MissionCore._direction_limits(stub, limit_fn, speed, direction, cap)
 
 
 def limits(fwd, back):
-    return lambda d, v: ((fwd if d > 0 else back), "ok" if (fwd if d > 0 else back) >= v else f"blocked_{d}")
+    # ``path_end_slack_m`` (U3e-1b, the core's D5-stage end slack; the core passes it only there): one answer either
+    # way here
+    return lambda d, v, **_kw: ((fwd if d > 0 else back), "ok" if (fwd if d > 0 else back) >= v else f"blocked_{d}")
 
 
 CASES = [

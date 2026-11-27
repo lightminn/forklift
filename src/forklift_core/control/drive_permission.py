@@ -964,8 +964,16 @@ class DrivePermission:
         footprint: Footprint,
         own_footprint: Footprint,
         speed_cap_mps: float,
+        path_end_slack_m: float = 0.0,
+        path_end_ahead_m: float | None = None,
     ) -> tuple[float, str]:
-        """(speed limit, reason) for this control tick."""
+        """(speed limit, reason) for this control tick. ``path_end_slack_m`` (U3e-1b, the real truck's possible-motion
+        check in the D5 stages only): when the path was verified to its end, unblocked and with no unknown passed, the
+        limit is the speed whose stop ends within that much past the end (the trackers' arrival tolerance -- a stop
+        there has arrived), the stopping model inverted with no end creep floor (Codex U3e-1b round 4 P1: a creep floor
+        would let a stop run past the slack); the stop arc is checked as always. ``path_end_ahead_m``: the caller's own
+        distance from the current pose to that end (negative past it); the nearer of it and this check's ``path_left``
+        counts (round 5 P2: the snapshot's progress can lag the pose). Otherwise, and at 0 (the default), as before."""
         cfg = self.config
         snap, path = self.snapshot, self.path_check
         if snap is None or path is None:
@@ -980,7 +988,11 @@ class DrivePermission:
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
             return 0.0, "evidence_stale"
         arc_limit = cfg.stopping.speed_for(estop.verified_m)
-        if path.reached_end:
+        if path_end_slack_m > 0.0 and path.reached_end and path.blocked is None and path.first_unknown_m is None:
+            # only a clear end's target moves; a blocked or unverified end stays as it is
+            left_ = path_left if path_end_ahead_m is None else min(path_left, float(path_end_ahead_m))
+            path_limit = cfg.stopping.speed_for(left_ + float(path_end_slack_m) + cfg.stopping.margin_m)
+        elif path.reached_end:
             # Stopping at the goal needs no margin past it; the arc check
             # still covers the actual stopping volume beyond the end.
             path_limit = max(

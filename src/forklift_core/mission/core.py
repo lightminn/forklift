@@ -1656,12 +1656,19 @@ class MissionCore:
         # simulation's call is as recorded (no new argument)
         ev_kw_ = {"evidence_s": float(t) + self.WRITE_MARGIN_S} if self._real_vehicle() else {}
 
-        def layer_fn_(d_, cap_):
+        def layer_fn_(d_, cap_, **target_):
+            # ``path_end_slack_m`` only when a real-only possible-motion check gives it (U3e-1b): the simulation's call
+            # keeps its arguments as recorded
             return obstacle["layer"].limit(t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-                                           direction=d_, loaded=loaded, cap_mps=cap_, **ev_kw_)
+                                           direction=d_, loaded=loaded, cap_mps=cap_, **ev_kw_, **target_)
 
+        # U3e-1b (plan 3): the possible motion may stop within the arrival tolerance past the path end in the D5 stages
+        # only (approach and insert with a pocket check) -- elsewhere the layer's 0 may not reach the output
+        end_slack_ = (self._end_slack(trackers.get(ms.phase), rear)
+                      if (self._real_vehicle() and bool(options.pocket_check) and ms.phase in ("approach", "insert")
+                          and pocket.get("check") is not None) else {})
         allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(
-            layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps))
+            layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps), end_slack_)
         if direction is None:
             direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
@@ -1768,7 +1775,8 @@ class MissionCore:
                 # 5d (design 7.1): every possible direction, whatever their number (the old direction_unsure stop is
                 # replaced by the per-direction answers)
                 allowed, why, hold_ = self._pocket_query(t, rear, kappa, requested_speed, speed_,
-                                                         float(hooks.lift_position()), allowed, why, layer_fn_)
+                                                         float(hooks.lift_position()), allowed, why, layer_fn_,
+                                                         end_slack_)
                 speed_hold_ = speed_hold_ or hold_
                 if ms.phase == "approach" and not pocket.get("mid_still_done") and not bypass_:
                     cap = max(0.05, math.sqrt(2.0 * options.mid_still_decel_mps2
@@ -5932,9 +5940,9 @@ class MissionCore:
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
-        allowed, why, motion_hold_, _, _ = self._direction_limits(lambda d_, cap_: obstacle["layer"].limit(
+        allowed, why, motion_hold_, _, _ = self._direction_limits(lambda d_, cap_, **target_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-            direction=d_, loaded=loaded, cap_mps=cap_,
+            direction=d_, loaded=loaded, cap_mps=cap_, **target_,
         ), speed_, None, speed_.bound_mps)
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
@@ -6781,7 +6789,7 @@ class MissionCore:
         in the simulation, so its caps stay as before."""
         return float(self.state.get("command_speed", 0.0)) if self._real_vehicle() else 0.0
 
-    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float):
+    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float, end_kw: dict | None = None):
         """The layer's limit ``limit_fn(direction, cap)`` over the motion directions a safety check covers (4d-1).
         Returns ``(allowed, why, hold, driving, unsure)``.
 
@@ -6814,11 +6822,11 @@ class MissionCore:
             # what the loop's outputs may still do the asked way is beyond what the layer allows that way (a slowing
             # request does not slow an unconfirmed faster output): the wheels hold (Codex 4c impl P1-9)
             allowed, why, hold = 0.0, (why if why != "ok" else "residual_over_allowed"), True
-        for d_, v_ in motion.items():
+        for d_ in motion:
             if d_ == direction:
                 continue  # the asked direction: the permission's own limit
-            a_, w_ = limit_fn(d_, v_)
-            if a_ < v_:
+            covered, w_ = self._motion_covered(limit_fn, d_, motion, end_kw)  # U3e-1b: D5 stages' end slack
+            if not covered:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
         if hold and isinstance(getattr(self, "state", None), dict):
             self.state["motion_hold"] = why  # the real loop's wait frame: wheels 0 and the old queue dropped (P1-4)
@@ -6846,12 +6854,67 @@ class MissionCore:
             motion[d_] = max(motion.get(d_, 0.0), v_)
         return motion, residual
 
+    # U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): in the D5 stages the real truck's possible motion (not
+    # its new command) may stop up to this far past the path end -- the approach and insert trackers' arrival tolerance
+    # (position_tolerance_m 0.008): a stop there has arrived. Without it a standing reading's error width (about
+    # 0.021 m/s at a 27.8 ms delay bound) above the end creep (0.02) held the truck 11 mm short for good.
+    POCKET_END_SLACK_M = 0.008
+
+    def _end_slack(self, tracker, rear) -> dict:
+        """The layer keywords of the D5 stages' end slack (U3e-1b plan 3): ``path_end_slack_m`` and
+        ``path_end_ahead_m``, the signed distance from ``rear`` to the current leg's end pose along its heading and the
+        leg's direction (negative past it). The layer's own ``path_left`` counts from the progress its snapshot was
+        asked at -- before this tick's progress, or clipped at the end when asked past it -- so the stop is measured
+        from the nearer of the two (Codex rounds 4 P1, 5 P2). No leg: {} (no slack, as before)."""
+        if tracker is None:
+            return {}
+        poses, d_ = tracker.leg_ahead()
+        if not len(poses):
+            return {}
+        ex, ey, eyaw = (float(v) for v in poses[-1])
+        ahead = (1 if d_ >= 0 else -1) * ((ex - float(rear[0])) * math.cos(eyaw) + (ey - float(rear[1])) * math.sin(eyaw))
+        return {"path_end_slack_m": self.POCKET_END_SLACK_M, "path_end_ahead_m": float(ahead)}
+
+    def _output_motion(self) -> dict:
+        """The real loop's own outputs that may still act, by direction: the command in effect and the unconfirmed
+        outputs (``_possible_motion`` without the measured reading)."""
+        out = {}
+        commanded = self._commanded_now()
+        if commanded != 0.0:
+            out[1 if commanded > 0 else -1] = abs(commanded)
+        state_ = getattr(self, "state", None) or {}
+        for d_, v_ in (state_.get("outstanding_motion") or {}).items():
+            if float(v_) > 0.0:
+                out[int(d_)] = max(out.get(int(d_), 0.0), float(v_))
+        return out
+
+    def _motion_covered(self, limit_fn, d_, motion: dict, end_kw: dict | None) -> tuple[bool, str]:
+        """Whether the layer covers the possible motion in direction ``d_``. Without an end slack: one question at
+        ``motion[d_]``, as before. With it (U3e-1b, the D5 stages): the loop's own outputs and the command in effect
+        at no slack -- a command is held to the path end (Codex round 4 P2: else a 0 request kept slewing on an
+        unexpired output) -- and the whole possible motion, the reading's bound included, at the slack, always: the
+        no-slack question keeps the end creep floor, so it cannot stand in for the slack's stop (Codex round 6 P2)."""
+        v_ = motion.get(d_, 0.0)
+        if not end_kw:
+            a_, w_ = limit_fn(d_, v_)
+            return (a_ >= v_), w_
+        o_ = self._output_motion().get(d_, 0.0)
+        if o_ > 0.0:
+            a_, w_ = limit_fn(d_, o_)
+            if a_ < o_:
+                return False, w_
+        if v_ > 0.0:
+            a_, w_ = limit_fn(d_, v_, **end_kw)
+            if a_ < v_:
+                return False, w_
+        return True, "ok"
+
     # the latest instant a DRIVE decided this tick may be written (the real loop's SLOW_TICK_S + EVIDENCE_READ_MAX_S;
     # a test pins the sum): the real truck's permission asks the evidence there (real safety wiring design 7.1 6)
     WRITE_MARGIN_S = 0.035
 
     def _pocket_query(self, t: float, rear, kappa: float, requested_speed: float, speed_: SafetySpeed, lift: float,
-                      allowed: float, why: str, layer_fn):
+                      allowed: float, why: str, layer_fn, end_kw: dict | None = None):
         """The real truck's pocket query (design 7.1 2-4): every possible direction asked at its own speed (the asked
         one at the larger of the request and its possible speed), at the write margin; a possible motion a direction
         does not allow holds (the asked one's layer asked again at its possible speed too). Returns (allowed, why,
@@ -6871,8 +6934,9 @@ class MissionCore:
             if a_ < poss and hold_why is None:
                 hold_why = w_ if w_ != "ok" else ("residual_over_allowed" if d_ == req else "pocket_other_direction")
         if hold_why is None and req is not None and motion.get(req, 0.0) > 0.0:
-            la_, lw_ = layer_fn(req, motion[req])  # outside the region: the asked direction's possible motion too
-            if la_ < motion[req]:
+            # outside the region: the asked direction's possible motion too (U3e-1b: with the D5 stages' end slack)
+            covered, lw_ = self._motion_covered(layer_fn, req, motion, end_kw)
+            if not covered:
                 hold_why = lw_ if lw_ != "ok" else "residual_over_allowed"
         if hold_why is not None:
             self.state["motion_hold"] = hold_why
