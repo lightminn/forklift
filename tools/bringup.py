@@ -884,7 +884,10 @@ class CommissionSession(Session):
 
         if not b.run_until(named, 0.5):
             raise Refused("bench: the board's arming never named this run's BENCH_SET")
-        self.bench_taken = self._bench_pending
+        self.bench_taken = self._bench_pending  # the board took it, whatever happens next
+        if not b.host.ready:
+            b.emit({"t": "bench_set", **self.bench_taken})
+            raise Refused("bench: the arming ended while its BENCH_SET was being confirmed")
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def request_arm(self, now_ns: int):
