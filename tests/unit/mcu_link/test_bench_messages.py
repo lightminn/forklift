@@ -1,4 +1,4 @@
-"""Bench extension of mcu-link (contract section 8, wire generation bench5): BENCH_SET, BENCH_ARM, BENCH_STATE.
+"""Bench extension of mcu-link (contract section 8, wire generation bench6): BENCH_SET, BENCH_ARM, BENCH_STATE.
 
 The golden vectors are shared with the firmware's test_link.c; the operating v3 vectors stay in test_messages.py."""
 
@@ -37,7 +37,7 @@ ARM = BenchArm(boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000001_00ABCDEF, run_id=
 STATE = BenchState(pair_seq=0x0102, run_id=0x12345678, result_run_id=0x11223344, axis=2, source=0, count_state=0,
                    kth_lost=0, raw_angle=0x0ABC, cumulative=-123456, target=654321, distance_ref=-7, cut_position=8,
                    stop_reason=1, distance_confirm=0, blocked=3, dropped_pairs=4, evidence_age_ms=0xFFFF,
-                   end_evidence_age_ms=250, mcu_bypass=1, drive=0x13, conn_gen=5, reserved=0, result_axis=2,
+                   end_evidence_age_ms=250, mcu_bypass=1, drive=0x13, conn_gen=5, run_flags=0, result_axis=2,
                    result_source=0)
 
 GOLDEN = [(SET, 0x000B, BENCH_SET_000B), (ARM, 0x000C, BENCH_ARM_000C), (STATE, 0x0103, BENCH_STATE_0103)]
