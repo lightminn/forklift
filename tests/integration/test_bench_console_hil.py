@@ -643,6 +643,7 @@ def test_a_link_change_after_the_clear_went_out_is_unconfirmed_not_refused(rig):
 
 def _inject_pair(c, st, bst):
     c.host._state, c.host._state_rx_ns = st, int(c.clock())
+    c._on_state(st, c.host._state_rx_ns)  # as the host does for every STATE it accepts
     if bst is not None:
         c.host.bench_state, c.host.bench_state_rx_ns, c.host.bench_state_boot = bst, int(c.clock()), st.boot_id
         c.host.bench_state_of = st
@@ -719,7 +720,7 @@ def test_an_echo_pair_followed_in_the_same_read_by_a_newer_state_is_kept(rig):
                                fault_flags=FaultFlag(0))
     _inject_pair(c, echo, bst)
     newer = dataclasses.replace(echo, mcu_time_us=echo.mcu_time_us + 500, last_rx_seq=(c.clear.clear_seq + 7) & 0xFFFF)
-    c.host._state, c.host._state_rx_ns = newer, int(c.clock())
+    _inject_pair(c, newer, dataclasses.replace(bst))  # a second completed pair in the same read (round 10 P2-2)
     assert run_until(lambda: c.clear is None or c.clear.phase == "ready", 2.0)
     assert c.clear is not None and c.clear.phase == "ready"
     ready = dataclasses.replace(newer, mcu_time_us=newer.mcu_time_us + 500, mode=Mode.DISARMED,
@@ -727,3 +728,48 @@ def test_an_echo_pair_followed_in_the_same_read_by_a_newer_state_is_kept(rig):
     _inject_pair(c, ready, bst)
     assert run_until(lambda: b.clears, 2.0)
     assert b.clears[-1]["result"] == "cleared", b.clears[-1]
+
+
+def test_a_state_received_before_the_clear_went_out_is_not_its_echo(rig):
+    """A STATE naming the CLEAR's seq but received before the CLEAR's last byte went out is not its reply; one received
+    after is (Codex C round 10 P2-1)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    seq = c.clear.clear_seq
+    t_written = c.written[seq][1]
+    c.clear.echoed.discard(seq)
+    named = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 10, last_rx_seq=seq)
+    c._on_state(named, t_written - 1)
+    assert seq not in c.clear.echoed
+    c._on_state(dataclasses.replace(named, mcu_time_us=named.mcu_time_us + 10), t_written + 1)
+    assert seq in c.clear.echoed
+    bench_console.shutdown(c, wait_s=0.0)
+
+
+def test_the_rest_of_a_clear_already_partly_out_is_not_held_for_a_pair(rig):
+    """The CLEAR's first bytes out, then a STATE whose pair is not in: the rest still goes (holding a partial frame is
+    abandoning it); a pair naming a new generation stops it (Codex C round 10 P2-3)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st, bst = c.host.state, c.host.bench_state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    newer = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000)
+    c.host._state, c.host._state_rx_ns = newer, int(c.clock())  # its pair not in
+    assert not c.frame_allowed(frame)  # a first byte waits
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4321), 3
+    try:
+        assert c.frame_allowed(frame)  # the rest goes
+        _inject_pair(c, newer, dataclasses.replace(bst, conn_gen=(bst.conn_gen + 1) & 0xFFFFFFFF))
+        assert not c.frame_allowed(frame)  # a new generation stops it
+    finally:
+        link._cur, link._off = saved
+    bench_console.shutdown(c, wait_s=0.0)
