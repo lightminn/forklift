@@ -241,8 +241,11 @@ static void lifecycle(void)
     /* With the OTG interrupt off: the event snapshot, the start stamp and the begin mark cannot interleave with
        an interrupt's own stamp (Codex A1a round 4), and the CDC receive FIFO, which that interrupt writes in
        place (DWC2 slave), is cleared on whole indices (round 1). */
-    dcd_int_disable(0);
-    uint32_t tick_events = g_conn_tick_events; /* the tick preempts this; a later count keeps busy */
+    /* Every interrupt off for the few instructions from the snapshot to the begin mark: the tick cannot run between
+       a change being decided (e.g. DTR fell, in the caller) and the mark it reads (Codex A1a round 10). */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uint32_t tick_events = g_conn_tick_events;
     uint32_t events = g_conn_events;
     uint32_t start = timebase_now_us(); /* this change's start: the earliest of what it settles */
     if (tick_events != g_conn_tick_handled) {
@@ -256,6 +259,8 @@ static void lifecycle(void)
     }
     g_since_main = start;
     g_conn_begin = g_conn_end + 1u;
+    __set_PRIMASK(primask);
+    dcd_int_disable(0); /* the receive FIFO, which the OTG interrupt writes in place, cleared on whole indices */
     /* The receive ring's consumer is the tick, which reads nothing while begin != end and cannot run inside this
        (it preempts the main loop, not the other way): dropping the old connection's bytes here is safe, and does
        not depend on the tick's own drain, which link_read may hold back while the OTG interrupt runs. */
@@ -280,13 +285,19 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
     (void)rts;
 #if defined(FW_BENCH_IMAGE)
     /* Only a change of DTR is a connection change: TinyUSB calls this for every SET_CONTROL_LINE_STATE, and an
-       RTS-only request or the same DTR again must not end a run (Codex A1a round 3). */
-    if (dtr != g_last_dtr) {
+       RTS-only request or the same DTR again must not end a run (Codex A1a round 3). The check and lifecycle's
+       begin mark run with every interrupt off, so the tick never runs between a DTR change and the mark (round
+       10); lifecycle saves and restores PRIMASK, so it nests. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    bool changed = dtr != g_last_dtr;
+    if (changed) {
         g_last_dtr = dtr;
         lifecycle(); /* first: the bench image marks the change before anything else */
-        if (dtr) {
-            g_link_stats.reopened++;
-        }
+    }
+    __set_PRIMASK(primask);
+    if (changed && dtr) {
+        g_link_stats.reopened++;
     }
 #else
     if (dtr) {
