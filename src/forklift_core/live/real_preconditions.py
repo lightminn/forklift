@@ -104,6 +104,7 @@ class Facts:
     changed: list = field(default_factory=list)  # files that changed while gathered
     board: dict = field(default_factory=dict)  # usb_serial, usb_product, drive_refusal (None: none), first STATE seen
     layer_permission: dict = field(default_factory=dict)  # obstacle_layer_real.yaml permission: (the stop model, C13)
+    budget: dict = field(default_factory=dict)  # obstacle_layer.yaml as parsed (the latency budget, C13)
 
 
 def _read(path) -> tuple:
@@ -229,7 +230,8 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
                  stop_files=stop, provenance=prov, vehicle_calibration_id=calib, inserted_offset_m=inserted,
                  file_hashes=hashes, changed=changed, board=dict(board or {}),
                  layer_permission=dict((layer.get("permission") or {}) if isinstance(layer.get("permission"), dict)
-                                       else {}))
+                                       else {}),
+                 budget=parsed["budget"] if isinstance(parsed["budget"], dict) else {})
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
@@ -537,6 +539,19 @@ def _stop_model_values(f: Facts) -> list:
     return out
 
 
+def budget_reasons(budget: dict) -> list:
+    """C13 (Codex U3e-2 rounds 1-2): the latency budget and the overdue end each a finite positive number as written
+    (a bool is not one; a .nan or non-positive end would never end a sustained overdue). One rule for the judgement
+    and the operating preparation."""
+    out = []
+    for key in ("latency_budget", "overdue_end"):
+        node = budget.get(key) if isinstance(budget, dict) else None
+        v = node.get("seconds") if isinstance(node, dict) else None
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v) and float(v) > 0.0):
+            out.append(f"precondition:C13:budget:{key}:invalid")
+    return out
+
+
 def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
     out = [f"precondition:files_changed:{name}" for name in f.changed]
@@ -558,6 +573,7 @@ def operating_preconditions(f: Facts) -> list:
             out.append("precondition:record:limits_malformed")
     out += _provenance_reasons(f)
     out += _stop_model_values(f)
+    out += budget_reasons(f.budget)
     if f.stop_files.get("odometry_age") is None:
         out.append("precondition:C13:odometry_age:missing")
     return out

@@ -591,3 +591,20 @@ def test_the_stop_model_approval_is_bound_to_the_lidar_file(site):
     d["timing"]["scan_period_s"] = float(d["timing"]["scan_period_s"]) * 1.5
     lid.write_text(yaml.safe_dump(d, sort_keys=False))
     assert "precondition:C13:stop_model:lidar_sha256" in rp.operating_preconditions(site.facts())
+
+
+@pytest.mark.parametrize("seconds,ok", [(1.0, True), (1, True), (float("nan"), False), (0.0, False), (-1.0, False),
+                                        (True, False), ("1.0", False), (None, False), (float("inf"), False)])
+def test_the_budget_takes_a_finite_positive_number_as_written(seconds, ok):
+    """Codex U3e-2 rounds 1-2: one rule for the judgement and the operating preparation (a bool is not a number)."""
+    budget = {"latency_budget": {"seconds": 0.1}, "overdue_end": {"seconds": seconds}}
+    assert (rp.budget_reasons(budget) == []) is ok
+    if not ok:
+        assert rp.budget_reasons(budget) == ["precondition:C13:budget:overdue_end:invalid"]
+
+
+def test_the_judgement_refuses_a_nan_overdue_end(site):
+    site.facts_over = None
+    f = site.facts()
+    f.budget = {"latency_budget": {"seconds": 0.1}, "overdue_end": {"seconds": float("nan")}}
+    assert rp.operating_preconditions(f) == ["precondition:C13:budget:overdue_end:invalid"]

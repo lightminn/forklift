@@ -21,6 +21,7 @@ import math
 import queue
 import secrets
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -388,13 +389,31 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                                chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
     except (OSError, ValueError, TypeError, yaml.YAMLError):
         pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
-    try:
-        cfg = ra.load_s10a(paths.s10a)
-    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
-        raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
-    data = read_settings(paths.settings)
-    vehicle, kin = read_vehicle(paths.vehicle)
-    watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
+    operating_ = paths.replay is None and not paths.hil
+    with tempfile.TemporaryDirectory(prefix="forklift-prep-") as snap_:
+        s10a_p, settings_p, watch_p = paths.s10a, paths.settings, paths.watch
+        if operating_:
+            # the operating run: the S10-A, settings and watch files parsed from the very bytes hashed here (a file
+            # replaced and put back while preparing cannot leave its middle version in the run -- Codex U3e-2 r2 P2-1)
+            def snapshot(path, name):
+                try:
+                    data_ = Path(path).read_bytes()
+                except OSError as err:
+                    raise AssemblyRefused([f"config_unreadable:{name}:{type(err).__name__}"]) from err
+                hashes_at_start[name] = hashlib.sha256(data_).hexdigest()
+                copy = Path(snap_) / f"{name}{Path(path).suffix}"
+                copy.write_bytes(data_)
+                return copy
+
+            s10a_p, settings_p, watch_p = (snapshot(paths.s10a, "s10a"), snapshot(paths.settings, "settings"),
+                                           snapshot(paths.watch, "watch"))
+        try:
+            cfg = ra.load_s10a(s10a_p)
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
+            raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
+        data = read_settings(settings_p)
+        vehicle, kin = read_vehicle(paths.vehicle)
+        watches = asm.build_watches(data, watch_p, vehicle.wheel_radius_m)
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
     replay = None
@@ -481,12 +500,14 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
             real_lidar = lidar_config_from(yaml.safe_load(lidar_bytes.decode("utf-8")))
             layer_cfg = real_layer_cfg(layer_cfg, real_lidar)
         budget = bound_yaml(paths.budget, "budget")
+        if site is not None:
+            from forklift_core.live.real_preconditions import budget_reasons
+
+            bad_ = budget_reasons(budget)  # the judgement's own rule, on the bytes parsed (Codex U3e-2 rounds 1-2)
+            if bad_:
+                raise AssemblyRefused(bad_)
         budget_s = float(budget["latency_budget"]["seconds"])
         overdue_end_s = float(budget["overdue_end"]["seconds"])
-        if site is not None and not (math.isfinite(budget_s) and budget_s > 0.0
-                                     and math.isfinite(overdue_end_s) and overdue_end_s > 0.0):
-            # a .nan or non-positive limit would never end a sustained overdue (Codex U3e-2 P2-3)
-            raise AssemblyRefused(["precondition:C13:budget:values_invalid"])
     except AssemblyRefused:
         raise
     except Exception as err:  # noqa: BLE001 -- a malformed model or layer file is structural

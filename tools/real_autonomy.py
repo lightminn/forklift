@@ -1058,7 +1058,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-assemble", action="store_true")
     mode.add_argument("--run", action="store_true",
-                      help="the wall-clock run: --hil (model), --replay, or --client real on the operating board")
+                      help="the wall-clock run: --hil (the model; --replay replays a record on it) or --client real "
+                           "on the operating board")
     ap.add_argument("--hil", action="store_true", help="run on the MCU model behind this process's own pty")
     ap.add_argument("--hil-model", default=None, help="the mcu_model executable")
     ap.add_argument("--hil-model-arg", action="append", default=None,

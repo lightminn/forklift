@@ -336,24 +336,31 @@ def test_a_rotated_grid_origin_is_a_structured_refusal(tmp_path):
     assert why.startswith("precondition:site_bundle:bundle_grid:")
 
 
-@pytest.mark.parametrize("name", ["layer", "budget"])
-def test_the_operating_layer_and_budget_are_parsed_from_the_bytes_hashed_at_the_start(tmp_path, monkeypatch, name):
-    """Codex U3e-2 P2-1: a layer or budget file replaced and put back while preparing (A hashed at the start, B parsed,
-    A at the end) refuses the run instead of leaving B's stop model in the prep."""
+@pytest.mark.parametrize("name", ["layer", "budget", "s10a", "settings", "watch"])
+def test_the_operating_files_are_parsed_from_the_bytes_hashed(tmp_path, monkeypatch, name):
+    """Codex U3e-2 rounds 1-2: a file replaced and put back while preparing -- the hashes at both ends see A, the one
+    read the run parses sees B -- refuses the run instead of leaving B's values in the prep (a check of the parse
+    itself: the hash function is left alone)."""
     paths, _ = make_site(tmp_path)
-    real_sha = rr._sha  # noqa: SLF001
-    target = str(getattr(paths, name))
-    calls = {"n": 0}
+    target = Path(getattr(paths, name)).resolve()
+    real_read = Path.read_bytes
+    seen = {"n": 0}
 
-    def fake(path):
-        h = real_sha(path)
-        if str(path) == target:
-            calls["n"] += 1
-            return "0" * 64 if calls["n"] == 1 else h
-        return h
+    def file_sha(path):  # the hashes at both ends: the file as it is (A)
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
 
-    monkeypatch.setattr(rr, "_sha", fake)
-    assert f"files_changed_while_preparing:{name}" in refused(paths)
+    def read_bytes(self):  # every read for parsing: B
+        data = real_read(self)
+        if Path(self).resolve() == target:
+            seen["n"] += 1
+            return data + b"\n# replaced while preparing\n"
+        return data
+
+    monkeypatch.setattr(rr, "_sha", file_sha)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    reasons = refused(paths)
+    assert seen["n"] >= 1 and f"files_changed_while_preparing:{name}" in reasons, reasons
 
 
 def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
@@ -367,4 +374,4 @@ def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
     b["overdue_end"]["seconds"] = float("nan")
     budget = tmp_path / "budget_nan.yaml"  # a copy: the repository's own file is never written
     budget.write_text(yaml.safe_dump(b))
-    assert "precondition:C13:budget:values_invalid" in refused(dataclasses.replace(paths, budget=str(budget)))
+    assert "precondition:C13:budget:overdue_end:invalid" in refused(dataclasses.replace(paths, budget=str(budget)))
