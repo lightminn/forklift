@@ -219,7 +219,8 @@ export function renderBench(m, { rejectText }) {
   document.getElementById("bn-start").disabled = !(lease && st?.ready && !run && !m.bench.runPending);
   document.getElementById("bn-disarm").disabled = !lease;
   const latched = ["FAULT", "ESTOP"].includes(st?.board?.mode);
-  document.getElementById("bn-clear").disabled = !(lease && latched && !run); // only a latched board is cleared
+  // only a latched board is cleared, one attempt at a time (its own result closes it: round 3 P2-2)
+  document.getElementById("bn-clear").disabled = !(lease && latched && !run && !m.bench.clearPending && !st?.clear);
   // the last reply, with the large run's exact phrase when the server named it
   const replies = m.bench.replies;
   const last = replies.at(-1);
@@ -227,9 +228,10 @@ export function renderBench(m, { rejectText }) {
   const hint = document.getElementById("bn-large-hint");
   hint.hidden = !phrase;
   if (phrase) hint.textContent = `그대로 입력: ${phrase}`;
-  if (last && replies.length !== mounted.replies) {
-    // only a new answer is written over the line (a local input message stays until then: P3)
-    mounted.replies = replies.length;
+  if (last && m.bench.replySeq !== mounted.replies) {
+    // only a new answer is written over the line (a local input message stays until then; counted, not the list's
+    // length, which stops growing at 20: round 3 P2-3)
+    mounted.replies = m.bench.replySeq;
     const text = last.t === "ack" ? T.replyOk
       : `${T.replyRefused} · ${rejectText(last.reason)}${last.detail ? ` (${benchDetailText(last.detail)})` : ""}`;
     setText("bn-msg", `${last.kind}: ${text}`);
@@ -276,6 +278,7 @@ function drawGraph(m, axis) {
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = col("panel", "#111");
   ctx.fillRect(0, 0, W, H);
+  m.bench.graph.expire(performance.now()); // the window by the clock, not only by arriving samples (P2-4)
   const ser = m.bench.graph.series(axis);
   if (ser.length < 2) return;
   const t0 = ser[0].t, t1 = ser.at(-1).t;

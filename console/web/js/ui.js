@@ -205,6 +205,13 @@ export function render(m) {
     $("mission-gate").textContent = ""; // an old session's recovery hint (Codex U30 review round 2 P3)
     $("reloc-banner").hidden = true; // B-P2c: an old session's relocalization does not stay either
     $("pose-banner").hidden = true; // nor an old session's unconfirmed position (Codex 2c P3)
+    const bench = m.bench?.visible ? m.session.benchState : null;
+    if (bench) {
+      // the bench console has no vehicle state: its own stream says the mode and the board's
+      $("mode").dataset.m = bench.mode ?? "NONE";
+      $("mode-code").textContent = bench.mode ?? "—";
+      $("mode-ko").textContent = `벤치 · 보드 ${bench.board?.mode ?? "—"}`;
+    }
     renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;
   }

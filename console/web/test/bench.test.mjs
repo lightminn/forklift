@@ -328,3 +328,86 @@ test("a bench session's health reads the bench stream, never 'no state since wel
   const vehicle = healthRows({ ...base, bench: null });
   assert.equal(vehicle.find((r) => r.key === "state").level, "crit"); // the vehicle profile as before
 });
+
+test("a start stays open after its ACK until its own result: a second press in between is not sent (round 3 P2-1)", async () => {
+  const { s, b, sent, welcome } = rig();
+  welcome(BENCH);
+  const a = b.run(FORM).sent;
+  s.onMessage({ t: "ack", of: "bench_run", request_id: a });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.run(FORM).sent, null); // the stream has not shown the run yet, the start is still this tab's
+  s.onMessage({ t: "bench_result", request_id: a, closed: "ended" });
+  assert.equal(b.result.request_id, a);
+  assert.ok(b.run(FORM).sent); // after its result a new start goes
+  assert.equal(sent.filter((m) => m.t === "bench_run").length, 2);
+});
+
+test("a refused start closes at once", async () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  const a = b.run(FORM).sent;
+  s.onMessage({ t: "reject", of: "bench_run", request_id: a, reason: "bench_refused", detail: "x" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.runPending, false);
+  assert.ok(b.run(FORM).sent);
+});
+
+test("one clear at a time, its own end shown, an earlier success not left on screen (round 3 P2-2)", () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  const first = b.clearFaults("one").sent;
+  s.onMessage({ t: "clear_result", request_id: first, result: "cleared", before: { mode: "FAULT", fault_flags: [] },
+    after: { mode: "DISARMED", fault_flags: [] } });
+  assert.equal(clearView(b.clear).ok, true);
+  const second = b.clearFaults("two").sent;
+  assert.equal(b.clear, null); // the earlier success goes with the new attempt
+  assert.deepEqual(b.clearFaults("three").problems, ["busy"]); // a press while it runs is not sent
+  s.onMessage({ t: "clear_result", request_id: second, result: "refused", why: "the link changed",
+    before: { mode: "FAULT", fault_flags: ["OVERCURRENT_M"] }, after: null });
+  const v = clearView(b.clear);
+  assert.equal(v.ok, false);
+  assert.equal(v.after.faults, "확인 불가"); // the board lost: unknown, not none
+});
+
+test("the answers are counted past the kept twenty (round 3 P2-3)", async () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  for (let k = 0; k < 25; k += 1) {
+    const id = b.disarm();
+    s.onMessage({ t: "reject", of: "bench_disarm", request_id: id, reason: "board_not_ready", detail: `n${k}` });
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.equal(b.replies.length, 20);
+  assert.equal(b.replySeq, 25);
+  assert.equal(b.replies.at(-1).detail, "n24");
+});
+
+test("the graph empties by the clock and breaks where the board went away (round 3 P2-4)", () => {
+  const g = new Graph(10000);
+  const board = (c) => ({ board: { boot_id: 1, duty_e4: [1000, 0, 0, 0], current_ma: [0, 0, 0, 0], wheel_count: [c, 0] } });
+  g.push(0, board(0));
+  g.push(900, board(10));
+  g.push(12000, { board: null }); // the board lost, the socket alive
+  assert.ok(g.samples.every((s) => s.t >= 2000)); // the old drive is out of the window
+  g.push(12100, board(50));
+  g.push(12200, board(60));
+  assert.deepEqual(g.series("L").map((p) => p.value), [0, 10]); // nothing older left: no gap to mark
+  g.push(12300, { board: null }); // a gap inside the window
+  g.push(12400, board(80));
+  g.push(12500, board(85));
+  assert.deepEqual(g.series("L").map((p) => p.value), [0, 10, null, 0, 5]); // broken, counted again after it
+  g.expire(30000);
+  assert.equal(g.samples.length, 0);
+});
+
+test("main.js wires the bench screen: welcome, disconnect, render and the shared STOP (round 3 P3-4)", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../js/main.js", import.meta.url), "utf8");
+  const welcomeBranch = src.slice(src.indexOf('if (msg.t === "welcome") {'), src.indexOf('} else if (msg.t === "tick")'));
+  assert.match(welcomeBranch, /m\.bench\.onWelcome\(msg\);\s*syncBench\(m, benchHooks\(\)\);/);
+  const close = src.slice(src.indexOf('ws.addEventListener("close"'), src.indexOf("let media = null"));
+  assert.match(close, /m\.bench\.onDisconnect\(\);\s*\/\/[^\n]*\n\s*syncBench\(m, benchHooks\(\)\);/);
+  assert.match(src, /m\.session\.subscribe\(\(msg\) => \{\s*m\.bench\.onMessage\(msg\);/);
+  assert.match(src, /renderBench\(m, \{ rejectText \}\)/);
+  assert.match(src, /const benchHooks = \(\) => \(\{ showView, pressStop, rejectText \}\);/);
+});

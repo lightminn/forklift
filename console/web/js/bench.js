@@ -118,7 +118,8 @@ export function wheelDelta(newer, older) {
 // A clear_result's rows (6.5: what to check before VM goes back on).
 export function clearView(c) {
   if (!c) return null;
-  const faults = (v) => (v?.fault_flags?.length ? v.fault_flags.join(", ") : "없음");
+  // no after (the board was lost): unknown, never "none" (round 3 P2-2)
+  const faults = (v) => (!v ? "확인 불가" : v.fault_flags?.length ? v.fault_flags.join(", ") : "없음");
   return { result: c.result ?? null, why: c.why ?? null, cause: c.cause ?? null,
     before: { mode: c.before?.mode ?? null, faults: faults(c.before), driver: (c.before?.driver_status ?? []).join(" ") },
     after: { mode: c.after?.mode ?? null, faults: faults(c.after), driver: (c.after?.driver_status ?? []).join(" ") },
@@ -134,10 +135,19 @@ export class Graph {
 
   push(atMs, state) {
     const b = state?.board;
-    if (!b) return;
+    this.expire(atMs);
+    if (!b) {
+      // the board lost while the socket lives: a gap that breaks the lines (round 3 P2-4)
+      if (this.samples.length && !this.samples.at(-1).gap) this.samples.push({ t: atMs, gap: true });
+      return;
+    }
     this.samples.push({ t: atMs, boot: b.boot_id ?? null, duty: [...(b.duty_e4 ?? [0, 0, 0, 0])],
       current: [...(b.current_ma ?? [0, 0, 0, 0])], steer: b.steering_rad ?? null, lift: b.lift_m ?? null,
       wheel: [...(b.wheel_count ?? [0, 0])] });
+  }
+
+  // drop what is older than the window (called with each sample and by the screen with its clock)
+  expire(atMs) {
     const cut = atMs - this.windowMs;
     while (this.samples.length && this.samples[0].t < cut) this.samples.shift();
   }
@@ -155,19 +165,23 @@ export class Graph {
     let boot;
     let total = 0;
     const counts = this.samples.map((s) => {
+      if (s.gap) {
+        prev = null; // a board gap: the next sample starts again
+        return null;
+      }
       const c = s.wheel[k];
       if (prev === null || s.boot !== boot) {
-        const first = prev === null;
+        const reboot = prev !== null; // a boot change without a gap: this sample breaks the line
         prev = c;
         boot = s.boot;
         total = 0;
-        return first ? 0 : null;
+        return reboot ? null : 0;
       }
       total += wheelDelta(c, prev);
       prev = c;
       return total;
     });
-    return this.samples.map((s, i) => ({
+    return this.samples.map((s, i) => (s.gap ? { t: s.t, value: null, duty: null, current: [null, null, null, null] } : {
       t: s.t,
       value: axis === "M" ? s.steer : axis === "H" ? s.lift : counts[i],
       duty: s.duty[AXES.indexOf(axis)] / 1e4,
@@ -188,6 +202,9 @@ export function createBenchController({ session, now = () => Date.now() }) {
   let stateAt = null; // when the latest bench_state of this connection came (the health row's stream age)
   const pending = new Map(); // request_id -> kind
   const replies = []; // {kind, t, reason, detail, at}
+  let replySeq = 0; // every answer counted (the screen redraws on a new one even when the list is full)
+  let runOpen = false; // this tab's start, from its send to its result, a refusal or a disconnect
+  let clearOpen = false; // this tab's clear, likewise
   const graph = new Graph();
 
   function track(kind, promise, requestId) {
@@ -197,6 +214,9 @@ export function createBenchController({ session, now = () => Date.now() }) {
       pending.delete(requestId);
       // accepted: its own result is the next one -- unless that result already came (a late ACK of a resend)
       if (kind === "bench_run" && r?.t === "ack" && result?.request_id !== requestId) result = null;
+      if (r?.t !== "ack" && kind === "bench_run" && requestId === runId) runOpen = false; // refused: no run
+      if (r?.t !== "ack" && kind === "clear_faults" && requestId === clearId) clearOpen = false;
+      replySeq += 1;
       replies.push({ kind, t: r?.t ?? "none", reason: r?.reason ?? null, detail: r?.detail ?? null, at: now() });
       while (replies.length > 20) replies.shift();
     });
@@ -205,8 +225,15 @@ export function createBenchController({ session, now = () => Date.now() }) {
   function send(kind, fields) {
     if (!visible || !BENCH_REQUESTS.has(kind)) return null;
     const id = `bench-${kind}-${Math.random().toString(16).slice(2)}-${now()}`;
-    if (kind === "bench_run") runId = id;
-    if (kind === "clear_faults") clearId = id;
+    if (kind === "bench_run") {
+      runId = id;
+      runOpen = true;
+    }
+    if (kind === "clear_faults") {
+      clearId = id;
+      clearOpen = true;
+      clear = null; // a new attempt: an earlier clear's end is not shown as this one's
+    }
     track(kind, session.request(kind, fields, { requestId: id }), id);
     return id;
   }
@@ -222,6 +249,8 @@ export function createBenchController({ session, now = () => Date.now() }) {
         clear = null;
         runId = null;
         clearId = null;
+        runOpen = false;
+        clearOpen = false;
         stateAt = null;
         replies.length = 0; // another connection's answers are not this screen's
         graph.clear();
@@ -234,6 +263,8 @@ export function createBenchController({ session, now = () => Date.now() }) {
       visible = false;
       state = null;
       stateAt = null;
+      runOpen = false;
+      clearOpen = false;
       replies.length = 0;
       graph.clear();
     },
@@ -245,15 +276,21 @@ export function createBenchController({ session, now = () => Date.now() }) {
         graph.push(now(), msg);
         if (msg.last_result) previous = msg.last_result;
       } else if (msg.t === "bench_result") {
-        if (msg.request_id === runId) result = msg; // the run this tab asked for: ACK is acceptance, this is its end
+        if (msg.request_id === runId) {
+          result = msg; // the run this tab asked for: ACK is acceptance, this is its end
+          runOpen = false;
+        }
         previous = msg;
       } else if (msg.t === "clear_result") {
-        if (msg.request_id === clearId) clear = msg; // this tab's clear: its end (ACK was only acceptance)
+        if (msg.request_id === clearId) {
+          clear = msg; // this tab's clear: its end (ACK was only acceptance)
+          clearOpen = false;
+        }
       }
     },
     run(form) {
       // one start at a time: not while one is on its way or a run is going (round 2 P2-2)
-      if ([...pending.values()].includes("bench_run") || state?.run) return { sent: null, problems: ["busy"] };
+      if (runOpen || state?.run) return { sent: null, problems: ["busy"] }; // until its own result (round 3 P2-1)
       const { fields, problems } = runFields(form);
       if (problems.length) return { sent: null, problems };
       return { sent: send("bench_run", fields), problems };
@@ -263,6 +300,7 @@ export function createBenchController({ session, now = () => Date.now() }) {
     clearFaults(cause) {
       const c = String(cause ?? "").trim();
       if (!c) return { sent: null, problems: ["cause"] };
+      if (clearOpen || state?.clear) return { sent: null, problems: ["busy"] }; // one clear at a time (P2-2)
       return { sent: send("clear_faults", { cause: c }), problems: [] };
     },
     get visible() {
@@ -281,7 +319,13 @@ export function createBenchController({ session, now = () => Date.now() }) {
       return stateAt;
     },
     get runPending() {
-      return [...pending.values()].includes("bench_run");
+      return runOpen;
+    },
+    get clearPending() {
+      return clearOpen;
+    },
+    get replySeq() {
+      return replySeq;
     },
     get clear() {
       return clear;
