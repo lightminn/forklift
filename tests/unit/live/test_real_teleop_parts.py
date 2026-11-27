@@ -121,11 +121,15 @@ def core_rule(limit_fn, speed, direction, cap, commanded):
 
     stub = SimpleNamespace(_real_vehicle=lambda: True, _commanded_now=lambda: commanded)
     stub._possible_motion = lambda sp: MissionCore._possible_motion(stub, sp)  # 5d: the motion rule apart
+    stub._motion_split = lambda sp, ok=False: MissionCore._motion_split(stub, sp, ok)  # U3e-1b: the width apart
+    stub._possible_covered = MissionCore._possible_covered
     return MissionCore._direction_limits(stub, limit_fn, speed, direction, cap)
 
 
 def limits(fwd, back):
-    return lambda d, v: ((fwd if d > 0 else back), "ok" if (fwd if d > 0 else back) >= v else f"blocked_{d}")
+    # ``path_end_target`` (U3e-1b, the core's standing width on the stop arc): one answer either way, so the core's
+    # split and the bridge's single rule agree
+    return lambda d, v, **_kw: ((fwd if d > 0 else back), "ok" if (fwd if d > 0 else back) >= v else f"blocked_{d}")
 
 
 CASES = [

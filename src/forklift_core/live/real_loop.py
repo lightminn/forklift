@@ -1824,6 +1824,9 @@ class RealLoop:
         reading = encoder_speed(samples_, now_ns, self.params, self.steering_ok, self._speed_delay_s())
         self.speed = reading.speed
         still = self._still(now_ns)
+        # U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): the measured stand -- outputs settled, counts still --
+        # for the core's possible-motion check (a standing reading's error width judged on the stop arc in D5 stages)
+        core.state["measured_stand"] = self.stand_since_ns is not None
         if not still and self.operator_start is not None:
             self.operator_start.void("moved")  # 5c-1: a check given before the truck moved does not count
         if self.operator_start is not None and self._d5_confirm_required() and self._d5_disturbed():

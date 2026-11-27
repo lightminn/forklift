@@ -112,6 +112,35 @@ def test_a_short_path_end_still_limits_the_speed():
     assert speed <= max(STOP.speed_for(0.01 + STOP.margin_m), CONFIG.end_creep_mps) + 1e-12
 
 
+def path_end(perm, t, target, cap=0.05):
+    return perm.allowed_speed(t, {"low": t}, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1,
+                              footprint=FOOT, own_footprint=BODY, speed_cap_mps=cap, path_end_target=target)
+
+
+def test_without_the_path_end_target_a_clear_end_gives_the_stop_arc():
+    """U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): the path end is a target to slow down for; with
+    ``path_end_target=False`` a path verified to its end, unblocked, gives the stop arc's limit alone."""
+    perm = DrivePermission(CONFIG)
+    perm.update(snapshot(), np.array([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]), FOOT, BODY, current_pose=(0, 0, 0))
+    target, _ = path_end(perm, 0.05, True)
+    arc, why = path_end(perm, 0.05, False)
+    assert target <= max(STOP.speed_for(0.01 + STOP.margin_m), CONFIG.end_creep_mps) + 1e-12  # as before
+    assert arc > target and why == "ok"
+    assert allowed(perm, 0.05, cap=0.05) == path_end(perm, 0.05, True)  # the default is the target
+
+
+def test_without_the_path_end_target_a_blocked_or_unfinished_path_is_unchanged():
+    perm = DrivePermission(CONFIG)
+    snap = snapshot()
+    set_cell(snap, 1.40, 0.0, OCCUPIED)  # in the path's sweep: blocked short of its end
+    perm.update(snap, STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))
+    assert perm.path_check.blocked == "occupied"
+    assert path_end(perm, 0.05, False) == path_end(perm, 0.05, True)
+    perm.update(snapshot(), STRAIGHT, FOOT, BODY, current_pose=(0, 0, 0))  # 6 m: the walk ends before the path
+    assert not perm.path_check.reached_end
+    assert path_end(perm, 0.05, False, cap=0.6) == path_end(perm, 0.05, True, cap=0.6)
+
+
 def test_unknown_ahead_blocks_but_the_cells_under_the_body_do_not():
     perm = DrivePermission(CONFIG)
     snap = snapshot()

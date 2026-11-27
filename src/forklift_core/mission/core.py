@@ -1656,12 +1656,18 @@ class MissionCore:
         # simulation's call is as recorded (no new argument)
         ev_kw_ = {"evidence_s": float(t) + self.WRITE_MARGIN_S} if self._real_vehicle() else {}
 
-        def layer_fn_(d_, cap_):
+        def layer_fn_(d_, cap_, **target_):
+            # ``path_end_target`` only when a real-only possible-motion check gives it (U3e-1b): the simulation's call
+            # keeps its arguments as recorded
             return obstacle["layer"].limit(t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-                                           direction=d_, loaded=loaded, cap_mps=cap_, **ev_kw_)
+                                           direction=d_, loaded=loaded, cap_mps=cap_, **ev_kw_, **target_)
 
+        # U3e-1b (plan 3): a measured stand's error width judged on the stop arc in the D5 stages only (approach and
+        # insert with a pocket check) -- elsewhere the layer's 0 may not reach the output (transport is not acting)
+        stand_arc_ = (self._real_vehicle() and bool(options.pocket_check) and ms.phase in ("approach", "insert")
+                      and pocket.get("check") is not None)
         allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(
-            layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps))
+            layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps), stand_arc_)
         if direction is None:
             direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
@@ -5932,9 +5938,9 @@ class MissionCore:
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
-        allowed, why, motion_hold_, _, _ = self._direction_limits(lambda d_, cap_: obstacle["layer"].limit(
+        allowed, why, motion_hold_, _, _ = self._direction_limits(lambda d_, cap_, **target_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-            direction=d_, loaded=loaded, cap_mps=cap_,
+            direction=d_, loaded=loaded, cap_mps=cap_, **target_,
         ), speed_, None, speed_.bound_mps)
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
@@ -6781,7 +6787,7 @@ class MissionCore:
         in the simulation, so its caps stay as before."""
         return float(self.state.get("command_speed", 0.0)) if self._real_vehicle() else 0.0
 
-    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float):
+    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float, stand_on_arc: bool = False):
         """The layer's limit ``limit_fn(direction, cap)`` over the motion directions a safety check covers (4d-1).
         Returns ``(allowed, why, hold, driving, unsure)``.
 
@@ -6814,11 +6820,12 @@ class MissionCore:
             # what the loop's outputs may still do the asked way is beyond what the layer allows that way (a slowing
             # request does not slow an unconfirmed faster output): the wheels hold (Codex 4c impl P1-9)
             allowed, why, hold = 0.0, (why if why != "ok" else "residual_over_allowed"), True
-        for d_, v_ in motion.items():
+        stand, rest = self._motion_split(speed, stand_on_arc)  # U3e-1b: only the pocket stages ask it (plan 3)
+        for d_ in motion:
             if d_ == direction:
                 continue  # the asked direction: the permission's own limit
-            a_, w_ = limit_fn(d_, v_)
-            if a_ < v_:
+            covered, w_ = self._possible_covered(limit_fn, d_, stand, rest)  # U3e-1b: a standing width on the arc
+            if not covered:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
         if hold and isinstance(getattr(self, "state", None), dict):
             self.state["motion_hold"] = why  # the real loop's wait frame: wheels 0 and the old queue dropped (P1-4)
@@ -6846,6 +6853,47 @@ class MissionCore:
             motion[d_] = max(motion.get(d_, 0.0), v_)
         return motion, residual
 
+    def _motion_split(self, speed: SafetySpeed, stand_ok: bool) -> tuple[dict, dict]:
+        """``_possible_motion`` in two parts (U3e-1b, docs/plans/2026-11-27-real-path-end-hold.md 3): ``stand`` -- the
+        reading's bound in each direction when the truck **measurably stands** (``stand_ok``, the real loop's measured
+        stand -- every earlier output settled and the wheel counts still over a window, ``state["measured_stand"]`` --
+        and a valid two-direction reading: what is left is the model's error width, not motion); ``rest`` --
+        everything else: the command in effect, the loop's outputs that may still act, and any other reading's bound
+        (a two-direction reading while the counts move is motion: Codex plan round 2 P1). ``max(stand[d], rest[d])``
+        is ``_possible_motion``'s ``motion[d]``."""
+        stand, rest = {}, {}
+        state_ = getattr(self, "state", None) or {}
+        standing = (bool(stand_ok) and state_.get("measured_stand") is True and bool(speed.valid)
+                    and len(speed.directions) > 1)
+        if speed.bound_mps > 0.0:
+            for d_ in speed.directions:
+                (stand if standing else rest)[d_] = speed.bound_mps
+        commanded = self._commanded_now()
+        if commanded != 0.0:
+            c_ = 1 if commanded > 0 else -1
+            rest[c_] = max(rest.get(c_, 0.0), abs(commanded))
+        _, residual = self._possible_motion(speed)
+        for d_, v_ in residual.items():
+            rest[d_] = max(rest.get(d_, 0.0), v_)
+        return stand, rest
+
+    @staticmethod
+    def _possible_covered(limit_fn, d_, stand: dict, rest: dict) -> tuple[bool, str]:
+        """Whether the layer covers the possible motion in direction ``d_`` (U3e-1b plan 3): ``rest`` against the
+        layer's answer as before (the path-end deceleration included -- a command, an output or a moving truck is held
+        to it); a standing width beyond it against the stop arc alone (``path_end_target=False``: the path end is a
+        target to slow down for, not stopping space). Returns (covered, the first failing answer's reason)."""
+        r_, s_ = rest.get(d_, 0.0), stand.get(d_, 0.0)
+        if r_ > 0.0:
+            a_, w_ = limit_fn(d_, r_)
+            if a_ < r_:
+                return False, w_
+        if s_ > r_:
+            a_, w_ = limit_fn(d_, s_, path_end_target=False)
+            if a_ < s_:
+                return False, w_
+        return True, "ok"
+
     # the latest instant a DRIVE decided this tick may be written (the real loop's SLOW_TICK_S + EVIDENCE_READ_MAX_S;
     # a test pins the sum): the real truck's permission asks the evidence there (real safety wiring design 7.1 6)
     WRITE_MARGIN_S = 0.035
@@ -6871,8 +6919,10 @@ class MissionCore:
             if a_ < poss and hold_why is None:
                 hold_why = w_ if w_ != "ok" else ("residual_over_allowed" if d_ == req else "pocket_other_direction")
         if hold_why is None and req is not None and motion.get(req, 0.0) > 0.0:
-            la_, lw_ = layer_fn(req, motion[req])  # outside the region: the asked direction's possible motion too
-            if la_ < motion[req]:
+            # outside the region: the asked direction's possible motion too (a standing width on the stop arc, U3e-1b)
+            stand, rest = self._motion_split(speed_, True)  # the pocket stages only call this query
+            covered, lw_ = self._possible_covered(layer_fn, req, stand, rest)
+            if not covered:
                 hold_why = lw_ if lw_ != "ok" else "residual_over_allowed"
         if hold_why is not None:
             self.state["motion_hold"] = hold_why

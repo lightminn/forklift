@@ -305,7 +305,8 @@ def test_a_layer_answer_below_the_possible_speed_holds_under_the_bypass():
     from test_core_truth_split import _Layer, permission_core
 
     class Low(_Layer):
-        def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None):
+        def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None,
+                  path_end_target=True):  # U3e-1b: a low answer on the stop arc too -- still a hold
             self.calls.append((direction, cap_mps, evidence_s))
             return (0.01, "ok") if direction > 0 else (0.5, "ok")  # 0 < allowed < the possible 0.05 forward
 
