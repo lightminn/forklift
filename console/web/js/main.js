@@ -18,6 +18,8 @@ import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
 import { createSendGapMeter, pageReport } from "./sendgap.js";
 import { bindRealPanel, renderRealPanel } from "./realpanel_dom.js";
+import { createBenchController } from "./bench.js";
+import { renderBench, syncBench } from "./bench_dom.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 // R2-3 (b): a teleop is good for 0.30 s from the tick it echoes -- about 0.2 s from this page's send. Past that the MCU
@@ -187,8 +189,15 @@ try {
   /* storage unavailable */
 }
 
+// the bench console (docs/plans/2026-11-27-bench-console.md 4.1): its screen exists only on a bench welcome
+m.bench = createBenchController({ session: m.session, now: () => performance.now() });
+const benchHooks = () => ({ showView, pressStop, rejectText });
+
 m.session.subscribe((msg) => {
+  m.bench.onMessage(msg);
   if (msg.t === "welcome") {
+    m.bench.onWelcome(msg);
+    syncBench(m, benchHooks());
     if (msg.session_epoch !== m.mediaEpoch) {
       // a new vehicle session: nothing of the old one stays on screen
       m.grid = null;
@@ -329,6 +338,8 @@ function connectControl() {
     m.link.up = false;
     m.confirm.cancel(); // plan D13: a confirm belongs to the connection it was armed on
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
+    m.bench.onDisconnect(); // its requests in flight are dropped, never resent; its screen goes until a bench welcome
+    syncBench(m, benchHooks());
     m.queue.onDisconnect(); // mission queue plan D6: stopped, a running mission goes on
     m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
     m.welcomeAt = null;
@@ -1067,6 +1078,7 @@ setInterval(() => {
 setInterval(() => {
   render(m);
   renderRealPanel(m, clientId); // 5c-1b: the real truck's operator panel
+  renderBench(m, { rejectText }); // the bench screen, when there is one
   if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
   refreshWizard();
   const stale = staleness({

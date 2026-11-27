@@ -1,0 +1,217 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createSession } from "../js/protocol.js";
+import { Graph, advice, bypassChips, createBenchController, fieldState, isBenchWelcome, largePhrase, resultView,
+  runFields } from "../js/bench.js";
+
+// docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
+
+const BENCH = { t: "welcome", api: "console/1", session_epoch: 9, session: "bench", backend: "real",
+  product: "forklift-mcu commission OPEN v0 rec=0 lim=lr1 bench5", capabilities: { control: true, bench: true },
+  request_token: 77 };
+const REAL = { t: "welcome", api: "console/1", session_epoch: 9, backend: "real", capabilities: { control: true },
+  request_token: 78 };
+const ISAAC = { t: "welcome", api: "console/1", session_epoch: 11, backend: "isaac", capabilities: { control: true } };
+const HIL = { t: "welcome", api: "console/1", session_epoch: 12, backend: "real", capabilities: { control: true },
+  request_token: 79 };
+
+function rig() {
+  const sent = [];
+  let t = 0, n = 0;
+  const s = createSession({ clientId: "tab", send: (m) => sent.push(m), now: () => t, newId: () => `id${++n}` });
+  const b = createBenchController({ session: s, now: () => t });
+  s.subscribe((msg) => b.onMessage(msg));
+  const welcome = (w) => { s.onMessage(w); b.onWelcome(w); };
+  const disconnect = () => { s.onDisconnect(); b.onDisconnect(); };
+  return { s, b, sent, welcome, disconnect, tick: (dt) => { t += dt; } };
+}
+
+const FORM = { axis: "L", duty: "0.1", seconds: "0.6", power_switch_in_hand: true };
+
+test("only a bench welcome shows the bench screen", () => {
+  assert.equal(isBenchWelcome(BENCH), true);
+  for (const w of [REAL, ISAAC, HIL, null, {}]) assert.equal(isBenchWelcome(w), false);
+});
+
+test("welcome before -> bench -> disconnect -> REAL / Isaac / HIL: the screen and its requests follow (plan 4 (a))", () => {
+  const { b, sent, welcome, disconnect } = rig();
+  assert.equal(b.visible, false);
+  assert.equal(b.run(FORM).sent, null); // before any welcome nothing is sent
+  welcome(BENCH);
+  assert.equal(b.visible, true);
+  disconnect();
+  assert.equal(b.visible, false);
+  for (const w of [REAL, ISAAC, HIL]) {
+    const before = sent.length;
+    welcome(w);
+    assert.equal(b.visible, false);
+    assert.equal(b.run(FORM).sent, null);
+    assert.equal(b.disarm(), null);
+    assert.equal(b.clearFaults("x").sent, null);
+    assert.ok(!sent.slice(before).some((m) => String(m.t).startsWith("bench_") || m.t === "clear_faults"));
+    disconnect();
+  }
+});
+
+test("a bench request lost with its connection is never resent; the shared STOP is (plan 4 (a''))", () => {
+  for (const next of [BENCH, { ...BENCH, session_epoch: 10, request_token: 90 }]) {
+    const { s, b, sent, welcome, disconnect, tick } = rig();
+    welcome(BENCH);
+    s.onMessage({ t: "ack", request_id: s.request("lease_request") && sent.at(-1).request_id, lease_id: "L1" });
+    const id = b.run(FORM).sent;
+    assert.ok(id && sent.at(-1).t === "bench_run" && sent.at(-1).request_id === id);
+    const clr = b.clearFaults("cause").sent;
+    s.stop("console");
+    const stopId = sent.at(-1).request_id;
+    disconnect(); // no ACK came for any of them
+    assert.deepEqual(b.pending, []);
+    welcome(next);
+    tick(5000);
+    s.pump();
+    const after = sent.filter((m) => m.request_id === id || m.request_id === clr);
+    assert.equal(after.length, 2); // the first sends only: not one resend after the disconnect
+    assert.ok(sent.filter((m) => m.request_id === stopId).length >= 2); // STOP keeps being sent until answered
+  }
+});
+
+test("an answer to a forgotten bench request is not this connection's reply", async () => {
+  const { s, b, sent, welcome, disconnect } = rig();
+  welcome(BENCH);
+  const id = b.run(FORM).sent;
+  disconnect();
+  welcome(BENCH);
+  s.onMessage({ t: "ack", of: "bench_run", request_id: id });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(b.replies, []);
+  assert.ok(sent.length > 0);
+});
+
+test("replies are kept with their reason and detail", async () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  const id = b.run(FORM).sent;
+  s.onMessage({ t: "reject", of: "bench_run", request_id: id, reason: "bench_refused",
+    detail: "large run: large_confirm must be exactly 'duty 0.5, 0.6 s, wheels lifted and fixed'" });
+  await new Promise((r) => setImmediate(r));
+  const r = b.replies.at(-1);
+  assert.equal(r.reason, "bench_refused");
+  assert.equal(largePhrase(r.detail), "duty 0.5, 0.6 s, wheels lifted and fixed");
+  assert.equal(largePhrase("something else"), null);
+});
+
+test("fields that do not fit the axis or the source are closed; hold, stop, MT and kth_invalid wait for B2/A2", () => {
+  const l = fieldState({ axis: "L" });
+  assert.deepEqual(l.sources, ["none"]);
+  assert.equal(l.source, "none");
+  assert.equal(l.windowOpen, false);
+  assert.equal(l.bypassOpen.steer_range, false);
+  const m = fieldState({ axis: "M" });
+  assert.deepEqual(m.sources, ["kth", "none"]);
+  assert.equal(m.source, "kth");
+  assert.equal(m.windowOpen, true);
+  assert.equal(m.bypassOpen.steer_range, true);
+  assert.equal(m.bypassOpen.lift_range, false);
+  const off = fieldState({ axis: "M", bypass: ["steer_range"] });
+  assert.equal(off.windowOpen, false);
+  assert.equal(off.rangeOff, true);
+  for (const f of [l, m]) {
+    assert.equal(f.holdOpen, false);
+    assert.equal(f.stopOpen, false);
+    assert.equal(f.mtOpen, false);
+    assert.equal(f.kthInvalidOpen, false);
+  }
+});
+
+test("the run's fields: booleans only from the boxes, the window only with the range on", () => {
+  const { fields, problems } = runFields({ axis: "M", duty: "0.12", seconds: "1", window_lo: "-0.2", window_hi: "0.2",
+    power_switch_in_hand: true, bypass: ["lift_range"], physical_setup: "decoupled" });
+  assert.deepEqual(problems, []);
+  assert.deepEqual(fields.window, [-0.2, 0.2]);
+  assert.deepEqual(fields.bypass, []); // lift_range does not apply to steering
+  assert.equal(fields.power_switch_in_hand, true);
+  assert.equal(fields.wheels_lifted, false);
+  assert.equal(fields.physical_setup, "decoupled");
+  const off = runFields({ axis: "M", duty: "0.2", seconds: "1", bypass: ["steer_range"], power_switch_in_hand: "yes" });
+  assert.equal(off.fields.window, undefined);
+  assert.equal(off.fields.power_switch_in_hand, false); // only a real true
+  assert.deepEqual(off.fields.bypass, ["steer_range"]);
+  assert.deepEqual(runFields({ axis: "M", duty: "x", seconds: "", window_lo: "a" }).problems,
+    ["duty", "seconds", "window"]);
+});
+
+test("the advice is shown, never a refusal (plan 0.2)", () => {
+  assert.deepEqual(advice({ axis: "M", bypass: ["steer_range"] }), ["rangeOff"]);
+  assert.deepEqual(advice({ axis: "L" }), []);
+  const { problems } = runFields({ axis: "M", duty: "0.2", seconds: "1", bypass: ["steer_range"] });
+  assert.deepEqual(problems, []); // a bypass without the decoupling still sends
+});
+
+test("the chips keep what the MCU confirmed apart from the host's", () => {
+  const c = bypassChips({ bench: { mcu_bypass: ["steer_range"] },
+    run: { bypass_asked: ["steer_range"], bypass_host: [] } });
+  assert.deepEqual(c, { mcu: ["steer_range"], host: [], asked: ["steer_range"] });
+  assert.deepEqual(bypassChips(null), { mcu: [], host: [], asked: [] });
+});
+
+test("the result view reads verdict one and leaves two and three to B2", () => {
+  const v = resultView({ verdict: { run_cleanup: { ok: false, why: ["aborted:stop"] } }, closed: "ended",
+    stop_reason: "end_zero", aborted: "stop", peak_current_ma: [120, 0, 0, 0], record: "/r/x", axis: "L" });
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.why, ["aborted:stop"]);
+  assert.equal(v.stopReason, "end_zero");
+  assert.deepEqual(v.peakCurrentMa, [120, 0, 0, 0]);
+  assert.equal(v.holdVerdict, null);
+  assert.equal(resultView(null), null);
+});
+
+test("the stream fills the 10 s graph and only on the bench screen of this epoch", () => {
+  const { s, b, welcome, tick } = rig();
+  const st = (gen) => ({ t: "bench_state", session_epoch: 9, control_gen: gen, mode: "PAUSED", stops: 0,
+    lease: null, board: { duty_e4: [1000, 0, 0, 0], current_ma: [50, 0, 0, 0], steering_rad: null, lift_m: 0.1,
+      wheel_count: [100, 0] } });
+  s.onMessage(st(1));
+  assert.equal(b.graph.samples.length, 0); // not shown yet
+  welcome(BENCH);
+  for (let k = 0; k < 30; k += 1) {
+    s.onMessage({ ...st(1), board: { ...st(1).board, wheel_count: [100 + k, 0] } });
+    tick(500);
+  }
+  assert.ok(b.graph.samples.length <= 21); // 10 s at 2 Hz plus the edge
+  const ser = b.graph.series("L");
+  assert.equal(ser[0].value, 0);
+  assert.equal(ser.at(-1).duty, 0.1);
+  s.onMessage({ ...st(1), session_epoch: 8 });
+  assert.notEqual(b.state.session_epoch, 8);
+});
+
+test("the graph keeps only the last window", () => {
+  const g = new Graph(1000);
+  for (let t = 0; t <= 3000; t += 100) g.push(t, { board: { duty_e4: [0, 0, 0, 0], current_ma: [0, 0, 0, 0],
+    wheel_count: [t, 0] } });
+  assert.ok(g.samples[0].t >= 2000);
+});
+
+test("bench_state carries the control generation and the lease holder into the session (plan 4.1)", async () => {
+  const { s, sent, welcome } = rig();
+  welcome(BENCH);
+  const p = s.request("lease_request");
+  s.onMessage({ t: "ack", of: "lease_request", request_id: sent.at(-1).request_id, lease_id: "L1", control_gen: 3 });
+  await p;
+  s.onMessage({ t: "bench_state", session_epoch: 9, control_gen: 4, lease: { client_id: "tab", remaining_s: 3 } });
+  assert.equal(s.hasLease, true);
+  assert.equal(s.generations.control_gen, 4);
+  s.request("bench_run", { axis: "L" });
+  assert.equal(sent.at(-1).control_gen, 4); // the first bench request carries the current generation
+  s.onMessage({ t: "bench_state", session_epoch: 8, control_gen: 99, lease: null }); // another session: not taken
+  assert.equal(s.generations.control_gen, 4);
+  s.onMessage({ t: "bench_state", session_epoch: 9, control_gen: 5, lease: { client_id: "other" } });
+  assert.equal(s.hasLease, false);
+  assert.equal(s.benchState.control_gen, 5);
+});
+
+test("a non-bench session never has a bench state", () => {
+  const { s, welcome } = rig();
+  welcome(REAL);
+  s.onMessage({ t: "state", session_epoch: 9, control_gen: 2, arm_gen: 0, armed: false, mode: "PAUSED" });
+  assert.equal(s.benchState, null);
+});
