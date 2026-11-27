@@ -1,0 +1,118 @@
+"""The commissioning tool on the bench image (bench console plan A1a, mcu-link contract 8): the MCU model with
+--bench 1 -- the run's BENCH_SET read back by its seq, BENCH_ARM instead of ARM, one zero ending the run with the MCU's
+own stop, the steering run with its range turned off, the run's limits, and the refusals. The model's plant is
+synthetic: no currents, speeds or real turns."""
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "tools"))
+sys.path.insert(0, str(REPO / "tests" / "integration"))
+import bringup  # noqa: E402
+from test_bringup_commission_tool import LR1, args, kinds_written, model  # noqa: E402,F401
+from test_bringup_tool import mcu_model  # noqa: E402,F401
+
+from forklift_core.mcu_link.messages import Mode  # noqa: E402
+
+BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench5"
+
+
+def rows(b):
+    return [json.loads(x) for x in b.out.getvalue().splitlines()]
+
+
+def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, observed="none"), b)
+    assert res["result"] == "ok" and res["cleanup_confirmed"], res
+    taken = res["bench_set"]
+    assert taken["bypass"] == ["steer_range"] and taken["overrides"]
+    assert taken["duty_max_e4"] == [10000, 10000, 2500, 1500] and taken["time_ms"][2] == 5000
+    kinds = kinds_written(b)
+    assert "ARM" not in kinds  # the bench image arms with BENCH_ARM only
+    assert kinds.index("BENCH_SET") < kinds.index("BENCH_ARM")
+    assert max(abs(s.state.duty_e4[2]) for s in b.samples) == 2000  # 0.2 > the image's 0.15
+    run = res["bench_run"]
+    assert run["drove"] and run["stop_reason"] == "end_zero" and run["run_id"] == taken["run_id"]
+    assert run["mcu_bypass"] == 0  # the run is over: its bypass has ended with its arming
+    assert res["not_for_gate"] and "bench:steer_range" in res["bypassed"]
+    assert res["bench"] == {"bypass": ["steer_range"], "duty_max": 0.25, "time_max_s": 5.0}
+    (bs,) = [r for r in rows(b) if r["t"] == "bench_set"]
+    assert bs["seq"] == taken["seq"]
+
+
+def test_a_wheel_run_on_the_defaults_ends_with_one_zero_and_the_boards_own_stop(model):
+    """Every run on the bench image sends its BENCH_SET (the defaults here), and after driving one zero ends it: the
+    MCU stops it itself, so no zero after that one is refused as stopping."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert res["result"] == "ok" and res["cleanup_confirmed"], res
+    assert res["bench_set"]["overrides"] is False and res["bench_set"]["bypass"] == []
+    assert res["bench_run"]["stop_reason"] == "end_zero" and res["bench_run"]["blocked"] == 0
+    assert res["aborted"] is None and res["not_for_gate"]  # every bench run stays out of gates
+    assert b.samples[-1].state.mode == Mode.DISARMED
+    post = [w for w in b.writes if w.kind == "COMMISSION" and w.phase == "post_zero"]
+    assert len(post) == 1
+
+
+def test_bench_values_on_another_image_are_refused_before_anything(model):
+    b = model()
+    b.host.usb_product = LR1
+    res = bringup.execute(args(axis="M", duty=0.12, seconds=1.0, bench_bypass="steer_range", observed="none"), b)
+    assert res["result"] == "refused" and "not the bench image" in res["why"]
+    assert not {"ARM", "BENCH_ARM", "BENCH_SET"} & set(kinds_written(b))
+
+
+@pytest.mark.parametrize("product", [
+    "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench4",
+    "forklift-mcu commission OPEN diag-fw-bench-2 rec=1f4207f4 lim=lr1 bench3",
+])
+def test_another_bench_generation_is_refused_for_every_run(model, product):
+    b = model("--bench", "1")
+    b.host.usb_product = product
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert res["result"] == "refused" and "another bench generation" in res["why"]
+    assert not {"ARM", "BENCH_ARM", "BENCH_SET"} & set(kinds_written(b))
+
+
+@pytest.mark.parametrize("kw,why", [
+    (dict(bench_bypass="steer_range", window=(-3.2, 3.2)), "give no --window"),
+    (dict(bench_bypass="overcurrent"), "unknown name"),
+    (dict(bench_bypass="lift_range"), "lift axis (H) only"),
+    (dict(bench_duty_max=0.25, duty=0.3), "within +-0.25"),
+    (dict(bench_duty_max=1.5), "bench-duty-max"),
+    (dict(bench_time_max=1.0, seconds=0.8), "seconds must be in"),
+    (dict(bench_bypass="steer_range", single_axis=True, motor_detached=True), "a plain run only"),
+])
+def test_bench_argument_refusals(model, kw, why):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    base = dict(axis="M", duty=0.12, seconds=1.0, observed="none")
+    res = bringup.execute(args(**{**base, **kw}), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert not {"ARM", "BENCH_ARM", "BENCH_SET"} & set(kinds_written(b))
+
+
+def test_without_the_range_bypass_the_steering_still_needs_its_window(model):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.12, seconds=1.0, bench_duty_max=0.25, observed="none"), b)
+    assert res["result"] == "refused" and "--window" in res["why"]
+
+
+def test_a_plain_arm_is_never_sent_to_the_bench_image(model):
+    """The host itself refuses a plain ARM on the bench image (the board would answer wrong_build)."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    b.run_until(lambda: b.state is not None and b.state.mode == Mode.DISARMED, 3.0)
+    import time
+
+    blocked = b.host.request_arm(time.monotonic_ns())
+    assert blocked is not None and blocked.reason == "bench_image_arms_with_bench_arm"
