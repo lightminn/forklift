@@ -66,6 +66,7 @@ from forklift_core.mcu_link.messages import (
     RejectReason,
     ResetCause,  # noqa: F401 -- re-exported for the tool's tests
     StateFlag,
+    valid_after_echo_ms,
 )
 from forklift_core.plant import bench_limits as bl
 from forklift_core.plant import bench_session
@@ -1051,6 +1052,13 @@ class CommissionSession(Session):
         seq16 = seq & 0xFFFF
         verdict = {"v": None}  # accepted / refused:<why> / confirmed, from the first evidence in time
         lim = {}
+        # the host-clock bound from the queued frame's own validity (the echo's receipt + validity + 50 ms), fixed now
+        # whether or not its bytes ever go out (Codex A1b-1b round 5 P2)
+        try:
+            q_valid_ms = min(b.host.cfg.cap_ms, valid_after_echo_ms(self.last_expires_ns, echo_rx_ns))
+        except (TypeError, ValueError):
+            q_valid_ms = b.host.cfg.cap_ms
+        host_deadline_ns = (echo_rx_ns or time.monotonic_ns()) + q_valid_ms * 1_000_000 + 50_000_000
 
         def write():
             return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq16
@@ -1062,10 +1070,10 @@ class CommissionSession(Session):
                 return True
             w = write()
             if w is None or w.echo_mcu_time_us is None or w.valid_ms is None:
-                return False
+                return time.monotonic_ns() > host_deadline_ns  # never written: closed at the host bound
             if not lim:
                 lim["mcu_us"] = w.echo_mcu_time_us + w.valid_ms * 1000 + int(FIRST_NONZERO_SLACK_S * 1e6)
-                lim["host_ns"] = (echo_rx_ns or w.done_ns) + w.valid_ms * 1_000_000 + 50_000_000
+                lim["host_ns"] = host_deadline_ns
 
             def ours(st, rx) -> bool:
                 return (rx >= w.done_ns and st.boot_id == w.boot_id and st.arm_gen == w.arm_gen
@@ -1091,16 +1099,7 @@ class CommissionSession(Session):
                     return True
             return time.monotonic_ns() > lim["host_ns"]
 
-        w0 = None
-        for _ in range(20):  # the write's record (its validity) first: the host-clock bound needs it
-            b.cycle()
-            w0 = write()
-            if w0 is not None:
-                break
-        valid_ms = (w0.valid_ms if w0 is not None and w0.valid_ms is not None else b.host.cfg.cap_ms)
-        host_bound_s = max(0.0, ((echo_rx_ns or time.monotonic_ns()) + valid_ms * 1_000_000 + 50_000_000
-                                 - time.monotonic_ns()) / 1e9)
-        b.run_until(judge, host_bound_s + 0.05)
+        b.run_until(judge, max(0.0, (host_deadline_ns - time.monotonic_ns()) / 1e9))
         judge()
         v = verdict["v"]
         if v == "confirmed":
