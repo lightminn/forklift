@@ -15,6 +15,10 @@ void board_hal_tick_end(void);
    3.6). Wakes the DRV8244s (nSLEEP high, outputs still off by DRVOFF) so their SPI can be checked
    at S2 under the user's VM procedure (decision 2026-11-11). */
 void motor_out_apply(const drive_outputs *out);
+#if defined(FW_BENCH_IMAGE)
+/* bench7 (plan 4.3 A1b-2 decision 6): what the outputs wrote and may have active, into in (fw/bench_pwm.h) */
+void motor_out_report(uint32_t now, drive_inputs *in);
+#endif
 void motor_out_wake_drivers(void);
 
 /* Wheel encoders (LPTIM1/2) and IPROPI current sense (ADC1 injected), board design 4.3-4.4. */

@@ -92,32 +92,34 @@ static void stamped_slot_rules(void)
 {
     stamped_slot s = {0};
     uint16_t consumed = 0, frame = 0;
-    uint32_t t = 0;
-    stamped_put(&s, slot_pack(1, 0x1111), 1000);
+    uint32_t t = 0, b = 0;
+    stamped_put(&s, slot_pack(1, 0x1111), 1000, 990);
     CHECK_EQ_U(s.seq, 2);
-    CHECK(stamped_take(&s, &consumed, 1000, &frame, &t));
+    CHECK(stamped_take(&s, &consumed, 1000, &frame, &t, &b));
     CHECK_EQ_U(frame, 0x1111);
     CHECK_EQ_U(t, 1000);
-    CHECK(!stamped_take(&s, &consumed, 1001, &frame, &t)); /* no new completion */
+    CHECK_EQ_U(b, 990); /* bench7: the bundle start comes with the pair */
+    CHECK(!stamped_take(&s, &consumed, 1001, &frame, &t, &b)); /* no new completion */
     s.seq = 3; /* the interrupt is writing */
     s.slot = slot_pack(2, 0x2222);
-    CHECK(!stamped_take(&s, &consumed, 2000, &frame, &t));
+    CHECK(!stamped_take(&s, &consumed, 2000, &frame, &t, &b));
     s.time = 1990;
     s.seq = 4;
-    CHECK(stamped_take(&s, &consumed, 2000, &frame, &t));
+    CHECK(stamped_take(&s, &consumed, 2000, &frame, &t, &b));
     CHECK_EQ_U(frame, 0x2222);
-    stamped_put(&s, slot_pack(3, 0x3333), 3003); /* published after the tick read its clock at 3000 */
-    CHECK(!stamped_take(&s, &consumed, 3000, &frame, &t));
+    stamped_put(&s, slot_pack(3, 0x3333), 3003, 2990); /* published after the tick read its clock at 3000 */
+    CHECK(!stamped_take(&s, &consumed, 3000, &frame, &t, &b));
     CHECK_EQ_U(consumed, 2);                     /* left for the next tick */
-    CHECK(stamped_take(&s, &consumed, 4000, &frame, &t));
+    CHECK(stamped_take(&s, &consumed, 4000, &frame, &t, &b));
     CHECK_EQ_U(t, 3003);
-    stamped_put(&s, slot_pack(5, 0x5555), 5000);
+    stamped_put(&s, slot_pack(5, 0x5555), 5000, 4990);
     CHECK(stamped_pending(&s, consumed)); /* deferred: no new read may overwrite it */
-    CHECK(stamped_take(&s, &consumed, 5000, &frame, &t));
+    CHECK(stamped_take(&s, &consumed, 5000, &frame, &t, &b));
     CHECK(!stamped_pending(&s, consumed));
-    stamped_put(&s, slot_pack(6, 0x4444), 0xFFFFFFF0u); /* the HAL clock wraps */
-    CHECK(stamped_take(&s, &consumed, 0x10u, &frame, &t));
+    stamped_put(&s, slot_pack(6, 0x4444), 0xFFFFFFF0u, 0xFFFFFFE0u); /* the HAL clock wraps */
+    CHECK(stamped_take(&s, &consumed, 0x10u, &frame, &t, &b));
     CHECK_EQ_U(t, 0xFFFFFFF0u);
+    CHECK_EQ_U(b, 0xFFFFFFE0u);
 }
 
 static void spi_cfg1(void)

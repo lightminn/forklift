@@ -67,6 +67,8 @@ add_executable(test_weact_h743_board_pure
 target_include_directories(test_weact_h743_board_pure PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
 target_link_libraries(test_weact_h743_board_pure PRIVATE fw_core)
+# the stamped (seqlock) read exists in the bench image only (bench console plan 4.3 A1b-2)
+target_compile_definitions(test_weact_h743_board_pure PRIVATE FW_BENCH_IMAGE=1)
 add_test(NAME test_weact_h743_board_pure COMMAND test_weact_h743_board_pure)
 
 # motor_out_tim1.c on the host register model (motor output design 4.2): the fake device header in
@@ -80,6 +82,15 @@ add_executable(test_weact_h743_motor_out ${W}/test/test_motor_out.c)
 target_include_directories(test_weact_h743_motor_out PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
 target_link_libraries(test_weact_h743_motor_out PRIVATE weact_h743_regmodel)
 add_test(NAME test_weact_h743_motor_out COMMAND test_weact_h743_motor_out)
+# bench7 (plan 4.3 A1b-2 decision 6): the bench image's output report against the pure model it shares.
+add_library(weact_h743_regmodel_bench STATIC ${W}/test/regmodel/regmodel.c ${W}/src/motor_out_tim1.c)
+target_include_directories(weact_h743_regmodel_bench PUBLIC ${W}/test/regmodel ${W}/include)
+target_compile_definitions(weact_h743_regmodel_bench PUBLIC FW_HOST_REGMODEL=1 FW_BENCH_IMAGE=1)
+target_link_libraries(weact_h743_regmodel_bench PUBLIC fw_core)
+add_executable(test_weact_h743_motor_out_bench ${W}/test/test_motor_out_bench.c)
+target_include_directories(test_weact_h743_motor_out_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
+target_link_libraries(test_weact_h743_motor_out_bench PRIVATE weact_h743_regmodel_bench)
+add_test(NAME test_weact_h743_motor_out_bench COMMAND test_weact_h743_motor_out_bench)
 
 add_executable(test_plant ${CMAKE_CURRENT_SOURCE_DIR}/plant/test_plant.c)
 target_include_directories(test_plant PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)

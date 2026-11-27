@@ -25,7 +25,7 @@
    commissioning model with one axis per arming; the product string ends " lim=lr1 sa1".
   --bench 1: the bench image (bench console plan A1, mcu-link contract 8): an open commissioning model that takes
   BENCH_SET/BENCH_ARM (one run per arming) and sends a BENCH_STATE with every STATE; the board's product string ends
-  " lim=lr1 bench6". The model has no connection changes (no link_conn).
+  " lim=lr1 bench7". The model has no connection changes (no link_conn).
   --kth-start-raw M,H: the KTH raw angles (0..4095) of M and H at their joint zero (each axis's zero offset), so a
   distance run can start on a non-zero frame (bench console plan 4.2 A1b-1b). --kth-zero-at-ms AXIS:MS (AXIS M or
   H): from MS on, that axis's reported KTH frame is 0x0000 (a MISO stuck low) while the plant goes on moving; the
@@ -61,6 +61,7 @@
 #include <unistd.h>
 
 #include "fw/app.h"
+#include "fw/bench_pwm.h"
 #include "plant.h"
 #include "vehicle_config.h"
 
@@ -87,6 +88,8 @@ typedef struct {
     bool short_written;
     int kth_zero_axis; /* --kth-zero-at-ms: 0 M, 1 H, -1 none */
     long kth_zero_at_ms;
+    bench_pwm_model pwm; /* bench7: the board's output rule and report (plan 4.3 A1b-2 decision 6) */
+    drive_outputs applied; /* what that rule wrote: the plant moves on it */
 } board;
 
 static board B;
@@ -151,12 +154,21 @@ static void hal_read(void *ctx, drive_inputs *in)
     }
     in->estop_active = B.estop_at_ms >= 0 && t >= B.estop_at_ms &&
                        (B.estop_release_ms < 0 || t < B.estop_release_ms);
+    /* bench7: an update event passes between every two calls here (20 kHz PWM, 1 kHz ticks); the frames are read
+       in this call, so their bundle starts are now */
+    in->abs_start_us[0] = in->abs_start_us[1] = in->now_us;
+    in->abs_start_known[0] = in->abs_start_known[1] = true;
+    bench_pwm_read(&B.pwm.t, true, hal_now(ctx), in);
 }
 
 static void hal_write(void *ctx, const drive_outputs *out)
 {
-    (void)ctx;
     B.out = *out;
+    bench_pwm_model_apply(&B.pwm, out, true, hal_now(ctx));
+    B.applied = *out;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        B.applied.duty[ch] = (float)B.pwm.t.w[ch] / (float)BENCH_PWM_TOP; /* a reversal's brake, a rounded 0 */
+    }
 }
 
 static size_t hal_link_read(void *ctx, uint8_t *buf, size_t cap)
@@ -240,7 +252,7 @@ static const fw_hal HAL = {
 /* ---- plant: the shared model, plus the host-only hand turn ------------------------------ */
 static void step_plant(double dt)
 {
-    plant_step(&B.p, &B.out, dt);
+    plant_step(&B.p, &B.applied, dt);
     if (B.hand_wheel >= 0 && B.hand_wheel < 2 && B.hand_duration_ms > 0) {
         /* A hand turn: counts only, the modelled rate untouched. Only the part of this step inside the
            turn's window counts, so the total is exactly hand_revs turns whatever the steps' phase. */
@@ -514,6 +526,10 @@ int main(int argc, char **argv)
         B.kth_zero_at_ms = at;
     }
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
+    bench_pwm_model_init(&B.pwm);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        B.applied.drvoff[ch] = true;
+    }
     B.p.enc_flip = (int)enc_flip;
     B.p.enc_frozen = (int)enc_frozen;
     B.t0_ns = B.now_ns = mono_ns();
