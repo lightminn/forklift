@@ -802,3 +802,28 @@ def test_a_partly_written_clear_stops_on_new_fault_bits_and_after_its_request_cl
         assert c.clear is None and not c.frame_allowed(frame)
     finally:
         link._cur, link._off = saved
+
+
+def test_a_closed_clears_partly_written_disarm_loses_its_leave(rig):
+    """The clear's own DISARM partly out when the request closes: the frame check answers no, so the link abandons it
+    instead of finishing it as a stop frame of the session (Codex C round 12 P2)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.disarm_seq = 4322
+    c.cleanup_seqs.add(4322)
+    frame = SimpleNamespace(kind="DISARM", seq=4322, expires_ns=None, nonzero=False, echo=None, generation=0)
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4322), 3
+    try:
+        assert c.frame_allowed(frame)  # the request holds: the rest goes
+        bench_console.shutdown(c, wait_s=0.0)  # the request closed
+        assert c.clear is None and 4322 not in c.cleanup_seqs and not c.frame_allowed(frame)
+    finally:
+        link._cur, link._off = saved
