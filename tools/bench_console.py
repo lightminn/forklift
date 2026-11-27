@@ -290,6 +290,7 @@ class Clear:
     disarm_seq: int | None = None
     clear_seq: int | None = None
     before: dict = field(default_factory=dict)
+    echoed: set = field(default_factory=set)  # this request's seqs a paired STATE of its epoch echoed (round 9 P2-2)
 
 
 def _latch_view(st) -> dict:
@@ -495,10 +496,20 @@ class BenchConsole:
         return None, {"clear": rec.dir.name}
 
     def _binding_now(self) -> tuple:
-        """(host opening, board connection generation, boot, fault bits) now -- what a clear is bound to."""
-        st, bst = self.host.state, self.host.bench_state
-        return (self.conn, None if bst is None else bst.conn_gen, None if st is None else st.boot_id,
-                FaultFlag(0) if st is None else FaultFlag(st.fault_flags))
+        """(host opening, board connection generation, boot, fault bits) now -- what a clear is bound to -- all from
+        one completed pair, never a newer STATE's bits with the previous pair's generation (Codex C round 9 P2-1)."""
+        ps, bst = self.host.bench_state_of, self.host.bench_state
+        if ps is None or bst is None:
+            return (self.conn, None, None, FaultFlag(0))
+        return (self.conn, bst.conn_gen, ps.boot_id, FaultFlag(ps.fault_flags))
+
+    def _holds(self, c: Clear) -> bool | None:
+        """The clear's binding against the latest STATE: None while that STATE's pair is not in (its generation is not
+        known yet: nothing is sent, nothing refused), else whether it still holds (round 9 P2-1)."""
+        st = self.host.state
+        if st is None or st is not self.host.bench_state_of:
+            return None
+        return c.binding.holds(*self._binding_now())
 
     # --- the write boundary ------------------------------------------------------------------------------------------
     def cancel_reason(self, r: Run, now_ns: int) -> str | None:
@@ -532,7 +543,7 @@ class BenchConsole:
         if seq in self.cleanup_seqs and (f.kind == "DISARM" or zero):
             c = self.clear
             if c is not None and f.kind == "DISARM" and seq == c.disarm_seq:
-                return c.binding.holds(*self._binding_now())  # the clear's DISARM: its request still holds (r4 P2-3)
+                return self._holds(c) is True  # the clear's DISARM: its request still holds (r4 P2-3, r9 P2-1)
             return True  # this session's own stop frame, by its seq and its kind (round 3 P1-1)
         arming_zero = f.echo is not None or (self.host.arming_zero_seq is not None
                                              and seq == self.host.arming_zero_seq & 0xFFFF)
@@ -544,8 +555,8 @@ class BenchConsole:
             return False  # no DISARM this session did not ask for
         if f.kind == "CLEAR_FAULTS":
             c, st = self.clear, self.host.state
-            return (c is not None and c.clear_seq == seq and st is not None
-                    and c.binding.holds(*self._binding_now()))
+            # every byte, the first and each continuation, on the latest STATE's own pair (round 9 P2-1)
+            return c is not None and c.clear_seq == seq and st is not None and self._holds(c) is True
         r = self.run
         if r is None or f.kind not in RUN_KINDS or r.phase in ("stop", "closed"):
             return False
@@ -1088,10 +1099,18 @@ class BenchConsole:
         self.clear = None
 
     def _echoed(self, seq: int, kind: str, c: Clear) -> bool:
-        st, rx = self.host.state, self.host.state_rx_ns
-        w = self.written.get(seq)
-        return (w is not None and w[0] == kind and rx is not None and w[1] <= rx and self._same_epoch(c)
-                and st.mcu_time_us > c.floor_us and st.last_rx_seq == seq)
+        """The latest completed pair of the request's epoch echoed ``seq`` -- kept once seen, so a newer STATE in the
+        same read (its pair not in yet, or naming a later frame) never hides it (Codex C round 9 P2-2). The seq is
+        one no recent STATE named, so its echo is the board's reply to this frame whenever it was received."""
+        if seq in c.echoed:
+            return True
+        ps, bst, w = self.host.bench_state_of, self.host.bench_state, self.written.get(seq)
+        if (w is not None and w[0] == kind and ps is not None and bst is not None and self.conn == c.binding.conn
+                and bst.conn_gen == c.binding.conn_gen and ps.boot_id == c.binding.boot_id
+                and ps.mcu_time_us > c.floor_us and ps.last_rx_seq == seq):
+            c.echoed.add(seq)
+            return True
+        return False
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
@@ -1106,9 +1125,14 @@ class BenchConsole:
             return
         if c.phase == "disarm":
             if c.disarm_seq is None:
-                if not c.binding.holds(*self._binding_now()):
+                held = self._holds(c)
+                if held is False:
                     # judged before the DISARM too (round 2 P2-3): a request asked on other bits is not run
                     self._clear_done(c, "refused", now, "the fault bits changed before the DISARM: ask again")
+                    return
+                if held is None:  # the latest STATE's pair not in yet: queue nothing this cycle (round 9 P2-1)
+                    if now - c.phase_ns > CLEAR_ECHO_S * 1e9:
+                        self._clear_done(c, "refused", now, "no complete STATE pair to bind the clear to: ask again")
                     return
                 seen = {s for _b, s in self.recent_rx} | {0}
                 while (self.host.skip_seq(0) & 0xFFFF) in seen:  # a number no recent STATE named, before queueing
@@ -1117,12 +1141,12 @@ class BenchConsole:
                 c.disarm_seq = self.host.queued_disarm_seq()
                 self.cleanup_seqs.add(c.disarm_seq)
                 c.phase_ns = now
-            elif self._pending(c.disarm_seq) and not c.binding.holds(*self._binding_now()):
+            elif self._pending(c.disarm_seq) and self._holds(c) is False:
                 # still unsent and the request no longer holds: refused, its DISARM out of the queue (round 4 P2-3)
                 self._clear_done(c, "refused", now, "the board changed before the DISARM went out: ask again")
                 return
-            elif self._echoed(c.disarm_seq, "DISARM", c):
-                if not c.binding.holds(*self._binding_now()):
+            elif self._echoed(c.disarm_seq, "DISARM", c) and self._holds(c) is not None:
+                if not self._holds(c):
                     self._clear_done(c, "refused", now, "the fault bits changed: ask again")
                     return
                 blocked = self.host.request_clear_faults(now)
@@ -1135,7 +1159,7 @@ class BenchConsole:
                 self._clear_done(c, "no_echo", now, "the DISARM before the clear was not echoed")
         elif c.phase == "clear":
             if not self._echoed(c.clear_seq, "CLEAR_FAULTS", c) and self._pending(c.clear_seq) \
-                    and not c.binding.holds(*self._binding_now()):
+                    and self._holds(c) is False:
                 # still unsent and the bits changed: refused for good, the frame out of the queue (round 3 P2-3)
                 self._clear_done(c, "refused", now, "the fault bits changed before the CLEAR: ask again")
                 return
