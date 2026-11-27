@@ -5,6 +5,7 @@ duty, one zero, the board's own stop), the three cancellations (STOP, the lease,
 record and the clear -- not currents or speeds of a real motor (the model's plant is synthetic). The model's command
 validity is the board's 150 ms; the pty's timing is the host's scheduler, so no settling timing is judged here."""
 
+import dataclasses
 import json
 import os
 import signal
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from forklift_core.mcu_link.messages import Mode
+from forklift_core.mcu_link.messages import FaultFlag, Mode, StateFlag
 from forklift_core.plant.mcu_host import HostEvent
 
 REPO = Path(__file__).resolve().parents[2]
@@ -304,7 +305,7 @@ def test_a_fault_is_cleared_through_a_disarm_then_the_clear(rig):
     assert run_until(lambda: b.clears, 6.0), b.replies
     out = b.clears[-1]
     assert b.replies[rid]["t"] == "ack" and out["before"]["mode"] == "FAULT"
-    assert out["result"] in ("cleared", "not_cleared", "not_ready"), out  # the model's fault may persist
+    assert out["result"] in ("cleared", "unconfirmed", "not_ready"), out  # the model's fault may persist
     kinds = written_kinds(c)
     assert kinds.index("DISARM") < kinds.index("CLEAR_FAULTS")
 
@@ -518,8 +519,14 @@ def test_ctrl_c_or_sigterm_ends_the_model_console_cleanly(mcu_model, tmp_path, s
                                 stdout=subprocess.PIPE, stderr=err, text=True,
                                 env={**os.environ, "PYTHONPATH": f"{REPO / 'src'}:{REPO}"})
         try:
-            ready, _, _ = select.select([proc.stdout], [], [], 10.0)  # the start, bounded
-            line = proc.stdout.readline() if ready else ""
+            line, end, fd = b"", time.monotonic() + 10.0, proc.stdout.fileno()  # the whole start line, bounded
+            while b"\n" not in line and time.monotonic() < end:
+                if select.select([fd], [], [], max(0.0, end - time.monotonic()))[0]:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        break
+                    line += chunk
+            line = line.decode(errors="replace")
             assert '"t": "started"' in line, (line, log.read_text())
             time.sleep(0.5)
             proc.send_signal(sig)
@@ -569,7 +576,8 @@ def test_an_exit_while_driving_with_the_board_silent_still_records_the_run(rig):
     bench_console.shutdown(c, wait_s=0.5)
     assert c.run is None
     res = json.loads((record / "result.json").read_text())
-    assert res["aborted"] in ("tool_exit", "unconfirmed_at_exit") and not res["verdict"]["run_cleanup"]["ok"], res
+    assert res["aborted"] == "tool_exit", res  # the first cause; the verdict says the cleanup went unconfirmed
+    assert not res["verdict"]["run_cleanup"]["ok"] and "cleanup_unconfirmed" in res["verdict"]["run_cleanup"]["why"], res
 
 
 def test_a_clear_with_no_state_after_its_clear_is_unconfirmed_not_refused(rig):
@@ -584,3 +592,38 @@ def test_a_clear_with_no_state_after_its_clear_is_unconfirmed_not_refused(rig):
     assert run_until(lambda: b.clears, 4.0)
     out = b.clears[-1]
     assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def _after_the_clear_went_out(c, b, run_until):
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT, 3.0)
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None and c.clear.clear_seq is not None
+                     and c.clear.clear_seq in c.written, 4.0)
+    c.dev.receive = lambda host, now: host.tick(now)  # the board silent from here: only the injected STATE counts
+    return c.host.state
+
+
+def test_a_state_made_before_the_clear_but_received_after_it_does_not_decide(rig):
+    """A STATE the board made before it read the CLEAR, arriving after the CLEAR went out, says nothing of the CLEAR:
+    the clear is 'unconfirmed' with no 'after' (Codex C round 6 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    late = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1)  # still FAULT, last_rx_seq the DISARM's
+    c.host._state, c.host._state_rx_ns = late, int(c.clock())
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "unconfirmed" and out["after"] is None, out
+
+
+def test_a_taken_clear_whose_echo_a_later_frame_replaced_is_still_seen(rig):
+    """The CLEAR taken, then a later frame's seq in last_rx_seq: the board out of FAULT in the same boot is the CLEAR's
+    reply, so the clear goes on to its ready check (Codex C round 6 P2)."""
+    c, b, run_until = rig("--fault-at-ms", "300")
+    st = _after_the_clear_went_out(c, b, run_until)
+    after = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, mode=Mode.DISARMED,
+                                last_rx_seq=(c.clear.clear_seq + 1) & 0xFFFF,
+                                flags=st.flags | StateFlag.DRIVERS_READY, fault_flags=FaultFlag(0))
+    c.host._state, c.host._state_rx_ns = after, int(c.clock())
+    assert run_until(lambda: b.clears, 4.0)
+    out = b.clears[-1]
+    assert out["result"] == "cleared" and out["after"]["mode"] == "DISARMED", out
