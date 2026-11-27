@@ -132,9 +132,9 @@ void fw_app_tick(fw_app *app)
 #endif
     drive_inputs in;
     memset(&in, 0, sizeof in);
-    hal->read_inputs(hal->ctx, &in);
-    in.now_us = now;
+    in.now_us = now; /* before the read: the HAL stamps and filters the KTH frames by it (plan 4.2 A1b-1) */
     in.cycle_overrun = late;
+    hal->read_inputs(hal->ctx, &in);
     drive_begin(&app->d, &in);
 
     uint8_t buf[LINK_READ_CHUNK];

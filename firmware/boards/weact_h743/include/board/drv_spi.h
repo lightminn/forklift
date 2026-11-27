@@ -14,6 +14,6 @@ void kth_spi_init(void);
 /* Starts one steering-then-lift read (board design 4.6); does nothing while one is running. */
 void kth_spi_start_bundle(void);
 /* Latest frames; fresh[i] is true once per completed read (generations, board design 4.5). */
-void kth_spi_snapshot(uint16_t frame[2], bool fresh[2]);
+void kth_spi_snapshot(uint32_t now, uint16_t frame[2], bool fresh[2], uint32_t time[2]);
 
 #endif
