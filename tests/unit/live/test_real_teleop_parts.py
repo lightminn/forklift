@@ -121,6 +121,7 @@ def core_rule(limit_fn, speed, direction, cap, commanded):
 
     stub = SimpleNamespace(_real_vehicle=lambda: True, _commanded_now=lambda: commanded)
     stub._possible_motion = lambda sp: MissionCore._possible_motion(stub, sp)  # 5d: the motion rule apart
+    stub._motion_covered = lambda *a: MissionCore._motion_covered(stub, *a)  # U3e-1b (no slack here: as before)
     return MissionCore._direction_limits(stub, limit_fn, speed, direction, cap)
 
 

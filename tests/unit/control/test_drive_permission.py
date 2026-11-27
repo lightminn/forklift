@@ -129,8 +129,11 @@ def test_an_end_slack_moves_only_a_clear_ends_target():
     assert allowed(perm, 0.05, cap=0.05) == path_end(perm, 0.05, 0.0)  # the default is no slack
     perm.advance(0.015)  # 5 mm past the end: no creep for the command, a stop within the slack for the motion
     assert path_end(perm, 0.05, 0.0)[0] == 0.0
-    assert math.isclose(path_end(perm, 0.05, 0.008, cap=0.6)[0], max(STOP.speed_for(0.003 + STOP.margin_m),
-                                                                      CONFIG.end_creep_mps))
+    assert math.isclose(path_end(perm, 0.05, 0.008, cap=0.6)[0], STOP.speed_for(0.003 + STOP.margin_m))
+    perm.advance(0.0025)  # 7.5 mm past: 0.5 mm of slack left -- no end creep floor (Codex U3e-1b round 4 P1)
+    left = path_end(perm, 0.05, 0.008, cap=0.6)[0]
+    assert math.isclose(left, STOP.speed_for(0.0005 + STOP.margin_m)) and left < CONFIG.end_creep_mps
+    assert STOP.distance_m(left) - STOP.margin_m <= 0.0005 + 1e-12
 
 
 def test_an_end_slack_leaves_a_blocked_or_unfinished_path_as_it_is():

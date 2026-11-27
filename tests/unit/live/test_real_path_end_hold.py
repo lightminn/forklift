@@ -206,6 +206,42 @@ def test_a_command_in_effect_beyond_the_tolerance_holds():
     assert out.requested_speed == 0.0 and out.obstacle_hold
 
 
+def test_no_request_on_an_unexpired_output_holds():
+    """Codex U3e-1b round 4 P2: a 0.030 forward command and unexpired output, nothing asked, 11.26 mm before the end --
+    the loop's own output is held to the path end (no slack): a hold (the loop's wait frame, real_loop.py)."""
+    c, _, _ = core_at_end(standing_speed())
+    c.state.update(command_speed=0.03, outstanding_motion={1: 0.03})
+    out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    assert out.requested_speed == 0.0 and c.state.get("motion_hold")
+
+
+def test_a_forward_request_on_an_unexpired_reverse_output_holds():
+    c, _, _ = core_at_end(standing_speed(), (-0.30, 0.0))  # something behind, within a 0.03 reverse stop
+    c.state.update(command_speed=-0.03, outstanding_motion={-1: 0.03})
+    out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert out.requested_speed == 0.0 and out.obstacle_hold
+
+
+class LegTo:
+    def __init__(self, end, direction=1):
+        self.end, self.direction = end, direction
+
+    def leg_ahead(self):
+        return np.array([self.end]), self.direction
+
+
+def test_the_slack_is_what_is_left_of_it_past_the_leg_end():
+    """Codex U3e-1b round 4 P1: a snapshot installed past the end clips its path there, so the slack is measured from
+    the leg's end pose along its heading, not from the layer's path_left."""
+    c, _, _ = core_at_end(standing_speed())
+    slack = MissionCore.POCKET_END_SLACK_M
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (-0.02, 0.0, 0.0)) == slack  # before the end: all of it
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (0.005, 0.0, 0.0)) == pytest.approx(slack - 0.005)
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0)), (0.009, 0.0, 0.0)) == 0.0
+    assert c._end_slack(LegTo((0.0, 0.0, 0.0), -1), (-0.005, 0.0, 0.0)) == pytest.approx(slack - 0.005)  # reversing
+    assert c._end_slack(None, (0.0, 0.0, 0.0)) == 0.0
+
+
 def test_past_the_end_the_new_command_is_zero():
     c, _, perm = core_at_end(standing_speed())
     perm.advance(0.02)  # 8.7 mm past the end
