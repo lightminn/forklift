@@ -407,7 +407,7 @@ class BenchConsole:
             try:
                 ask = parse_run(msg)
             except Refused as exc:
-                return "refused", {"detail": str(exc)}
+                return "bench_refused", {"detail": str(exc)}
             try:
                 rec = RunRecord(self.runs_root, "duty", AXES[ask.axis])
             except OSError as exc:
@@ -467,7 +467,7 @@ class BenchConsole:
     def _start_clear(self, msg: dict, now: int):
         cause = msg.get("cause")
         if not isinstance(cause, str) or not cause.strip():
-            return "refused", {"detail": "cause: required"}
+            return "bench_refused", {"detail": "cause: required"}
         if self.run is not None:
             return "busy_running", {}
         if self.clear is not None:
