@@ -248,6 +248,132 @@ BENCH_SET 의 우회 비트를 늘린다. 틀은 A1 그대로다.
 - **시간 조건(독립 검토 P2):** pty 위 모형은 시각이 호스트 스케줄을 따르고 명령 유효시간도 보드(150 ms)와 다르다(모형 200 ms). 그래서 표본 연속성·정착 판정 시험은 **고정 시각의 합성·기록 STATE 열**로 하고, pty HIL 시험은 동작(명령·정지·정리·기록)만 본다. 벤치 모형 프로필은 보드의 명령 유효시간을 쓴다. 연속성 기준은 '간격 > 1.5 × STATE 주기'를 누락으로 센다(11-27 실물 30 s hold 의 인접 간격 3,079 개는 모두 10 ms — 짝 148 B 를 싣기 전 기록). 실보드의 짝 유실·명령 만료·1 kHz 틱 여유는 벤치 날 기록으로 따로 본다.
 - **검증:** pty 위 `mcu_model`(벤치 이미지 모형, MT 는 모형의 엔코더 카운트)로 HIL 시험. KTH·MT 원천 각각 hold·거리 정지를 시험한다. 듀티 구동·hold·STOP·고장 해제·우회 표식을 돌리고, 링크 끊김이면 보드가 명령 만료로 서는지 본다. 4 CPU 로 돌린다.
 
+### 3.1 B1 구현 결정 (2026-11-27, Codex 구현 전 검토 1·2 회차 반영)
+
+B 를 두 PR 로 나눈다.
+- **B1** 은 A1a 범위(듀티 구동, 시간 상한, 측정 없음)의 백엔드 전체다.
+- **B2** 는 A1b·A1c 가 들어온 뒤 hold·거리 정지와 판정 ②·③ 을 연다.
+
+B1 에서 다음은 '아직 없음'으로 거부한다.
+- `mode: hold`, `stop.turns`·`stop.counts` → `not_yet_a1b`
+- `source: mt` → `not_yet_a1c`
+- 우회 `kth_invalid` → `not_yet_a2`. A1a 의 MCU 우회 비트는 `steer_range`·`lift_range` 둘뿐이다. 3 절 두 우회 비트 표에서 `kth_invalid` 를 켜는 두 줄의 실동작 검증은 A2 몫이다.
+
+`source: kth` 는 화면용(STATE 의 조향·승강 값)일 뿐이다. 실행 기록에는 실제 wire 원천인 `none` 을 남긴다.
+
+**콘솔 접합 — 기존 중재기를 일부만 쓴다.**
+- `Arbiter` 에 다음을 더한다. 5c-1 의 `real_requests` 와 같은 방식이다.
+  - 설정 `bench_requests`(기본 꺼짐).
+  - `BENCH_LEASED = (bench_run, bench_stop, bench_disarm, clear_faults)`.
+  - 응답 훅 `bench_request`.
+- 벤치 요청은 장부를 거쳐야만 받는다. `request_token` 이 없으면 `token_required` 다.
+- 설정이 꺼진 백엔드의 격리 기준은 4 절 그대로 '벤치 훅 호출 0 회·MCU 송신 0 바이트'다. 형식이 틀리거나 큐가 차면 공용 채널이 `invalid`·`busy` 로 답할 수는 있다.
+- **차량용 `RealLink.begin` 은 쓰지 않는다.** 그 안의 `observe`·`mission_context` 가 피드백 없이 10 s 가 지나면 `stop("not_stopped")` 를 부른다. 벤치 연결은 `BenchLink` 가 맡고 순서는 다음과 같다.
+  1. 비상 묶음(연결·STOP·DISARM)
+  2. 장부 만료(`_expire`·`ledger.purge`)
+  3. 일반 요청
+  4. `tick`
+  - 중재기의 정지 검출기·`step`·임무 판정은 돌리지 않는다.
+- **STOPPED 잠금 해제.**
+  - 벤치 실행은 중재기 모드를 보지 않는다.
+  - 다음 실행은 직전 실행의 정리가 확인된 뒤, **현재 `control_gen` 의 명시적 새 요청**으로만 연다. STOP 은 경계를 만들어 `control_gen` 을 올리므로 STOP 전에 만든 요청은 `stale_control` 이다.
+  - 정리가 확인되면 중재기에 `release_stop(now, reason)`(`bench_requests` 일 때만, STOPPED → PAUSED, 경계 하나)을 부른다. 화면이 STOPPED 에 남지 않게 하기 위해서다.
+- **브라우저에 세대 전달.** 지금 프런트는 `control_gen` 을 lease ACK 가 아니라 공용 `state`·`real_status` 에서 갱신한다.
+  - 그래서 B1 의 `bench_state` 에 `session_epoch`, `mode`(중재기), `control_gen`, `lease`(소유 client_id·남은 시간), `stops` 를 싣는다.
+  - C 는 그것으로 세대와 lease 소유자를 갱신한다(C 의 계약). 차량용 `state` 메시지는 보내지 않는다.
+
+**취소 — 표시는 쓰기와 같은 잠금에서, 확정은 권한 검사 뒤.**
+- `BenchChannels(RealChannels)` 는 아래 요청을 받는 즉시, 그 잠금 안에서 비상 일련번호를 올린다.
+  - `stop`·`disarm`(지금처럼)
+  - `bench_stop`·`bench_disarm`·`lease_release`
+  - 연결 추가·끊김
+- 그래서 비상 묶음을 꺼낸 뒤에 이런 요청이 들어오면, 그 주기의 첫 바이트·이어 쓰기가 모두 거부된다. 다음 주기에 그 요청을 먼저 처리한다.
+- 실행은 시작 때의 `lease_id`·`arbiter.stops`·소유 연결·`control_gen` 을 적어 둔다. 다음 중 하나면 그 실행의 취소를 확정한다.
+  - STOP 수 증가
+  - lease 소실·교체
+  - 소유 연결 단절
+  - `bench_stop`·`bench_disarm`·공용 `disarm` 수락
+- heartbeat 만료는 수신 사건이 없다. 그래서 문(gate)이 매번 **현재 단조시각**으로 lease 기한(`renewed + lease_timeout_s`)을 다시 본다.
+
+**쓰기 주체 하나와 문(gate) — 프레임 종류별.**
+- 제어 스레드 하나가 순서대로 처리한다: `BenchLink` 의 묶음과 요청 → 실행 엔진 → 쓰기. 보드 쓰기는 이 스레드만 한다.
+- 쓰기는 `ReconnectingLink(exclusive=True, link_factory=BenchTtyLink)` 로 한다.
+- `BenchTtyLink` 는 프레임마다 `gate(frame, write)` 를 부른다. 첫 바이트와 **이어 쓰기마다** 다음 셋을 모두 본다.
+  - `send_boundary(channels, serial, write, check)` 의 일련번호 비교
+  - 프레임 자체 만료(`expires_ns`)
+  - 프레임 종류별 조건(아래 셋)
+- **실행 프레임**(`BENCH_SET`, `BENCH_ARM`, 준비 0, 비영 `COMMISSION`): 실행이 살아 있고 취소되지 않았을 때만 나간다. lease 가 유효하고 기한 안이며, 소유 연결이 있고, 실행 때의 `control_gen` 과 무장 세대가 같아야 한다.
+- **정리 프레임**(이번 정지의 0 `COMMISSION`, DISARM): 취소와 무관하게 나간다. 일련번호 비교만 받는다.
+- **`CLEAR_FAULTS`**: 송신 직전에 요청 때의 묶음(연결 세대·`boot_id`·결함 비트)을 다시 대조한다.
+- 영구 취소가 확정되면 큐의 실행 프레임을 버린다(호스트에 `drop_frames(kinds, reason)` 를 더한다). 그래서 `unsent` 로 큐 맨 앞에 돌아간 SET·ARM 이 정리를 막거나 다음 실행에 다시 나가지 않는다.
+- 이어 쓰기가 거부되거나 20 ms 를 넘기면 그 프레임을 버린다(`frame_abandoned`, 재전송 없음). 독은 다음 프레임 유무와 관계없이 곧바로 쓴다.
+- 독을 50 ms 안에 다 못 쓰면 `LinkLost` 다. 기존 재연결기가 fd 를 닫고 `host.disconnected()` 를 부른다.
+- 독 뒤에는 실행 상태를 다시 판정한다. 아직 필요한 정리 0·DISARM 은 **새 seq** 로 다시 발행한다. 다만 정리 0 의 확인 대상 seq 는 **첫 정리 0 의 seq** 로 고정하고, 재시도마다 앞으로 옮기지 않는다.
+  - 근거: 첫 정리 0 이후에 큐에 넣은 프레임은 모두 정리 프레임이다. 그래서 `last_rx_seq ≥ 첫 정리 0` 이면 그중 하나가 수락된 것이다.
+- 기존 `TtyLink`(bringup CLI 가 bench5 를 구동하는 링크)와 `LoopTtyTransport`(HIL·REAL, 벤치 프레임 거부)는 바꾸지 않는다. B1 의 변경은 새 콘솔의 쓰기 경계뿐이다. 기존 CLI 의 `SET → BENCH_ARM → 0` 성공과 REAL/HIL 의 벤치 송신 0 바이트를 시험으로 함께 고정한다.
+
+**ARM 직후의 정지.**
+- `BENCH_ARM` 을 큐에 넣는 순간부터 실행은 '무장 송신됨'이다.
+- 호스트의 무장 교환이 끝나지 않은 동안(`host.arming`)에는 정지 규칙이 `wait` 다. 비영 송신은 실행 프레임 조건으로 이미 막혀 있다.
+- ARM 프레임의 마지막 바이트보다 먼저 받은 표본은 닫기 근거가 아니다. 그래서 늦게 도착한 이전 DISARMED 쌍으로 실행을 닫지 않는다.
+- 새 ARMED 를 받으면 호스트가 준비 0 을 스스로 만든다. 그 뒤 정지의 0 을 보내고, 3 절 DISARM 조건을 적용한다. 준비 0 은 정지의 0 보다 seq 가 앞이라 둘이 구별된다.
+- 무장이 거부되거나 만료되면 ARM 이후에 받은 DISARMED 표본으로 닫는다.
+- 회귀 시험: ARM 완료 → STOP → 이전 DISARMED 쌍 지연 도착 → 새 ARMED 수신.
+
+**입력 검증.**
+- 웹 경계에서 먼저 타입을 본다.
+  - 확인값(`power_switch_in_hand`, `wheels_lifted`, `vcc_watched`)은 실제 불리언이어야 한다.
+  - 수치는 유한한 수, `window` 는 두 수, 우회는 문자열 목록이어야 한다.
+- 그다음 bringup 인자 이름공간으로 옮겨 `_check_commission_args`·`bench_limits` 로 검증한다.
+- `synthetic`·제품 문자열은 요청에서 받지 않는다.
+- 우회 목록 생략과 `[]` 는 같은 요청이다. 늘 `BenchAsk` 를 만들어 M/H 의 기본 시간 상한이 이미지 기본에서 여유를 뺀 값으로 같게 한다.
+- 큰 실행은 검증된 `RunAsk` 의 `confirmation_phrase()` 와 요청의 `large_confirm` 이 정확히 같아야 한다.
+- `absent` 에 든 축은 구동을 거부한다.
+
+**M·H 의 준비와 창 검사.**
+- 호스트의 무장 준비 0 은 L 축이다. M/H 는 무장 뒤 **그 축의 0 `COMMISSION`** 을 보내고, 그 수락(`last_rx_seq`·거부 없음)을 확인한 뒤 비영 구동을 연다.
+- 그 축의 0 이 거부되면(KTH 무효, 계약 3.4) 실행은 '구동 없음'으로 닫는다.
+- 구동 중 창 검사는 최신 표본만이 아니라 **읽힌 모든 STATE** 에 적용한다. 호스트의 `on_state` 로 모은다.
+
+**고장 해제 상태 전이.**
+- `clear_faults` 는 다음 순서로 간다. bringup `clear_faults` 와 같은 확인을 비차단으로 옮긴 것이다.
+  1. 요청 때 묶음을 적는다.
+  2. 경계 이후 쌍과 새 fd 의 제품(`bench_refusal` 의 이미지 조건)을 확인한다.
+  3. DISARM 을 보내고, 그 echo 를 같은 연결·부팅·이후 표본으로 확인한다.
+  4. 묶음을 다시 대조한다.
+  5. `CLEAR_FAULTS` 를 보낸다(문에서 한 번 더 대조).
+  6. 그 echo 를 확인한다.
+  7. DISARMED·`DRIVERS_READY` 를 확인한다.
+- 재개봉 뒤에는 정리·CLEAR 도 새 fd 의 제품이 bench5 이고 경계 이후 쌍이 있을 때만 연다.
+- `mcu_model --bench` 는 같은 부팅 안의 연결 세대 변경을 흉내 내지 않는다. 같은 부팅의 재개봉은 경계 사건을 주입하는 시험으로 본다.
+
+**스트림·기록.**
+- `bench_state` 를 50 ms 마다 모든 연결에 보낸다. NaN 은 `null` 과 사유로 바꾼다.
+- 기록은 `~/bench_runs/<mode>_<axis>_<시각>/` 을 배타 생성한다.
+  - `run.jsonl` 은 줄마다 flush 한다. 쓰기 오류가 나면 그 실행을 취소한다.
+  - `result.json` 은 임시 파일에 쓴 뒤 이름을 바꾼다.
+
+**결과.** B1 은 판정 ①(실행·정리 정상)과 '구동 없음' 닫기만 낸다. ②·③ 은 B2 에서 연다.
+
+**2 회차 반영(순서와 시점).**
+- **공용 DISARM 의 세대 경계.** 벤치(`bench_requests`)에서 공용 `disarm` 을 받아들이면 `control_gen` 이 하나 오른다. 그래서 DISARM 보다 먼저 접수됐지만 뒤에 처리되는 `bench_run` 은 `stale_control` 이 된다(같은 주기에 비상 묶음이 먼저 처리되기 때문).
+- **쓰기의 기준 번호.** `BenchLink.begin` 은 처리한 비상 묶음의 일련번호를 돌려준다. 쓰기는 그 번호와 비교한다. `begin` 뒤에 새로 읽은 번호는 쓰지 않는다.
+- **호스트의 무장 0.** 이미 나간 ARM 에 대해 호스트가 스스로 만든 무장 0(L, 0)은 취소 중에도 문을 통과한다(`echo` 가 있고 같은 권한 세대일 때). 정지는 그 0 이 닿아 호스트가 준비될 때까지 기다린 뒤 자기 0 을 보낸다. 무장 교환이 열린 동안은 `arming`(대기·0 대기 모두)으로 보고 `wait` 다.
+- **ARM 의 '송신됨'.** ARM 프레임 전체가 쓰였을 때만 송신으로 본다. 첫 바이트 전에 버린 ARM 은 미송신 취소다(`cancel_arm`).
+  - 송신 뒤 결과가 불명이면, 다음 표본만 닫기 근거로 쓴다: 무장 세대가 바뀐 표본, 또는 같은 부팅에서 MCU 시각이 ARM echo + 보드의 echo 허용 시간(`command_timeout_ms`, 150 ms)을 지난 표본. 호스트 수신 시각만으로는 늦게 도착한 이전 DISARMED 를 배제하지 못하기 때문이다.
+- **정지 0 의 확인 대상.**
+  - 확인 대상은 **실제로 다 쓰인 첫 정지 0** 이다.
+  - 그 0 의 근거가 되는 표본은 두 조건을 모두 갖춰야 한다: 쓰기가 끝난 뒤에 받았고, 그 0 이 echo 한 STATE 보다 MCU 시각이 뒤다. 16 비트 비교만으로는 호스트가 들고 있던 오래된 '준비' 쌍을 걸러내지 못한다(반 바퀴 이상 떨어진 seq).
+  - 근거가 없으면 `wait` 다. DISARM 도 재송신도 하지 않는다.
+  - 아직 쓰이지 않은 정지 0 이 있으면 두 번째를 넣지 않는다.
+- **문 설치.** `BenchTtyLink` 의 `gate` 는 필수 인자다. 재연결기의 팩터리가 최초 개봉과 재개봉 때마다 같은 문을 묶어 만든다.
+- **시간 검사의 위치.** 20 ms 는 문 안에서 실제 이어 쓰기 직전에 본다. 50 ms 는 독의 다음 바이트를 쓰기 전에 본다. 넘었으면 한 바이트도 더 쓰지 않고 `LinkLost` 다.
+- **사용자 창.** 사용자 창은 무장 전 현재 값과, 첫 비영 송신까지 받은 모든 표본에 적용한다. 그 축의 0 이 거부된 경우는 정지 규칙으로 MCU 종료 모드를 확인한 뒤 '구동 없음'으로 닫는다. 그때 보드가 아직 ARMED·준비일 수 있기 때문이다.
+- **CLEAR 대조.** 요청 때 묶음을 선행 DISARM 직전, 그 echo 뒤, CLEAR 실제 쓰기 직전(문)에 대조한다. 어긋나면 그 해제를 거부하고 CLEAR 프레임을 큐에서 뺀다. 새 요청을 받으라고 답한다.
+- **시작 경로의 두 확인(CLI 와 같음).**
+  - 이전 결과 칸이 있으면 기록에 쓰고 flush 한 뒤에만 ARM 한다. 새 ARM 이 결과 칸을 비우기 때문이다.
+  - ARMED 쌍이 이번 `run_id` 를 말한 뒤에만 첫 비영을 보낸다.
+
 ## 4. C — 콘솔 '벤치' 화면
 
 - `console/web` 에 화면 하나(`data-view-panel="bench"`)를 더한다. 서버 welcome 이 벤치 세션일 때만 왼쪽 메뉴에 '벤치' 가 보인다.
