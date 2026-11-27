@@ -235,23 +235,20 @@ uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 }
 #endif
 
-static void lifecycle(void)
-{
 #if defined(FW_BENCH_IMAGE)
-    /* With the OTG interrupt off: the event snapshot, the start stamp and the begin mark cannot interleave with
-       an interrupt's own stamp (Codex A1a round 4), and the CDC receive FIFO, which that interrupt writes in
-       place (DWC2 slave), is cleared on whole indices (round 1). */
-    /* Every interrupt off for the few instructions from the snapshot to the begin mark: the tick cannot run between
-       a change being decided (e.g. DTR fell, in the caller) and the mark it reads (Codex A1a round 10). */
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    uint32_t tick_events = g_conn_tick_events;
-    uint32_t events = g_conn_events;
+static uint32_t g_lc_events, g_lc_tick_events; /* the snapshot lifecycle_begin took, settled by lifecycle_finish */
+
+/* With every interrupt off (the caller's mask): the event snapshot, the start stamp and the begin mark, so the
+   tick never runs between a change being decided and the mark it reads (Codex A1a rounds 4, 10). Short. */
+static void lifecycle_begin_masked(void)
+{
+    g_lc_tick_events = g_conn_tick_events;
+    g_lc_events = g_conn_events;
     uint32_t start = timebase_now_us(); /* this change's start: the earliest of what it settles */
-    if (tick_events != g_conn_tick_handled) {
+    if (g_lc_tick_events != g_conn_tick_handled) {
         start = earlier(start, g_since_tick);
     }
-    if (events != g_conn_handled) {
+    if (g_lc_events != g_conn_handled) {
         start = earlier(start, g_since_isr);
     }
     if (g_conn_end != g_conn_observed) { /* the last settled change not yet seen by the tick: keep its start */
@@ -259,12 +256,16 @@ static void lifecycle(void)
     }
     g_since_main = start;
     g_conn_begin = g_conn_end + 1u;
-    __set_PRIMASK(primask);
-    dcd_int_disable(0); /* the receive FIFO, which the OTG interrupt writes in place, cleared on whole indices */
-    /* The receive ring's consumer is the tick, which reads nothing while begin != end and cannot run inside this
-       (it preempts the main loop, not the other way): dropping the old connection's bytes here is safe, and does
-       not depend on the tick's own drain, which link_read may hold back while the OTG interrupt runs. */
+}
+#endif
+
+/* The rest, with the tick running again: the receive ring (whose consumer, the tick, reads nothing while
+   begin != end) and FIFO dropped, then the change settled. */
+static void lifecycle_finish(void)
+{
+#if defined(FW_BENCH_IMAGE)
     (void)link_ring_drop_all(&g_rx);
+    dcd_int_disable(0); /* the receive FIFO, which the OTG interrupt writes in place, cleared on whole indices */
     if (tud_mounted()) { /* unmounted (reset, unplug): the class reset closed the stream; re-arming it would fail */
         tud_cdc_read_flush();
     }
@@ -273,10 +274,21 @@ static void lifecycle(void)
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
     g_resync = true;
 #if defined(FW_BENCH_IMAGE)
-    g_conn_handled = events;
-    g_conn_tick_handled = tick_events;
+    g_conn_handled = g_lc_events;
+    g_conn_tick_handled = g_lc_tick_events;
     g_conn_end = g_conn_begin;
 #endif
+}
+
+static void lifecycle(void)
+{
+#if defined(FW_BENCH_IMAGE)
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    lifecycle_begin_masked();
+    __set_PRIMASK(primask);
+#endif
+    lifecycle_finish();
 }
 
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
@@ -293,11 +305,14 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
     bool changed = dtr != g_last_dtr;
     if (changed) {
         g_last_dtr = dtr;
-        lifecycle(); /* first: the bench image marks the change before anything else */
+        lifecycle_begin_masked(); /* first: the mark, before the tick can run again */
     }
     __set_PRIMASK(primask);
-    if (changed && dtr) {
-        g_link_stats.reopened++;
+    if (changed) {
+        lifecycle_finish(); /* the FIFO work with the tick running (round 11) */
+        if (dtr) {
+            g_link_stats.reopened++;
+        }
     }
 #else
     if (dtr) {
@@ -309,11 +324,17 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 
 void tud_mount_cb(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    g_last_dtr = false; /* a new configuration starts with DTR low (TinyUSB's class reset): its first open counts */
+#endif
     lifecycle();
 }
 
 void tud_umount_cb(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    g_last_dtr = false;
+#endif
     lifecycle();
 }
 
