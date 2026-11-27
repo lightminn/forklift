@@ -539,6 +539,60 @@ C 는 B1 백엔드(`tools/bench_console.py`)에 붙는 화면이다. B1 범위�
   - 해제 요청이 닫히면, 아직 다 나가지 않은 그 요청의 선행 DISARM 도 송신 허가를 잃는다(`cleanup_seqs` 에서 뺌). 일부 보낸 DISARM 은 링크가 폐기하고 poison 을 보낸다. 세션의 정지 프레임으로 끝까지 보내지 않는다.
   - 시험: 일부 보낸 해제 DISARM → 요청 마감 뒤 '안 됨'.
 
+## 4.2 A1b 나눔과 A1b-1 구현 결정 (2026-11-28, 총괄 동의)
+
+A1b 를 둘로 나눈다(총괄 동의 2026-11-28). 1 절의 계약은 그대로이고, 아래는 PR 경계와 1 절이 열어 둔 구현 선택이다.
+
+- **A1b-1**(이 절): M·H 의 KTH 카운터와 축별 손실, MISO 원시 0 대책(진행 감시), `duty` 모드의 거리 정지, 증거 나이, 결과 칸의 새 필드. 호스트 코덱·모형·`bringup commission --stop-kth-turns`, 인수인계 문서 9 절(벤치 콘솔 띄우는 법)을 함께 넣는다.
+- **A1b-2**: `BENCH_HOLD`(0x07)와 hold 제어(PI + 감쇠 D + 최소 듀티 + 데드밴드, 1 절의 순서 수정), ARM 첫 HOLD 의 목표 고정, hold 의 진행 감시·증거 판정, `bringup --hold-*`.
+  - 기본값은 11-27 실측 권장 시작값이다(총괄): duty 0.15·kp 0.5·데드밴드 12·최소 듀티 0.12, kd 0(미시험). 화면 기본값도 같다.
+  - 정상 hold 정지(데드밴드 안, 출력 0)가 `no_progress` 로 오판되지 않는 시험을 넣는다(총괄).
+- 그 뒤 **B2** 가 콘솔의 hold·거리 칸을 연다. MT 원천은 A1c 다.
+
+### A1b-1 결정
+
+1. **세대 `bench6`.** 계약 8 절은 A1a 의 `bench5` 에서 `source=kth`·`stop_counts`·정지 사유 8–12·`count_state`·`distance_confirm`·증거 나이를 '다음 세대'로 남겼다. A1b-1 이 그 뜻을 채우므로 제품 끝 토큰을 `bench6` 으로 올린다. 호스트(`bench_link.BENCH_SUFFIX`, `bench_console`·`bringup` 판별기, 모형 제품 문자열)는 `bench6` 만 받는다. `bench5` 이미지는 굽힌 적이 없다(보드는 `bench3`). 고정 벡터는 `bench6` 으로 새로 만든다. wire 길이·필드 배치는 바뀌지 않는다.
+2. **카운터(M·H 각각).** 진단 규칙을 축마다 둔다.
+   - 축별 이동량 누적(32 비트 모듈러)과 손실 상태를 둔다. M 은 `abs_frame[0]`·조향 CRC 변형, H 는 `abs_frame[1]`·승강 CRC 변형이다.
+   - 0x0000 은 직전에 센 각이 원시 0 에서 ±512 안일 때만 센다.
+   - 한 걸음은 직전에 센 프레임 뒤 경과 ms 당 512 를 넘으면 안 되고, 3 ms 동안 셀 프레임이 없으면 손실이다.
+   - 손실은 그 축에서 손실 뒤 정상으로 센 비영 프레임이 와야 풀린다(1 절 복구 조건).
+   - `BENCH_STATE` 의 `raw_angle`·`cumulative` 는 그 실행의 측정 축 값이고, `kth_lost` 는 두 축 비트다. `count_state` 는 측정 축 기준으로 `none_yet`(아직 센 프레임 없음)·`valid`·`lost` 다. 측정 축이 없으면(`source=none`) 0 이다.
+3. **SET 수락.**
+   - `source=kth` 는 축이 M·H 일 때만 받는다. `mt` 는 A1c 전까지 '아직 없음'으로 거부한다(`bad_value`).
+   - `stop_counts≠0` 은 `source=kth` 일 때만 받는다. `mode=hold` 는 A1b-2 전까지 거부한다.
+   - `source=kth`·`stop_counts=0` 은 측정만 하는 듀티 실행이다. 진행 감시와 손실 정지를 걸지 않고 시간 상한으로 끝난다.
+   - 거리 실행(`stop_counts≠0`)의 ARM 은 측정 축의 `count_state=valid` 이고 그 축에 `kth_zero_suspect` 복구 대기가 없을 때만 받는다. 아니면 `sensor_invalid` 로 거부한다(이미 있는 사유를 쓰고 새 사유를 만들지 않는다).
+4. **거리 정지**(1 절 '듀티 + 거리 정지' 그대로). 판정은 그 틱의 명령 처리보다 먼저다.
+   - 기준은 첫 비영 구동 직전 틱의 누적값이다(`distance_ref`).
+   - 부호 있는 상대 이동이 `stop_counts` 를 넘으면(같은 부호로 크기 이상), 그 틱에 출력을 0 으로 끊는다.
+   - 끊은 프레임이 0x0000 이면 정지 사유는 `distance_provisional`(9)이고, 아니면 `distance_reached`(8)다. 끊은 위치는 `cut_position` 에 남는다.
+   - 잠정이면 그 뒤 센 비영 프레임의 이동이 목표를 넘었는지로 `distance_confirm` 을 도달(1)이나 보류(2)로 정한다. 실행이 끝날 때까지 비영 프레임이 없으면 보류다.
+   - 끊은 뒤 그 ARM 의 비영 구동 요청은 출력·마감을 바꾸지 못한다. `blocked` 에 세고, 끝 전이로 MCU 가 STOPPING → DISARMED 로 간다.
+5. **진행 감시**(1 절 그대로, 거리 실행에만).
+   - 귀속 출력은 이전 틱에 실제로 쓴 듀티다. 0 이 아닌 틱의 MCU 시간만 더한다.
+   - 밀기마다 기준점을 두고, 기대 방향으로 R = 2 카운트 가면 타이머를 0 으로 되돌리고 기준점을 옮긴다. 0.3 s 가 되면 정지한다.
+   - 그 창의 KTH 프레임이 전부 0x0000 이었으면 `kth_zero_suspect`(11)이고, 그 축의 거리 실행은 복구 조건 전까지 거부된다. 아니면 `no_progress`(10)다.
+   - 손실은 `kth_lost`(12) 끝 전이다. 래치 결함으로 만들지 않는다. 운영 v3 의 `STATE` 비트·결함 비트는 바뀌지 않고, 무관한 CLEAR·다른 축 실행을 막지 않는다.
+   - 출력 0 틱은 시간을 더하지도 되돌리지도 않는다. 이것을 시험으로 고정한다(정상 정지 상태 오판 없음, 총괄 요청의 거리 실행 쪽).
+6. **증거 나이.**
+   - 마지막 증거는 측정 축에서 제어 틱이 마지막으로 센 비영 프레임의 MCU 시각이다. ARM 마다 '아직'(0xFFFF)으로 시작한다.
+   - `evidence_age_ms` 는 매 틱의 나이(포화)이고, `end_evidence_age_ms` 는 끝 전이 시점에 결과 칸에 고정한다.
+7. **결과 칸.** 정지 사유·`cut_position`·`blocked`·`distance_confirm`·끝 증거 나이·결과 축·원천을 최초 원인으로 래치한다. 다음 `BENCH_ARM` 의 소비에서 비운다(8.3 그대로). `distance_confirm` 만 래치 뒤에 바뀐다(잠정 → 도달·보류, 한 번).
+8. **호스트·도구.**
+   - `messages.py`: `BenchStop` 8–12, `BenchSource.KTH`, `count_state`·`distance_confirm` 열거.
+   - `bench_session.run_verdict`: `distance_reached` 를 정상 끝으로 친다. `distance_provisional` 은 확인값에 따라 정상이나 '판정 보류'다. `no_progress`·`kth_zero_suspect`·`kth_lost` 는 실행 실패이고 정리는 따로 판정한다.
+   - `bringup commission --stop-kth-turns N`: `stop_counts = round(N × 4096) × sign(duty) × count_sign`, `source=kth`.
+   - `bench_console`: 판별기만 `bench6` 으로 바꾼다. 거리 칸은 B2 가 연다.
+   - 모형(`mcu_model`)은 plant 의 KTH 프레임으로 동작한다. 0x0000 고착 주입은 펌웨어 호스트 시험(`test_drive.c`)에서 프레임을 직접 넣어 시험한다.
+9. **시험**(1 절 합격 목록 중 A1b-1 몫).
+   - 카운터: M 고정·H 만 움직임, H 손실 중 M 정상, ±512/±513→0 경계, 부팅부터 전부 0, LPTIM·32 비트 랩은 KTH 누적의 32 비트 랩.
+   - 거리: 정상 도달, 0x0000 으로 넘음 → 잠정 → 비영 확인 도달·보류, 끊은 뒤 HOLD 대신 비영 COMMISSION 차단 수, 목표 통과 틱의 비영 COMMISSION, 다른 축 비영 거부, 만료와 거리 도달 구별, 음방향, 반범위 밖 목표 거부.
+   - 진행 감시: 고정(시작부터·도중), 저듀티 역극성, `+1/−1` 왕복, `0→2→1↔2`, 299 ms → 출력 0 한 틱 → 다시 밀기, 느린 이동(0.3 s 안 2 카운트 유지, 1 카운트면 정지), 원시 0 고착(`kth_zero_suspect`·복구 전 재실행 거부·다른 축 실행과 무관한 CLEAR 가능), 출력 0 유지에서 시간 안 쌓임.
+   - 증거: 정리 중 비영 프레임, 이전 ARM 의 증거.
+   - `bench6` 판별(구세대 `bench5` 거부)과 고정 벡터, 운영 고정 벡터 불변, 비벤치 이미지의 unknown.
+   - 교차 빌드 이미지 크기·제품 문자열, ws1 전체 pytest.
+
 ## 5. 미검증으로 남는 것
 
 - 실물 MT: 미장착이라 모형으로만 검증한다. MT 장착 날 카운트/회전·부호·정지 검출을 실물로 확인한다.
