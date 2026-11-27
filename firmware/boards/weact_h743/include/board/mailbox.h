@@ -113,6 +113,13 @@ static inline bool slot_take(uint32_t slot, uint16_t *consumed, uint16_t *frame)
     return false;
 }
 
+/* An unconsumed completion is waiting in the slot (a frame deferred to the next tick): no new read may overwrite
+   it (Codex A1b-1a impl round 1 P2-1). */
+static inline bool stamped_pending(const stamped_slot *s, uint16_t consumed)
+{
+    return (uint16_t)(s->slot >> 16) != consumed;
+}
+
 /* The tick's take of a stamped read: fresh once per generation, never one acquired after the tick's time now (it
    stays unconsumed for the next tick: a higher-priority interrupt may publish between the tick's clock read and
    this one); *time is its acquisition time. */

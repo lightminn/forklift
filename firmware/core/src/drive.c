@@ -757,6 +757,13 @@ static void bench_kth_update(drive *d, const drive_inputs *in)
             d->kth_zs_wait[i] = false; /* a non-zero frame counted after the zero suspicion */
         }
     }
+    /* the evidence of the consumed run, before anything in this tick can end it, and on after its end until the next
+       ARM (the host's settling check reads it after DISARMED; impl round 1 P2-2) */
+    if (d->run_id != 0 && d->run_source == DRIVE_BENCH_SOURCE_KTH &&
+        (d->kth_bits[kth_index(d->run_axis)] & BENCH_KTH_TRUSTED)) {
+        d->run_ev = true;
+        d->run_ev_t = d->kth[kth_index(d->run_axis)].trust_t;
+    }
 }
 
 /* A provisional cut's confirmation, once, until the next BENCH_ARM: the first trusted sample after the cut, or a
@@ -787,11 +794,6 @@ static void bench_run_step(drive *d)
 {
     uint64_t dt = d->time_us - d->bench_last_us;
     d->bench_last_us = d->time_us;
-    if (d->run_active && d->run_source == DRIVE_BENCH_SOURCE_KTH &&
-        (d->kth_bits[kth_index(d->run_axis)] & BENCH_KTH_TRUSTED)) {
-        d->run_ev = true; /* the evidence: the last trusted sample since the ARM (decision 6) */
-        d->run_ev_t = d->kth[kth_index(d->run_axis)].trust_t;
-    }
     if (d->run_active && d->run_source == DRIVE_BENCH_SOURCE_KTH && d->mode == DRIVE_MODE_ARMED &&
         d->run_drive == DRIVE_BENCH_RUN_DRIVING && d->run_stop != 0) {
         int i = kth_index(d->run_axis);
@@ -810,10 +812,13 @@ static void bench_run_step(drive *d)
                    e * bench_kth_diff(k->trust_cum, d->run_ref) <= -(int64_t)DRIVE_BENCH_REVERSE_COUNTS) {
             why = DRIVE_BENCH_STOP_NO_PROGRESS; /* the wrong way at once (a wrong count_sign) */
         } else {
+            d->w_timer_us += driven ? dt : 0u; /* the driven time first: a reset below is never undone */
             if (bits & BENCH_KTH_TRUSTED) {
                 d->w_trusted = true;
-                if (e * bench_kth_diff(k->trust_cum, d->w_base) >= DRIVE_BENCH_PROGRESS_COUNTS) {
-                    d->w_timer_us = 0; /* progress on a trusted sample only */
+                /* progress on a trusted sample of a driven tick only: an output-0 tick neither adds nor resets
+                   (plan 1 progress watch; impl round 1 P2-3) */
+                if (driven && e * bench_kth_diff(k->trust_cum, d->w_base) >= DRIVE_BENCH_PROGRESS_COUNTS) {
+                    d->w_timer_us = 0;
                     d->w_base = k->trust_cum;
                     d->w_trusted = false;
                 }
@@ -823,7 +828,6 @@ static void bench_run_step(drive *d)
             } else {
                 d->zr_us = 0;
             }
-            d->w_timer_us += driven ? dt : 0u;
             if (d->zr_us > DRIVE_BENCH_ZERO_RUN_US) {
                 why = DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
             } else if (d->w_timer_us >= DRIVE_BENCH_WATCH_US) {
@@ -846,6 +850,11 @@ void drive_begin(drive *d, const drive_inputs *in)
 {
     d->time_us += (uint32_t)(in->now_us - d->last_now32); /* widen the HAL clock */
     d->last_now32 = in->now_us;
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        bench_kth_update(d, in); /* first: a fault, a limit or a wheel jump ending the run this tick sees these frames */
+    }
+#endif
     /* The commissioning time limit is judged first and whatever the mode: a fault taken in
        this same cycle must not drop its hold (Codex PR review 3). */
     bool cm_over = commission_over_limit(d);
@@ -853,11 +862,6 @@ void drive_begin(drive *d, const drive_inputs *in)
         hold_commission(d);
     }
     read_sensors(d, in);
-#if defined(FW_CORE_BENCH)
-    if (BENCH(d->cfg)) {
-        bench_kth_update(d, in);
-    }
-#endif
     check_spi_timeout(d);
 
 #if defined(FW_CORE_BENCH)

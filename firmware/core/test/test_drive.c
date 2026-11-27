@@ -2884,6 +2884,152 @@ static void bench_bench6_tests(void)
     bench_h_axis_counts_its_own();
 }
 
+
+/* ---- bench6 after the implementation review round 1 ---------------------------------------------------------- */
+
+static void bench_watch_counts_from_the_last_progress(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(80, 500, 1));
+    cm(0);
+    cm(1000);
+    for (int n = 1; n <= 50; n++) {
+        if (n == 50) {
+            kraw(0, 1002); /* +2: progress at this tick */
+        }
+        n % 40 == 0 ? cm(1000) : tick();
+    }
+    int since = 0;
+    while (d.mode == DRIVE_MODE_ARMED && since < 400) {
+        since++;
+        since % 100 == 0 ? cm(1000) : tick();
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK_EQ_I(since, 300); /* 300 ms after the progress, never 299 */
+}
+
+static void bench_cut_and_a_command_in_the_same_tick(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(81, 40, 1));
+    cm(0);
+    cm(1000);
+    int32_t ref = bench_state_now().distance_ref;
+    kraw(0, 1040);
+    cm(1000); /* the cut is judged before this tick's command */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+    CHECK_EQ_I(s.cut_position - ref, 40);
+    CHECK_EQ_U(s.blocked, 1);
+    CHECK(out.duty[DRIVE_CH_M] == 0.0f);
+}
+
+static void bench_cut_and_an_other_axis_fault_in_the_same_tick(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(82, 40, 1));
+    cm(0);
+    cm(1000);
+    int32_t ref = bench_state_now().distance_ref;
+    kraw(0, 1040);
+    in.nfault_low[DRIVE_CH_R] = true; /* R's driver faults in the crossing tick */
+    tick();
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_FAULT); /* the existing fault judgement first */
+    CHECK_EQ_I(s.cut_position - ref, 40);              /* the end position from this tick's frame */
+    CHECK(s.end_evidence_age_ms <= 1u);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        CHECK(out.duty[ch] == 0.0f);
+    }
+}
+
+static void bench_cut_and_the_command_expiry_in_the_same_tick(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(83, 40, 1));
+    cm(0);
+    cm(1000);
+    int32_t ref = bench_state_now().distance_ref;
+    while (d.time_us + cfg.period_us <= d.deadline_us) {
+        tick();
+    }
+    kraw(0, 1040); /* the crossing in the expiry tick */
+    tick();
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_COMMAND_TIMEOUT);
+    CHECK_EQ_I(s.cut_position - ref, 40);
+}
+
+static void bench_evidence_after_disarmed(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(84, 40, 1));
+    cm(0);
+    cm(1000);
+    kraw(0, 1040);
+    tick();
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    kraw(0, 1041);
+    ticks(5);
+    link_bench_state s = bench_state_now();
+    CHECK(s.evidence_age_ms <= 1u); /* the run axis's evidence goes on until the next ARM */
+    CHECK_EQ_U(s.run_flags & DRIVE_BENCH_FLAG_UNCLEAN, 0);
+}
+
+static void bench_distance_across_the_clock_wrap(void)
+{
+    reset_world(0xFFFFFFFFu - 400000u);
+    mod_bench(&cfg);
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
+    for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
+        tick();
+    }
+    kraw(0, 2000);
+    while (in.now_us < 0xFFFFFFFFu - 5000u) {
+        tick();
+    }
+    CHECK(kth_arm(85, 100, 1));
+    cm(0);
+    cm(1000);
+    int32_t ref = bench_state_now().distance_ref;
+    uint16_t raw = 2000;
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 30) {
+        raw = (uint16_t)(raw + 10);
+        kraw(0, raw);
+        tick();
+        n++;
+    }
+    CHECK(in.now_us < 0x00100000u); /* past the wrap */
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+    CHECK_EQ_I(s.cut_position - ref, 100);
+    CHECK_EQ_I(n, 10);
+}
+
+static void bench_review_round1_tests(void)
+{
+    bench_watch_counts_from_the_last_progress();
+    bench_cut_and_a_command_in_the_same_tick();
+    bench_cut_and_an_other_axis_fault_in_the_same_tick();
+    bench_cut_and_the_command_expiry_in_the_same_tick();
+    bench_evidence_after_disarmed();
+    bench_distance_across_the_clock_wrap();
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2956,5 +3102,6 @@ int main(void)
     bench_limit_change_deadline_order();
     bench_blocked_other_axis_after_disarm();
     bench_bench6_tests();
+    bench_review_round1_tests();
     return FW_TEST_RESULT();
 }

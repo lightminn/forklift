@@ -56,6 +56,11 @@ void kth_spi_start_bundle(void)
     if (g_stage != STAGE_IDLE) {
         return; /* the previous bundle is still running: no fresh frame this cycle */
     }
+#if defined(FW_BENCH_IMAGE)
+    if (stamped_pending(&g_slot[0], g_consumed[0]) || stamped_pending(&g_slot[1], g_consumed[1])) {
+        return; /* a frame deferred to the next tick (acquired after this tick's time) is not overwritten */
+    }
+#endif
     g_stage = STAGE_STEER;
     gpio_clear(GPIOD, cs_pin[0]);
     wait_cycles(CS_GAP_CYCLES);
@@ -66,7 +71,13 @@ void kth_spi_snapshot(uint32_t now, uint16_t frame[2], bool fresh[2], uint32_t t
 {
     for (int i = 0; i < 2; i++) {
         time[i] = now;
+#if defined(FW_BENCH_IMAGE)
+        /* the bench image counts on acquisition times (plan 4.2 A1b-1): the frame with its time, never one acquired
+           after this tick's time */
         fresh[i] = stamped_take(&g_slot[i], &g_consumed[i], now, &frame[i], &time[i]);
+#else
+        fresh[i] = slot_take(g_slot[i].slot, &g_consumed[i], &frame[i]); /* one 32-bit read, as before */
+#endif
     }
 }
 

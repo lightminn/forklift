@@ -111,7 +111,11 @@ static void stamped_slot_rules(void)
     CHECK_EQ_U(consumed, 2);                     /* left for the next tick */
     CHECK(stamped_take(&s, &consumed, 4000, &frame, &t));
     CHECK_EQ_U(t, 3003);
-    stamped_put(&s, slot_pack(4, 0x4444), 0xFFFFFFF0u); /* the HAL clock wraps */
+    stamped_put(&s, slot_pack(5, 0x5555), 5000);
+    CHECK(stamped_pending(&s, consumed)); /* deferred: no new read may overwrite it */
+    CHECK(stamped_take(&s, &consumed, 5000, &frame, &t));
+    CHECK(!stamped_pending(&s, consumed));
+    stamped_put(&s, slot_pack(6, 0x4444), 0xFFFFFFF0u); /* the HAL clock wraps */
     CHECK(stamped_take(&s, &consumed, 0x10u, &frame, &t));
     CHECK_EQ_U(t, 0xFFFFFFF0u);
 }
