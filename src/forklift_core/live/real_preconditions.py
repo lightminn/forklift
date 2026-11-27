@@ -179,8 +179,8 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
     # the same directory (Codex U3e-2 round 5 P2)
     try:
         vehicle_path = Path(vehicle_path).resolve()
-    except (OSError, RuntimeError):
-        pass
+    except RuntimeError as err:  # a link loop: unreadable like any other OSError (round 6 P3: never the alias)
+        raise OSError(f"vehicle path: {err}") from err
     paths = {"s10a": s10a_path, "settings": settings_path, "vehicle": vehicle_path, "watch": watch_path,
              "layer": layer_path, "budget": budget_path, "lidar": lidar_path, "imu": imu_path}
     parsed, hashes = {}, {}
