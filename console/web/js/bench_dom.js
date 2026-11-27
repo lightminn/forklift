@@ -136,7 +136,8 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
         say(m.bench.disarm() ? "보냄" : "보낼 수 없음");
       } else if (id === "bn-clear") {
         const r = m.bench.clearFaults(document.getElementById("bn-cause")?.value);
-        say(r.problems.length ? "원인을 적으세요" : r.sent ? "보냄" : "보낼 수 없음");
+        say(r.problems.includes("busy") ? "진행 중인 고장 해제가 있습니다"
+          : r.problems.length ? "원인을 적으세요" : r.sent ? "보냄" : "보낼 수 없음");
       }
     }, opt);
     page.addEventListener("change", (ev) => {
@@ -298,10 +299,11 @@ function drawGraph(m, axis) {
   const lo = vals.length ? Math.min(...vals) : 0, hi = vals.length ? Math.max(...vals) : 1;
   line(ser.map((s) => [s.t, s.value]), 4, half - 8, lo, hi === lo ? lo + 1 : hi, col("accent", "#4af"));
   line(ser.map((s) => [s.t, s.duty]), 4, half - 8, -1, 1, col("warn", "#fa4"));
-  const cur = ser.flatMap((s) => s.current);
+  const cur = ser.flatMap((s) => s.current).filter((c) => c !== null);
   const cmax = Math.max(1, ...cur.map((c) => Math.abs(c)));
   ["ok", "lidar", "teleop", "crit"].forEach((k, i) =>
-    line(ser.map((s) => [s.t, Math.abs(s.current[i])]), half + 4, half - 8, 0, cmax, col(k, "#8f8")));
+    line(ser.map((s) => [s.t, s.current[i] === null ? null : Math.abs(s.current[i])]), half + 4, half - 8, 0, cmax,
+      col(k, "#8f8"))); // a board gap stays a gap, never a measured 0 mA (round 4 P2-3)
   ctx.fillStyle = col("muted", "#999");
   ctx.font = "11px sans-serif";
   const what = axis === "M" ? "조향 rad" : axis === "H" ? "승강 m" : "바퀴 카운트 변화(측정 원천 아님)";

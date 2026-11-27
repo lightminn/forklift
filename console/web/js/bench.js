@@ -213,7 +213,10 @@ export function createBenchController({ session, now = () => Date.now() }) {
       if (!pending.has(requestId)) return; // forgotten at a disconnect: its answer is not this connection's
       pending.delete(requestId);
       // accepted: its own result is the next one -- unless that result already came (a late ACK of a resend)
-      if (kind === "bench_run" && r?.t === "ack" && result?.request_id !== requestId) result = null;
+      // only this tab's latest start's ACK clears the result: an earlier run's late ACK never does (round 4 P2-1)
+      if (kind === "bench_run" && r?.t === "ack" && requestId === runId && result?.request_id !== requestId) {
+        result = null;
+      }
       if (r?.t !== "ack" && kind === "bench_run" && requestId === runId) runOpen = false; // refused: no run
       if (r?.t !== "ack" && kind === "clear_faults" && requestId === clearId) clearOpen = false;
       replySeq += 1;

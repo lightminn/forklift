@@ -211,6 +211,11 @@ export function render(m) {
       $("mode").dataset.m = bench.mode ?? "NONE";
       $("mode-code").textContent = bench.mode ?? "—";
       $("mode-ko").textContent = `벤치 · 보드 ${bench.board?.mode ?? "—"}`;
+    } else {
+      // no state and no bench stream: the page's own waiting words (a bench session's words never stay, round 4 P2-2)
+      $("mode").dataset.m = "PAUSED";
+      $("mode-code").textContent = "—";
+      $("mode-ko").textContent = "연결 중";
     }
     renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;

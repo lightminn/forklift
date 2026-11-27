@@ -411,3 +411,17 @@ test("main.js wires the bench screen: welcome, disconnect, render and the shared
   assert.match(src, /renderBench\(m, \{ rejectText \}\)/);
   assert.match(src, /const benchHooks = \(\) => \(\{ showView, pressStop, rejectText \}\);/);
 });
+
+test("an earlier run's late ACK never clears the next run's result (round 4 P2-1)", async () => {
+  const { s, b, welcome } = rig();
+  welcome(BENCH);
+  const a = b.run(FORM).sent;
+  s.onMessage({ t: "bench_result", request_id: a, closed: "ended" });
+  const bId = b.run(FORM).sent;
+  s.onMessage({ t: "ack", of: "bench_run", request_id: bId });
+  await new Promise((r) => setImmediate(r));
+  s.onMessage({ t: "bench_result", request_id: bId, closed: "ended" });
+  s.onMessage({ t: "ack", of: "bench_run", request_id: a }); // A's resend answered late
+  await new Promise((r) => setImmediate(r));
+  assert.equal(b.result?.request_id, bId);
+});
