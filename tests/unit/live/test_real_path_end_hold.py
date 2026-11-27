@@ -4,9 +4,9 @@ on real parts -- the encoder safety speed from two STATEs (``real_teleop.encoder
 
 The standing reading's error width (two directions, about 0.021 m/s at a 27.8 ms delay bound) is above the path-end
 deceleration (``max(speed_for(path_left + margin), end_creep 0.02)``, about 0.0208 m/s 11.26 mm before the end): the
-operating end-to-end run stalled there (ws1 21634). On a measured stand (the loop's ``measured_stand``) in the D5
-stages the width is judged by the stop arc only; a command in effect, an unconfirmed output, a moving reading (two
-directions included) and every other stage stay bound by the path-end deceleration."""
+operating end-to-end run stalled there (ws1 21634). In the D5 stages the possible motion -- not the new command -- may
+stop within the trackers' arrival tolerance (8 mm) past the end; every other stage, and the new command, as before.
+Codex's counterexamples (a moving truck, a two-direction reading of one, a stale standing reading) stay held."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import pytest
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
 from forklift_core.live import real_teleop as rt
 from forklift_core.live.real_assembly import BypassPocketCheck
+from forklift_core.mission.core import MissionCore
 from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
 from forklift_core.planning.geometry import Footprint
@@ -77,10 +78,10 @@ class PermissionLayer:
         return self.permission.snapshot
 
     def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None,
-              path_end_target=True):
-        self.calls.append((direction, cap_mps, path_end_target))
+              path_end_slack_m=0.0):
+        self.calls.append((direction, cap_mps, path_end_slack_m))
         ev = t if evidence_s is None else evidence_s
-        kw = {} if path_end_target else {"path_end_target": False}
+        kw = {"path_end_slack_m": path_end_slack_m} if path_end_slack_m else {}
         return self.permission.allowed_speed(ev, {"low": T}, current_pose=current_pose,
                                              curvature_inv_m=curvature_inv_m, direction=direction, footprint=FOOT,
                                              own_footprint=BODY, speed_cap_mps=cap_mps, **kw)
@@ -95,14 +96,13 @@ def grid(*occupied):
     return GridSnapshot(state, free, T, (0.0, 0.0, 0.0), 0, 1, {"low": T}, -1.0, -3.0, 0.05)
 
 
-def core_at_end(speed, *occupied, phase="insert", left=LEFT, stand=True):
+def core_at_end(speed, *occupied, phase="insert", left=LEFT):
     perm = DrivePermission(CONFIG)
     path = np.array([[0.0, 0.0, 0.0], [left, 0.0, 0.0]])
     perm.update(grid(*occupied), path, FOOT, BODY, current_pose=(0.0, 0.0, 0.0), direction=1)
     c, _ = permission_core(speed, phase=phase, pocket_check=BypassPocketCheck((0.0, 0.0), 1.8, 0.8, 0.0))
     layer = PermissionLayer(perm)
     c.obstacle["layer"] = layer
-    c.state["measured_stand"] = stand  # the real loop's measured stand (outputs settled, counts still)
     return c, layer, perm
 
 
@@ -122,7 +122,7 @@ def test_a_standing_truck_just_short_of_the_end_creeps_on(phase):
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert not out.obstacle_hold and c.state.get("motion_hold") is None, (out, c.state.get("motion_hold"))
     assert 0.0 < out.requested_speed <= path_end_limit() + 1e-9, out
-    assert any(not pet for _, _, pet in layer.calls)  # the width was asked on the stop arc
+    assert any(sl == MissionCore.POCKET_END_SLACK_M for _, _, sl in layer.calls)  # the width asked with the slack
 
 
 def test_a_blocked_rear_arc_still_holds():
@@ -142,7 +142,7 @@ def test_no_request_checks_both_ways_on_the_arc_and_sends_nothing():
     c, layer, _ = core_at_end(standing_speed())
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
     assert out.requested_speed == 0.0 and c.state.get("motion_hold") is None
-    assert {d for d, _, pet in layer.calls if pet is False} == {1, -1}  # both widths asked on the stop arc
+    assert {d for d, _, sl in layer.calls if sl == MissionCore.POCKET_END_SLACK_M} == {1, -1}  # both, with the slack
 
 
 def test_no_request_with_one_arc_blocked_holds():
@@ -151,19 +151,33 @@ def test_no_request_with_one_arc_blocked_holds():
     assert out.requested_speed == 0.0 and c.state.get("motion_hold") == "occupied"  # obstacle_hold needs a request
 
 
-def test_without_a_measured_stand_the_width_stays_bound_by_the_path_end():
-    c, _, _ = core_at_end(standing_speed(), stand=False)
+def test_a_stale_standing_reading_still_holds():
+    """Codex U3e-1b round 3 P1: a standing reading 89 ms old (bound about 0.054) 8.1 mm before the insert end -- its
+    stop does not fit the end and the tolerance: held, as before."""
+    speed = standing_speed(0.089)
+    assert speed.bound_mps > 0.05
+    c, _, _ = core_at_end(speed, left=0.0081)
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.requested_speed == 0.0 and out.obstacle_hold
 
 
+def test_a_slow_creep_within_the_tolerance_goes_on():
+    """Moving at 5 mm/s (both directions at a 27.8 ms delay bound) 9 mm before the end, its command and output 0.005:
+    the possible motion stops within the end and the tolerance -- the creep goes on, at most the path-end limit."""
+    speed = reading(moved_counts=42)  # 42 counts in 20 ms: about 5 mm/s
+    assert speed.directions == (1, -1) and 0.004 < speed.signed_mps < 0.006
+    c, _, _ = core_at_end(speed, left=0.009)
+    c.state.update(command_speed=0.005, outstanding_motion={1: 0.005})
+    out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert not out.obstacle_hold and 0.0 < out.requested_speed <= path_end_limit(0.009) + 1e-9, out
+
+
 def test_a_two_direction_reading_of_a_moving_truck_is_still_bound_by_the_path_end():
     """Codex U3e-1b plan round 2 P1: 292 counts in 30 ms (signed 0.0233, bound 0.0469, both directions at a 27.8 ms
-    delay bound) with a 0.018 command and output, 8.1 mm before the insert end -- held, as before. (The loop's
-    measured stand is false while counts move; the test sets it true to pin the reading's own part too.)"""
+    delay bound) with a 0.018 command and output, 8.1 mm before the insert end -- held, as before."""
     speed = reading(dt_ms=30, moved_counts=292)
     assert speed.directions == (1, -1) and speed.signed_mps > 0.02
-    c, _, _ = core_at_end(speed, left=0.0081, stand=False)
+    c, _, _ = core_at_end(speed, left=0.0081)
     c.state.update(command_speed=0.018, outstanding_motion={1: 0.018})
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.requested_speed == 0.0 and out.obstacle_hold
@@ -185,9 +199,9 @@ def test_a_moving_reading_is_still_bound_by_the_path_end():
     assert out.requested_speed == 0.0 and out.obstacle_hold
 
 
-def test_a_command_in_effect_above_the_path_end_holds():
+def test_a_command_in_effect_beyond_the_tolerance_holds():
     c, _, _ = core_at_end(standing_speed())
-    c.state["command_speed"] = 0.03
+    c.state["command_speed"] = 0.04  # stops about 22 mm on: past the end and the tolerance
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.requested_speed == 0.0 and out.obstacle_hold
 
@@ -197,3 +211,36 @@ def test_past_the_end_the_new_command_is_zero():
     perm.advance(0.02)  # 8.7 mm past the end
     out = c.permission(T, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.requested_speed == 0.0
+
+
+# --- the transition on the real loop (Codex U3e-1b round 3 P2) -----------------------------------------------------
+@pytest.mark.parametrize("slack", [MissionCore.POCKET_END_SLACK_M, 0.0])
+def test_the_bypassed_s10_reaches_the_lift_at_a_27_8_ms_delay_bound(slack, monkeypatch):
+    """The real loop rig with the real layer at the operating stop model (scan period 0.12 -> latency 0.52 s), the
+    real encoder model's two directions (no direction evidence) and every STATE's delay bound 27.8 ms (run0's phase):
+    with the slack the bypassed S10 goes approach -> insert -> lift; without it (the code before U3e-1b) it stalls short
+    of an end and ends in a pocket stop."""
+    from forklift_core.live import real_autonomy as ra
+
+    from real_loop_rig import Rig
+    from test_real_loop_console import ask, run_until
+    from test_real_loop_d5 import submit
+
+    monkeypatch.setattr(MissionCore, "POCKET_END_SLACK_M", slack)
+    r = Rig(real_requests=True, real_layer=True, direction_evidence=False, scan_period_s=0.12)
+    r.loop._speed_delay_s = lambda: 0.0278
+    r.start()
+    r.console_out.clear()
+    reply, _ = ask(r, "check_bypass", check="d5_pocket", on=True)
+    assert reply["t"] == "ack", reply
+    r.tick()
+    submit(r)
+    run_until(r, lambda rec: (r.core.operator_open() is not None or r.permit.state == ra.LATCHED
+                              or r.core.commands.status in ("cancelled", "failed", "recovery_required", "done")),
+              30000)
+    if slack:
+        op = r.core.operator_open()
+        assert op is not None and op["kind"] == "lifted", (r.core.commands.end_reason, r.permit.reason)
+    else:
+        assert "pocket_stop" in str(r.core.commands.end_reason) + str(r.permit.reason), (
+            r.core.commands.end_reason, r.permit.reason)

@@ -449,8 +449,8 @@ def test_installing_may_ignore_only_the_correction_generation():
     assert lay2.installing(ignore_correction=True)  # 5c-1 r3 P1: other correction values -- still waited for
 
 
-def test_the_path_end_target_reaches_the_permission_after_the_layers_own_checks():
-    """U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): ``path_end_target`` goes to ``allowed_speed`` only when
+def test_the_path_end_slack_reaches_the_permission_after_the_layers_own_checks():
+    """U3e-1b (docs/plans/2026-11-27-real-path-end-hold.md 3): ``path_end_slack_m`` goes to ``allowed_speed`` only when
     given, and only after the layer's own refusals -- an old scan at the evidence instant is still ``scan_stale``."""
     lay = layer()
     seen = []
@@ -459,9 +459,9 @@ def test_the_path_end_target_reaches_the_permission_after_the_layers_own_checks(
     lay._installed = {"newest_scan_s": 1.0}
     lay.watchdog = lambda now_s: None
     kw = dict(current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.05)
-    assert lay.limit(1.0, evidence_s=1.035, **kw) == (0.3, "ok") and "path_end_target" not in seen[-1]
-    assert lay.limit(1.0, evidence_s=1.035, path_end_target=False, **kw) == (0.3, "ok")
-    assert seen[-1]["path_end_target"] is False
+    assert lay.limit(1.0, evidence_s=1.035, **kw) == (0.3, "ok") and "path_end_slack_m" not in seen[-1]
+    assert lay.limit(1.0, evidence_s=1.035, path_end_slack_m=0.008, **kw) == (0.3, "ok")
+    assert seen[-1]["path_end_slack_m"] == 0.008
     n = len(seen)
-    assert lay.limit(1.0, evidence_s=1.0 + lay.scan_max_age_s + 0.01, path_end_target=False, **kw)[1] == "scan_stale"
+    assert lay.limit(1.0, evidence_s=1.0 + lay.scan_max_age_s + 0.01, path_end_slack_m=0.008, **kw)[1] == "scan_stale"
     assert len(seen) == n

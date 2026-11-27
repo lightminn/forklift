@@ -488,10 +488,10 @@ class RealLayer:
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
               cap_mps: float, ignore_correction: bool | None = None, evidence_s: float | None = None,
-              path_end_target: bool = True):
+              path_end_slack_m: float = 0.0):
         """``evidence_s`` (5d, design 7.1 6): the instant the evidence must still hold at -- the scans' and the FREE
         evidence's ages are judged there (the latest write of this tick's DRIVE); the installs and the watchdog's
-        deadlines, which change state, at ``now_s``. None: ``now_s`` (as before). ``path_end_target``:
+        deadlines, which change state, at ``now_s``. None: ``now_s`` (as before). ``path_end_slack_m``:
         ``DrivePermission.allowed_speed``'s (U3e-1b), after every check here."""
         ev = float(now_s) if evidence_s is None else float(evidence_s)
         if self.installing(ignore_correction):
@@ -503,7 +503,7 @@ class RealLayer:
         if watch_ is not None:
             return 0.0, watch_
         footprint, own = self.footprints(loaded, direction)
-        kw = {} if path_end_target else {"path_end_target": False}
+        kw = {"path_end_slack_m": float(path_end_slack_m)} if path_end_slack_m > 0.0 else {}
         return self.permission.allowed_speed(ev, self.last_scan_s, current_pose=current_pose,
                                              curvature_inv_m=curvature_inv_m, direction=direction,
                                              footprint=footprint, own_footprint=own, speed_cap_mps=cap_mps, **kw)

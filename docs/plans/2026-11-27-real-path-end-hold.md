@@ -33,58 +33,68 @@
 - **지연 상한이 실행 내내 높았던 이유는 위상이다.** 실패 실행의 STATE 지연 상한 중앙값은 28.1 ms, 통과 실행은 20.0 ms 다. 치명 hold 5 s 동안 한 틱에 읽는 STATE 두 개가 38.3 / 27.8 ms 로 매 틱 똑같이 반복됐다. 호스트 20 ms 틱과 MCU STATE 주기가 한 위상으로 맞물려 그대로 유지된 것이다. 위상은 기동마다 정해지므로 같은 지연·거리 조건이면 실차에서도 재현될 수 있다. 28 ms 는 정상 범위 안이다: 엔코더 안전 속도는 수신 나이 + 지연을 100 ms(`max_age_s`)까지 받는다(스캔 배치의 STATE 지연 한도 50 ms 와는 다른 한도).
 - **첫 hold 가 무엇이었는지는 기록만으로 가릴 수 없다**(Codex 2 회차 P1). 정지 카운트에서 엔코더는 같은 상한을 양 방향 `(1, -1)` 에 둔다. 전진 요청이면 `_direction_limits` 가 후진 가능 운동을 먼저 층에 묻는다. 층은 방향별로 정지 호를 다시 계산하지만 경로 끝 감속은 같은 설치된 `path_check` 에서 오므로 후진 질의도 같은 경로 끝 허용치를 받아 `direction_unsure` 가 된다. 이어지는 포켓 재질의가 `motion_hold` 를 `residual_over_allowed` 로 덮어쓴다. Codex 가 이 worktree 의 `encoder_speed`·`DrivePermission`·`MissionCore.permission` 으로 한 틱을 재현했다(빈 격자, D5 우회, 끝까지 11.26 mm, 카운트 변화 0, 간격 20 ms, 지연 27.8 ms): 엔코더 상한 0.0208557, 경로 끝 상한 0.0208202 m/s, 현재 코드는 `residual_over_allowed`·0. 전진 재질의만 바꾸면 `direction_unsure`·0, 두 방향의 가능 운동을 모두 정지 호로 보면 `ok`·0.0208202.
 
-## 3. 수정
+## 3. 수정 (3 판 — Codex 3 회차 뒤)
 
-**원칙: 경로 끝 감속은 정지 공간 증거가 아니다.** `allowed_speed` 의 주석 그대로("Stopping at the goal needs no margin past it; the arc check still covers the actual stopping volume beyond the end"), 경로가 끝까지 검증됐고 막히지 않았을 때의 `path_limit` 은 끝점에 맞춰 서기 위한 목표 감속이다. 끝점 너머의 정지 부피는 지금 곡률·방향의 정지 호 검사(`check_arc`, `arc_limit`)가 맡는다. 설계 §7.1 의 가능 운동 비교가 지키려는 것은 "지금 있을 수 있는 운동의 정지 호가 덮였는가"다.
+**규칙: D5 단계에서 가능 운동의 hold 판정은 경로 끝을 도착 허용오차만큼 넘어 서는 것까지 허용한다.** 새 명령의 상한은 그대로 경로 끝 감속이다.
 
-**그러나 모든 가능 운동에 정지 호만 쓰면 안 된다**(Codex 2 회차 P1-2·agy 2): 가능 운동에는 서 있는 읽기의 오차폭뿐 아니라 **주행 중 측정 속도의 상한**, **지금 효력 있는 명령**, **미확인 출력**도 들어간다. D5 우회 중 삽입 끝에서는 영역 안 팔레트 셀이 비고 우회 검사기가 `inf` 를 내므로, 움직이는 차의 가능 운동을 정지 호만으로 보면 삽입 목표 너머로 넘어갈 수 있다(Codex 반례: 끝 11.26 mm 앞, `signed 0.0392`, `bound 0.060`, 출력 0.018 → 지금은 hold, 정지 호만이면 0.0208 전진 허용; 캐리지 여유 16 mm). 그래서 **서 있을 수 있는 읽기의 오차폭만** 정지 호로 판정하고, 나머지는 지금처럼 경로 끝 감속까지 포함한 층 답과 비교한다.
-
-1. **층 API**: `DrivePermission.allowed_speed(…, path_end_target=True)`, `RealLayer.limit(…, path_end_target=True)` 키워드(기본 = 지금과 같음).
-   - False 이면 `path.reached_end and path.blocked is None and path.first_unknown_m is None`(끝까지 검증, 공유 API 의 `unknown_passes` 대비 — Codex 2 회차)일 때 경로 끝 감속을 빼고 `arc_limit` 과 그 사유를 돌려준다. 그 밖(막힘·미검증·끝에 닿지 않음)은 지금과 같다.
-   - 스냅숏 없음·센서 침묵·`evidence_stale`(경로·호 양쪽 증거 나이, `t + W`), `RealLayer` 의 설치 중·`scan_stale`·watchdog 은 지금처럼 그 앞에서 판정한다.
-   - 분기는 `allowed_speed` 의 결과 선택에만 둔다. `@dumped`·`@dual` 이 붙은 `check_path`·`check_arc` 는 바꾸지 않는다.
-2. **가능 운동을 둘로 나눈다**(실차만, `_possible_motion` 옆 새 함수):
-   - **측정된 정지의 오차폭** `stand[d]`: 루프의 **측정된 정지**(`RealLoop._still` 의 `stand_since_ns` — 이전 출력이 모두 정리되고(`outstanding` settled) 0.2 s 창 동안 바퀴 카운트가 2 카운트 안, 오도메트리 연속)를 코어에 `state["measured_stand"]` 로 넘기고, 그것이 참이고 안전 속도가 유효한 두 방향 읽기일 때 각 방향에 `bound_mps`. 이때 남은 상한은 모형의 오차폭(가속도 × 나이)이지 운동이 아니다.
-   - 두 방향 읽기만으로는 정지가 아니다(Codex 계획 2 회차 P1): `signed ± err` 가 0 을 걸치면 두 방향이 되지만, 카운트가 움직이면 상한에 측정 속도가 들어 있다(반례: 30 ms 에 292 카운트, `signed 0.0233`, `bound 0.0469`, 삽입 끝 8.1 mm 전, 명령·출력 0.018 — 정지 호만 보면 0.020 전진을 허용하고, 상한 속도의 정지 이동량 26.6 mm 가 남은 8.1 + 캐리지 여유 16 = 24.1 mm 를 넘음).
-   - **그 밖의 가능 운동** `rest[d]`: 지금 명령(`_commanded_now`)의 방향에 그 크기, 미확인 출력(`outstanding_motion`)의 방향마다 그 값, 그리고 측정된 정지가 아닌 모든 읽기의 `bound_mps`. 각 방향의 최대.
-   - `motion[d] = max(stand[d], rest[d])` 는 지금과 같다(기록·요청 속도 상한 계산은 그대로).
-3. **가능 운동의 층 비교**(실차 D5 단계의 두 곳: `_direction_limits` 의 다른 방향 hold — 요청 0 의 양방향 포함 — 와 `_pocket_query` 의 면제 밖 재질의): 방향 `d` 에 대해
-   - `rest[d] > 0` 이면 지금처럼 `layer_fn(d, rest[d])`(경로 끝 감속 포함)와 비교, 부족하면 hold.
-   - `stand[d] > rest[d]` 이면 추가로 `layer_fn(d, stand[d], path_end_target=False)`(정지 호만)와 비교, 부족하면 hold.
-   - 그래서 서 있는 차의 오차폭은 정지 호가 덮이면 hold 를 만들지 않고, 실제 명령·출력·움직이는 측정 속도는 지금처럼 경로 끝 감속에 묶인다.
-   - D5 검사기(`check.limit`) 쪽 비교는 바꾸지 않는다(경로 끝 항이 없음).
-4. **새 명령의 상한은 그대로**: 요청 속도로 묻는 층 답(`_direction_limits` 의 driving 질의)과 D5 답 중 작은 값. 경로 끝 감속이 상한이므로 차는 끝점 앞에서 감속해 허용오차 안에 선다. `path_left ≤ 0` 이면 상한 0 — 정지 호가 열려도 앞으로 가지 않는다.
-5. **적용 범위**: 실차의 **D5 단계만** — `approach`·`insert` 이고 포켓 검사기(또는 우회 검사기)가 있을 때(`_direction_limits(…, stand_on_arc=True)`, `_pocket_query`). 다른 단계(운반·하역·cusp, `permission_watch`)는 지금 그대로다(Codex 계획 2 회차 P2: `transport` 하역 직선은 `acting=False` 라 층의 0 이 출력에 닿지 않을 수 있는데, 다른 방향 hold 가 풀리면 요청이 그대로 남는 반례). 그 단계의 같은 정체는 근거가 생기면 따로 다룬다.
-   - 정체가 풀리는 모양은 **멈췄다 가기**다: 측정된 정지(0.2 s) → 정지 호 판정으로 hold 없음 → 경로 끝 상한 이하의 기어가기 명령 → 카운트가 움직이면 측정된 정지가 아니므로 오차폭이 다시 경로 끝 감속에 묶여 hold → 다시 정지. 통과 실행에서도 이 구간은 짧은 hold 와 진행이 번갈아 나왔다. 허용오차까지 남은 몇 mm 를 이렇게 간다.
-6. **Isaac·시뮬레이션 불변**: `_direction_limits` 는 비실차면 지금처럼 한 번 부르고 끝난다. `_pocket_query` 는 실차만. 코어의 `layer_fn_` 클로저는 `path_end_target` 을 **받았을 때만** 넘긴다 — 시뮬레이션 호출의 인자·횟수·순서·기록된 kwargs 는 그대로다(Codex 2 회차: 무조건 넘기면 Isaac `limit` 시그니처·기록 kwargs 가 달라짐). 실차 조립을 쓰는 HIL·센서 재생은 `real_vehicle=True` 라 바뀐다(의도).
-7. **바꾸지 않는 것**: 출력 잔여 hold(`residual.get(direction) > allowed`), D5 검사기, `end_creep_mps`·`axle_accel`·지연 상한 값.
-
-**남는 위험(적어 둠)**: 측정된 정지에서도 모형상 오차폭(약 0.02 m/s)만큼의 운동은 정지 호로만 덮인다. 측정된 정지는 이전 출력이 모두 정리되고 0.2 s 동안 카운트가 2 카운트 안이어야 하므로 실제 운동은 그보다 훨씬 작다(2 카운트 / 0.2 s ≈ 0.024 mm/s 수준). 이번 수정이 바꾸는 것은 그때 보내는 명령이 0 인가, 경로 끝 상한(≤ 약 0.02 m/s, 끝을 지나면 0) 이하인가다. 그 명령으로 움직이기 시작하면 다음 틱부터는 지금 규칙이다. 삽입 끝 캐리지 여유(16 mm)와의 관계는 실차 S5 정지 측정 전까지 모형 수준의 판단이다.
+- **근거**: 경로 끝 감속은 정지 공간 증거가 아니라 끝점에 맞춰 서기 위한 목표 감속이다(`allowed_speed` 주석: "the arc check still covers the actual stopping volume beyond the end"). 접근·삽입 추종기는 끝점 ±8 mm(`position_tolerance_m 0.008`) 안에서 선 것을 도착으로 본다. 그러니 "지금 있을 수 있는 운동"이 끝점 너머 8 mm 안에서 설 수 있으면 그 운동 때문에 바퀴를 묶을 이유가 없다. 끝점 너머 실제 정지 부피(장애물)는 정지 호 검사가 지금처럼 맡는다.
+- **D5 우회 삽입 끝**(Codex 1 회차 P1-2): 영역 안 팔레트 셀이 비고 우회 검사기가 `inf` 를 내므로 정지 호는 팔레트·캐리지를 보지 못한다. 그곳에서 끝점 너머로 넘는 거리를 묶는 것은 경로 끝 감속뿐이다. 이 규칙은 그 묶음을 8 mm 늘린다. 이는 삽입 깊이 규칙의 캐리지 여유 16 mm 안이다(ADR 0004 D3; 여유 자체가 잠정값이고 실차 S5 정지 측정 전이라 모형 수준의 판단).
+- **바뀌는 범위**:
+  1. `DrivePermission.allowed_speed(…, path_end_slack_m=0.0)`: 0 보다 크고 경로가 끝까지 검증됐으며 막히지 않고 미검증 칸을 지나지 않았을 때(`reached_end and blocked is None and first_unknown_m is None`), 경로 끝 감속의 남은 거리에 그만큼 더한다(`path_left + slack`). 정지 호·증거 나이·센서 침묵 판정은 그대로다. 막혔거나 끝에 닿지 않았으면 무시한다. 기본 0 = 지금과 같다.
+  2. `RealLayer.limit(…, path_end_slack_m=0.0)`: 받았을 때만 넘긴다. 설치 중·`scan_stale`·watchdog 은 그 앞에서 그대로 판정한다.
+  3. `MissionCore`: 새 상수 `POCKET_END_SLACK_M = 0.008`(추종기 도착 허용오차). 실차의 D5 단계(`approach`·`insert`, 포켓 검사기 또는 우회 검사기 있음)에서만 가능 운동 비교 두 곳에 넘긴다.
+     - `_direction_limits` 의 다른 방향 hold: 요청 0 의 양방향 포함.
+     - `_pocket_query` 의 면제 밖 재질의.
+     - 요청 속도로 묻는 질의(새 명령의 상한)와 출력 잔여 hold(`residual > allowed`)에는 넘기지 않는다.
+  4. 코어의 `layer_fn_` 클로저는 키워드를 받았을 때만 넘긴다. 시뮬레이션·Isaac 호출의 인자·횟수·순서·기록 kwargs 는 그대로다(`_direction_limits` 는 비실차면 기존 두 인자로 한 번 부르고 끝남).
+- **D5 단계 밖은 그대로**(Codex 2 회차 P2): 운반·하역·cusp·`permission_watch` 는 바꾸지 않는다.
+- **측정된 정지 배관은 쓰지 않는다**(2 판의 `stand`/`rest` 분리와 `measured_stand` 를 철회).
+  - Codex 3 회차 P1: 측정된 정지라도 최신 STATE 가 오래되면(나이 89 ms) 오차폭이 0.054 m/s 다. 이를 정지 호로만 보면 모형상 삽입 끝 여유를 넘는다.
+  - 남은 거리 + 허용오차 기준이면 그 경우도 그대로 hold 다(8.1 + 8 mm 에 허용 0.0293 < 0.054).
+- **세 반례가 모두 hold 로 남는다**(숫자는 운영 정지 모형 지연 0.52 s·감속 0.5 m/s²).
+  - 1 회차: 움직이는 차 0.060, 끝 11.26 mm → 허용 0.0347.
+  - 2 회차: 두 방향 움직임 0.0469, 8.1 mm → 0.0293.
+  - 3 회차: 오래된 정지 읽기 0.054, 8.1 mm → 0.0293.
+- **run0 의 정체는 풀린다**: 정지 오차폭 0.0209 < 0.0347(11.26 mm). 차가 기어 들어가는 동안에도 상한(측정 속도 + 오차폭)이 허용치 아래면 hold 없이 이어진다. 예: 9 mm 앞에서 5 mm/s 로 기어가면 상한 약 0.026 < 0.031.
+- **지연이 더 크면**: 지연 상한이 실행 내내 약 43 ms 이상으로 맞물리면, 서 있는 오차폭(≥ 0.0293)이 끝 8 mm 앞의 허용치를 넘는다. 그러면 허용오차에 닿기 전에 서고 5 s 규칙(`pocket_stop`)으로 끝난다 — **정지로 끝나는 쪽이라 받아들인다**. 운용자가 다시 제출한다.
+  - 두 기록의 지연 상한 최대는 38.7 ms(run0)·36.6 ms(run1)였다.
+  - 리그 전이(4 절)에서 18.3·27.8·38 ms 는 승강까지 가고 45 ms 는 `pocket_stop` 이었다.
 
 **고르지 않은 안**:
-- (나) `end_creep_mps` 를 서 있는 차의 최악 상한(`EncoderSpeedParams.worst_error()`) 이상으로 올리는 안. 경로 끝에서 실제 명령 속도까지 올라가고, 상한이 지연에 달려 있어 값이 맞을 보장이 없다.
-- (다) "끝점 X mm 안에서 경로 끝 감속 때문에만 hold 면 도착으로 본다". 도착 판정과 안전 판정을 섞고, X 가 또 하나의 임시값이 된다.
-- (라) 1 판의 "포켓 재질의 한 곳만 정지 호" 안. 후진 쪽 `direction_unsure` 가 남아 여전히 0 이고(Codex 재현), 움직이는 차의 hold 까지 풀린다(Codex 반례).
+- (나) `end_creep_mps` 를 서 있는 차의 최악 상한 이상으로 올리는 안. 새 명령까지 올라가고, 상한이 지연에 달려 있어 값이 맞을 보장이 없다.
+- (다) "끝점 X mm 안에서 경로 끝 감속 때문에만 hold 면 도착으로 본다". 도착 판정과 안전 판정을 섞는다.
+- (라) 1 판의 "포켓 재질의 한 곳만 정지 호" 안. 후진 쪽 `direction_unsure` 가 남고(Codex 재현), 움직이는 차의 hold 까지 풀린다.
+- (마) 2 판의 "측정된 정지의 오차폭만 정지 호" 안. 오래된 STATE 의 정지에서 오차폭이 커도 풀리고(Codex 3 회차 P1), 멈췄다 가기가 느려 지연 45 ms 에서 추종 시간 초과가 났다(같은 회차 P2).
 
 ## 4. 시험
 
-- **결정적 회귀**(Codex 2 회차 P2: 기본 리그는 가짜 층의 무한 허용치·`direction_evidence`·리그 스캔 주기 0.10 s 때문에 실패 조건을 가림): 한 틱을 실제 부품으로 잇는다 — 같은 카운트의 STATE 두 개(간격 20 ms) → 실제 `encoder_speed`(지연 27.8 ms) → 짧은 빈 경로·운영 정지 모형(지연 0.52 s, 감속 0.5, 여유 0.05)의 실제 `DrivePermission`/`RealLayer` → 실제 `MissionCore.permission`(D5 우회 검사기). 새 파일 `tests/unit/live/test_real_path_end_hold.py`.
-  1. 끝까지 11.26 mm, 양쪽 호 빔 → `0 < requested_speed ≤ path_limit`, hold 없음. **수정 전 코드에서 0·hold 임을 먼저 확인**한다.
-  2. 후진 호만 막힘(뒤에 장애물) → hold.
-  3. 전진 호만 막힘 → hold.
-  4. 요청 0 → 양방향 모두 정지 호로 물음(`path_end_target=False` 전달 단언), 출력 0, hold 없음. 한쪽 호만 막히면 `motion_hold`.
-  5. 움직이는 읽기(Codex 반례: `signed 0.0392`, `bound 0.060`, 출력 0.018, 끝 11.26 mm) → 지금처럼 hold.
-  5a. 움직이는 두 방향 읽기(Codex 2 회차 반례: 30 ms 에 292 카운트, 명령·출력 0.018, 끝 8.1 mm) → hold.
-  5b. 측정된 정지가 아님(`measured_stand` 거짓)·같은 정지 읽기 → hold.
-  5c. D5 단계 밖(`transport`) → hold(지금 그대로).
-  6. 명령이 효력 중(`command_speed` 0.03 > 경로 끝 상한, 읽기는 서 있음) → hold(`rest` 가 경로 끝 감속에 묶임).
-  7. `path_left ≤ 0`(`advance()` 로 끝 넘김), 호 빔 → 새 명령 0.
-- **전이 시험**: `bypass_rig(real_layer=True, direction_evidence=False)` 에 운영 정지 모형을 맞추고 `_speed_delay_s()` 를 27.8 ms 로 고정해 접근 끝 11 mm 앞에서 세운다 → 수정 전 `pocket_stop`, 수정 후 허용오차 안 도착·`insert` 전이. 리그로 만들기 어려우면 그 이유를 적고 결정적 회귀가 대신한다(E2E 20 회로 대신하지 않는다).
-- **층 단위**(`DrivePermission`): `reached_end`·막힘 없음·미검증 없음 → False 가 `arc_limit`; `blocked`·`first_unknown_m`·끝에 닿지 않음 → 같은 값; 기본 인자는 지금과 같다.
-- **`RealLayer` 전달**(Codex 2 회차 P2): `RealLayer.limit` 이 키워드를 받았을 때만 `allowed_speed` 에 넘기고, `scan_stale`(증거 시각 `t + W`) 같은 층 자신의 거부가 그 앞에 그대로 있다.
-- **가짜 층**: `test_real_loop_d5.Low.limit`, `test_core_truth_split._Layer.limit` 이 키워드를 받아 기록하게 고친다. 기존 "낮은 양수 응답은 hold" 시험이 그대로 hold 인지 확인(Codex 2 회차 P2, agy 6). 실차 경로에서 `layer.limit` 을 부를 수 있는 구현(`RealLayer`, 시험 대역)은 모두 같은 키워드를 받는다 — 받지 않는 구현으로 조용히 되돌아가는 분기는 두지 않는다.
-- **머지 조건**(총괄): 결정적 회귀 1–7 통과(1 은 수정 전 실패 확인), 운영 파일 정상 경로 4 CPU 20 회 통과(`--keep-duplicates`, basetemp 는 짧은 `test_runs/u655b…`, 실패 기록 보존).
-- **재생 게이트**: 미션 코어를 건드리므로 runs29 29/29(시뮬레이션 경로는 이 분기를 타지 않으므로 불변이 기대값).
+- **결정적 회귀(한 틱, 실제 부품)** — `tests/unit/live/test_real_path_end_hold.py`.
+  - 부품 연결: 같은 카운트 STATE 두 개(20 ms) → 실제 `encoder_speed`(지연 27.8 ms) → 짧은 빈 경로·운영 정지 모형의 실제 `DrivePermission` → 실제 `MissionCore.permission`(D5 우회 검사기).
+  - 기본 리그는 가짜 층·방향 증거·스캔 주기 0.10 s 때문에 실패 조건을 가리므로 쓰지 않았다(Codex 2 회차 P2).
+  - **풀려야 하는 경우**:
+    1. 끝까지 11.26 mm, insert 와 approach → hold 없음, `0 < 요청 ≤ 경로 끝 상한`. 수정 전 코드에서는 insert `residual_over_allowed`·approach `direction_unsure` 로 0 임을 확인했다.
+    2. 요청 0 → 양방향 모두 여유를 붙여 물음, hold 없음.
+    3. 9 mm 앞에서 5 mm/s 로 기어감(명령·출력 0.005) → 이어감.
+  - **hold 로 남아야 하는 경우**:
+    1. 후진 호만 막힘, 전진 호만 막힘.
+    2. 요청 0 에서 한쪽 호만 막힘 → `motion_hold`.
+    3. 1 회차 반례, 2 회차 반례, 3 회차 반례(오래된 정지 읽기).
+    4. 효력 중 명령 0.04, D5 단계 밖(`transport`).
+    5. 끝을 지난 뒤 새 명령 0.
+- **전이(실 루프 리그)**: 같은 파일 `test_the_bypassed_s10_reaches_the_lift_at_a_27_8_ms_delay_bound`.
+  - 조건: `Rig(real_layer=True, direction_evidence=False, scan_period_s=0.12)`(운영 정지 지연 0.52 s), 모든 STATE 의 지연 상한 27.8 ms.
+  - 여유 있음 → 승강 확인 요청까지 간다. 여유 0(수정 전과 같음) → `pocket_stop` 으로 끝난다.
+  - 리그에 `scan_period_s` 인자를 더했다(기본 0.10 그대로).
+- **층 단위**(`DrivePermission`):
+  - 여유는 끝까지 검증된 끝의 목표만 옮긴다.
+  - 끝을 지난 뒤 새 명령은 0 이고, 가능 운동은 여유 안에서 정지를 허용한다.
+  - 막힘·끝에 닿지 않음은 그대로다. 기본 0 은 지금과 같다.
+- **`RealLayer` 전달**: 받았을 때만 넘기고, `scan_stale` 등 층 자신의 거부가 앞에 있다.
+- **가짜 층·teleop 고정 시험**:
+  - `test_core_truth_split._Layer.limit`, `test_real_loop_d5.Low.limit` 이 키워드를 받는다.
+  - teleop 다리의 `direction_limits` 고정 시험은 같은 답을 내는 가짜 층으로 그대로 같다. 다리는 D5 단계가 없어 여유를 넘기지 않는다.
+- **머지 조건**(총괄): 위 결정적 회귀·전이 통과, 운영 파일 정상 경로 4 CPU 20 회 통과(`--keep-duplicates`, basetemp 는 짧은 `test_runs/u655b…`, 실패 기록 보존).
+- **재생 게이트**: 미션 코어를 건드리므로 runs29 29/29(시뮬레이션 경로는 새 키워드를 넘기지 않으므로 불변이 기대값).
 - **회귀**: `test_real_run_hil*` 4 CPU, 전체 pytest 를 최종 트리에서 한 번.
 - **원자료**: 노트북 사본(`u655diag/`)은 이 판정 뒤 삭제한다. ws1 `test_runs/u655x10` 은 머지 때까지 보존한다.
 
@@ -94,5 +104,6 @@
 |---|---|---|
 | Codex 진단(원자료 run0·run1 재계산) | hold 는 출력 잔여·현재 명령이 아니라 엔코더 상한 대 층의 경로 끝 허용치. `+0.006` 은 브레이크 최저속도가 아니라 한 틱 가속. U3e-1 diff 는 이 경로를 바꾸지 않았으나 타이밍 영향은 배제 못 함 | 2 절 |
 | agy(적히지 않은 전제, Neon High) | ① 끝점 너머 구조물이 정지 호에 잡힌다는 전제 ② 정지한 차만 해당한다는 전제(움직이는 차·출력 잔여·끝 넘김) ③ `arc_limit` 이 늘 상한보다 크다는 전제 ④ 묶인 항이 경로 끝이라는 확정 ⑤ 지연 고착의 원인 ⑥ 가짜 층 시그니처 ⑦ 20 회 E2E 의 검출력(실패율 2/23 이 그대로여도 약 16 % 로 통과) ⑧ §7.1 불변식과의 관계 | ② → 3 절 2–3 항(서 있는 오차폭만), 4 절 5–7. ④ → 2 절(Codex 한 틱 재현). ⑤ → 2 절(위상, 기록의 38.3/27.8 ms 반복). ⑥ → 4 절 가짜 층. ⑦ → 결정적 회귀를 머지 조건으로. ⑧ → 3 절 원칙·6 항, 설계 §7.1 에 예외 문장 추가(구현 PR). ① → 3 절 남는 위험. ③ → 4 절 2–3(막히면 hold 가 정상) |
+| Codex 3 회차(구현 bbc9841b) | P1 측정된 정지라도 오래된 STATE(나이 89 ms)면 오차폭 0.054 — 정지 호만 보면 삽입 끝 여유를 넘음(모형 반례). P2 멈췄다 가기가 느려 지연 45 ms 에서 `Tracking timeout in insert`, 더 큰 지연의 종료를 계획에 적을 것, 리그 전이 시험을 결정적 회귀로. P3 5a 시험 설명 | 3 판으로 규칙 교체(도착 허용오차 여유, 측정된 정지 철회), 3 절 '지연이 더 크면', 4 절 전이 시험(여유 0 이면 `pocket_stop` 확인), 5a 설명 정정 |
 | Codex 계획 2 회차 | P1 두 방향 읽기가 움직이는 차도 포함(반례 292 카운트) → 측정된 정지가 필요. P2 모든 단계 적용은 `transport`(`acting=False`)에서 층의 0 이 출력에 닿지 않는 경로를 엶 → D5 단계로 좁힘. P2 요청 0 의 새 판정·`RealLayer` 전달을 구별하는 단언. P3 50 ms 와 100 ms 한도 구분. Isaac 불변성은 코드상 성립 확인 | 3 절 2·5 항, 남는 위험, 4 절 4·5a–5c·`RealLayer` 전달, 2 절 P3 |
 | Codex 계획 1 회차(적대적) | P1 후진 검사가 같은 경로 끝 상한으로 이미 hold(`direction_unsure`) — 전진 재질의만으로는 0. P1 D5 우회 삽입 끝에서 움직이는 차의 hold 도 풀림(반례). P2 기본 리그가 실패 조건을 가림 — 실제 부품 한 틱 회귀. P2 가짜 층 시그니처. 그 밖: `first_unknown_m`, `path_left ≤ 0`, Isaac kwargs 불변, P3 가속 0.30·28 ms 출처 | 3 절 전면 수정(가능 운동 분리, 세 곳), 4 절 1–7·가짜 층, 2 절 P3 정정 |

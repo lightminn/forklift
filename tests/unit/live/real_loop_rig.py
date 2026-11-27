@@ -322,7 +322,7 @@ class FakeImu:
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
                  initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False,
-                 check_builder=True, operating=False, imu_unqualified=False, no_depth=False):
+                 check_builder=True, operating=False, imu_unqualified=False, no_depth=False, scan_period_s=0.10):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -405,7 +405,8 @@ class Rig:
                                   tuple(age_["cumulative_yaw_rad"]))
             kappa_ = max(abs(k) for k in VEH.steering.curvatures_inv_m)
             hall = SimpleNamespace(x_min_m=-2.0, x_max_m=7.0, y_min_m=-3.0, y_max_m=3.0)
-            grid_cfg, perm_cfg = real_layer_configs(layer_cfg, error_table=table, budget_s=0.10, scan_period_s=0.10,
+            # scan_period_s: 0.12 is the operating lidar.yaml's (its stop latency 0.52 s, U3e-1b)
+            grid_cfg, perm_cfg = real_layer_configs(layer_cfg, error_table=table, budget_s=0.10, scan_period_s=scan_period_s,
                                                     state_delay_s=0.05, v_scan_mps=0.225, kappa_max_inv_m=kappa_,
                                                     hall=hall)
             # the hull with the forks is what the permission checks; the scans' own outline is the body alone (the
@@ -416,7 +417,7 @@ class Rig:
                                    unloaded=hull,
                                    loaded=geometry.loaded_footprint, body=body,
                                    placer=lambda a, b: loop_box["loop"].place_scan(a, b),
-                                   budget_s=0.10, overdue_end_s=1.0, scan_period_s=0.10, scan_max_age_s=0.35,
+                                   budget_s=0.10, overdue_end_s=1.0, scan_period_s=scan_period_s, scan_max_age_s=0.35,
                                    worker=StepWorker(), odom_now=lambda: loop_box["loop"].odom_travel)
             self.delay_bound = DelayBound()
 

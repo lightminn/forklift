@@ -964,12 +964,12 @@ class DrivePermission:
         footprint: Footprint,
         own_footprint: Footprint,
         speed_cap_mps: float,
-        path_end_target: bool = True,
+        path_end_slack_m: float = 0.0,
     ) -> tuple[float, str]:
-        """(speed limit, reason) for this control tick. ``path_end_target=False`` (U3e-1b, the real truck's
-        possible-motion check only): when the path was verified to its end, unblocked and with no unknown passed, the
-        stop arc's limit alone -- the path end is a target to slow down for, and the arc covers the stopping volume
-        beyond it. Otherwise, and by default, as before."""
+        """(speed limit, reason) for this control tick. ``path_end_slack_m`` (U3e-1b, the real truck's possible-motion
+        check in the D5 stages only): when the path was verified to its end, unblocked and with no unknown passed, the
+        path-end deceleration lets a stop end that much past the end (the trackers' arrival tolerance -- a stop there
+        has arrived); the stop arc is checked as always. Otherwise, and at 0 (the default), as before."""
         cfg = self.config
         snap, path = self.snapshot, self.path_check
         if snap is None or path is None:
@@ -984,8 +984,8 @@ class DrivePermission:
         if now_s - estop.oldest_free_s > cfg.evidence_max_age_s or now_s - path.oldest_free_s > cfg.evidence_max_age_s:
             return 0.0, "evidence_stale"
         arc_limit = cfg.stopping.speed_for(estop.verified_m)
-        if not path_end_target and path.reached_end and path.blocked is None and path.first_unknown_m is None:
-            return arc_limit, estop.blocked or ("ok" if arc_limit > 0 else "limit")
+        if path_end_slack_m > 0.0 and path.reached_end and path.blocked is None and path.first_unknown_m is None:
+            path_left += float(path_end_slack_m)  # only the end's target moves; a blocked or unverified end stays
         if path.reached_end:
             # Stopping at the goal needs no margin past it; the arc check
             # still covers the actual stopping volume beyond the end.
