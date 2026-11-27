@@ -18,7 +18,7 @@
 enum { STAGE_IDLE, STAGE_STEER, STAGE_LIFT };
 
 static volatile uint32_t g_stage;
-static volatile uint32_t g_slot[2];       /* generation | frame, one word (mailbox.h slot_pack) */
+static stamped_slot g_slot[2];           /* generation | frame with its completion time (mailbox.h) */
 static uint16_t g_generation[2];          /* interrupt side */
 static uint16_t g_consumed[2];            /* tick side */
 static const uint32_t cs_pin[2] = {0, 1}; /* PD0, PD1 */
@@ -56,16 +56,28 @@ void kth_spi_start_bundle(void)
     if (g_stage != STAGE_IDLE) {
         return; /* the previous bundle is still running: no fresh frame this cycle */
     }
+#if defined(FW_BENCH_IMAGE)
+    if (stamped_pending(&g_slot[0], g_consumed[0]) || stamped_pending(&g_slot[1], g_consumed[1])) {
+        return; /* a frame deferred to the next tick (acquired after this tick's time) is not overwritten */
+    }
+#endif
     g_stage = STAGE_STEER;
     gpio_clear(GPIOD, cs_pin[0]);
     wait_cycles(CS_GAP_CYCLES);
     spi_start(SPI2, KTH_READ_WORD);
 }
 
-void kth_spi_snapshot(uint16_t frame[2], bool fresh[2])
+void kth_spi_snapshot(uint32_t now, uint16_t frame[2], bool fresh[2], uint32_t time[2])
 {
     for (int i = 0; i < 2; i++) {
-        fresh[i] = slot_take(g_slot[i], &g_consumed[i], &frame[i]); /* one 32-bit read */
+        time[i] = now;
+#if defined(FW_BENCH_IMAGE)
+        /* the bench image counts on acquisition times (plan 4.2 A1b-1): the frame with its time, never one acquired
+           after this tick's time */
+        fresh[i] = stamped_take(&g_slot[i], &g_consumed[i], now, &frame[i], &time[i]);
+#else
+        fresh[i] = slot_take(g_slot[i].slot, &g_consumed[i], &frame[i]); /* one 32-bit read, as before */
+#endif
     }
 }
 
@@ -77,7 +89,11 @@ void SPI2_IRQHandler(void)
     gpio_set(GPIOD, cs_pin[axis]);
     if (ok) {
         g_generation[axis]++;
-        g_slot[axis] = slot_pack(g_generation[axis], rx); /* one 32-bit write */
+#if defined(FW_BENCH_IMAGE)
+        stamped_put(&g_slot[axis], slot_pack(g_generation[axis], rx), timebase_now_us());
+#else
+        g_slot[axis].slot = slot_pack(g_generation[axis], rx); /* one 32-bit write, as before */
+#endif
     }
     if (g_stage == STAGE_STEER) {
         g_stage = STAGE_LIFT;

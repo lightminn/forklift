@@ -20,7 +20,7 @@ static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
     encoder_read(in->wheel_hw);
-    kth_spi_snapshot(in->abs_frame, in->abs_fresh);
+    kth_spi_snapshot(in->now_us, in->abs_frame, in->abs_fresh, in->abs_time_us); /* now_us set by the app */
     in->adc_fresh = adc_take(in->adc_raw);
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         in->nfault_low[ch] = gpio_read(GPIOB, nfault_pin[ch]) == 0u;

@@ -177,7 +177,7 @@ class McuLinkHost:
         self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
         self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
         # the bench image (mcu-link contract 8): the latest BENCH_STATE whose pair_seq names the STATE decoded right
-        # before it, and that STATE's seq; only a commission-mode host on a bench5 image sends bench commands
+        # before it, and that STATE's seq; only a commission-mode host on a bench6 image sends bench commands
         self.bench_state: BenchState | None = None
         self.bench_state_rx_ns: int | None = None
         self.bench_state_boot: int | None = None  # the boot of the accepted STATE it came with
@@ -564,13 +564,13 @@ class McuLinkHost:
     # ---------------------------------------------------------------- operator requests
     def bench_refusal(self, s: McuState | None = None) -> str | None:
         """Why this host must not send a bench command (plan A1a 1, contract 8): only a commission-mode (bring-up)
-        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench5``), whose
+        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench6``), whose
         STATE says a commissioning build with open outputs and no HIL plant."""
         s = self._state if s is None else s
         if not self.commission_mode:
             return "not_commission_host"
         if not bl.bench_image(self.usb_product):
-            return "not_bench5_image"
+            return "not_bench6_image"
         if s is None or self._conn_first_flags is None:
             return "no_state"
         # this connection's first valid STATE and the latest both (plan A1a 1: the first STATE decides the image)
@@ -581,9 +581,11 @@ class McuLinkHost:
                 return "outputs_locked_or_hil"
         return None
 
-    def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1) -> Blocked | None:
-        """Queue the run's BENCH_SET (duty mode, no measurement source, no distance stop -- A1a), echoing the latest
-        STATE. Its seq is ``last_queued_seq``; the caller reads the board's acceptance from STATE."""
+    def bench_set(self, run_id: int, ask: bl.BenchAsk, now_ns: int, count_sign: int = 1,
+                  source: int = int(BenchSource.NONE), stop_counts: int = 0) -> Blocked | None:
+        """Queue the run's BENCH_SET (duty mode; bench6: measured by the KTH count with ``source`` and stopped at
+        ``stop_counts``, 0 = no distance stop), echoing the latest STATE. Its seq is ``last_queued_seq``; the caller
+        reads the board's acceptance from STATE."""
         refused = self.bench_refusal()
         if refused is not None:
             return Blocked(f"bench_refused: {refused}")
@@ -596,7 +598,7 @@ class McuLinkHost:
             return Blocked("outbox_full")
         try:
             msg = BenchSet(s.boot_id, s.mcu_time_us, int(run_id), int(BenchMode.DUTY), int(ask.axis),
-                           int(BenchSource.NONE), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), 0)
+                           int(source), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), int(stop_counts))
         except ValueError as exc:
             return Blocked(f"bad_value: {exc}")
         self._enqueue("BENCH_SET", msg, now_ns)

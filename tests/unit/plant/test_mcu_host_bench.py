@@ -1,5 +1,5 @@
 """The bench image on the mcu_link host (bench console plan A1a 1, contract 8): only a commission-mode host, on the
-opened tty whose product string is exactly the bench5 image, whose STATE says an open commissioning build, sends
+opened tty whose product string is exactly the bench6 image, whose STATE says an open commissioning build, sends
 BENCH_SET and BENCH_ARM; a plain ARM is refused there; a BENCH_STATE counts only right after its STATE."""
 
 import pytest
@@ -11,7 +11,7 @@ from forklift_core.plant.mcu_host import McuLinkHost
 
 from test_mcu_host_commission import CB, CFG, MS, Rig, state
 
-BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench5"
+BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench6"
 ASK = bl.BenchAsk(0, (), None, None)
 
 
@@ -21,7 +21,7 @@ def bench_rig(product=BENCH5, **kw):
     return r
 
 
-def test_only_a_commission_host_on_the_bench5_image_sends_a_bench_set():
+def test_only_a_commission_host_on_the_bench6_image_sends_a_bench_set():
     for client in (Client.REAL, Client.HIL, Client.BRINGUP):
         h = McuLinkHost(CFG, client=client)
         h.usb_product = BENCH5
@@ -31,7 +31,7 @@ def test_only_a_commission_host_on_the_bench5_image_sends_a_bench_set():
                     "forklift-mcu commission OPEN v rec=1 lim=lr1 bench4"):
         r = bench_rig(product)
         r.feed()
-        assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_bench5_image"
+        assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_bench6_image"
     r = bench_rig()
     r.feed(flags=StateFlag.DRIVERS_READY)  # not a commissioning build
     assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_commission_build"
@@ -60,6 +60,18 @@ def test_a_bench_set_echoes_the_state_and_a_bench_arm_runs_the_arming_exchange()
     assert zero.axis == 0 and zero.duty_e4 == 0  # the arming's L(0): preparation on the bench image
     r.feed(mode=Mode.ARMED, gen=1, flags=CB | StateFlag.ZERO_SEEN)
     assert r.host.ready
+
+
+@pytest.mark.parametrize("count_sign", [1, -1])
+@pytest.mark.parametrize("stop", [-4096, 40])
+def test_a_distance_bench_set_carries_its_source_stop_and_count_sign(count_sign, stop):
+    """bench6 (plan 4.2 A1b-1 decision 8): the KTH source, the signed stop and count_sign reach the SET bytes."""
+    r = bench_rig()
+    r.feed()
+    assert r.host.bench_set(7, bl.BenchAsk(2, (), 0.2, 3.0), r.now, count_sign=count_sign, source=1,
+                            stop_counts=stop) is None
+    (bs,) = r.sent()
+    assert bs.source == 1 and bs.stop_counts == stop and bs.count_sign == count_sign
 
 
 def test_a_bench_set_needs_disarmed_and_no_arming_in_progress():

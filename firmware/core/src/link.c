@@ -237,7 +237,7 @@ static void put_payload(wr *w, const link_msg *m)
         put_u8(w, b->mcu_bypass);
         put_u8(w, b->drive);
         put_u8(w, b->conn_gen);
-        put_u8(w, b->reserved);
+        put_u8(w, b->run_flags);
         put_u8(w, b->result_axis);
         put_u8(w, b->result_source);
         break;
@@ -370,7 +370,7 @@ static void get_payload(rd *r, link_msg *m)
         b->mcu_bypass = get_u8(r);
         b->drive = get_u8(r);
         b->conn_gen = get_u8(r);
-        b->reserved = get_u8(r);
+        b->run_flags = get_u8(r);
         b->result_axis = get_u8(r);
         b->result_source = get_u8(r);
         break;

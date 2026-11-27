@@ -60,6 +60,39 @@ static inline bool mailbox_take(mailbox *m, uint8_t *channel, uint16_t *value, u
     return true;
 }
 
+/* A sensor read with its acquisition time (bench console plan 4.2 A1b-1): a seqlock over the packed slot and the
+   HAL time, so the tick never pairs a frame with another frame's time. The interrupt makes seq odd, writes both,
+   then makes it even; the tick reads only an even, unchanged seq. */
+typedef struct {
+    volatile uint32_t seq;
+    volatile uint32_t slot; /* slot_pack(generation, frame) */
+    volatile uint32_t time; /* HAL microseconds at the read's completion */
+} stamped_slot;
+
+static inline void stamped_put(stamped_slot *s, uint32_t slot, uint32_t time)
+{
+    s->seq = s->seq + 1u;
+    MAILBOX_BARRIER();
+    s->slot = slot;
+    s->time = time;
+    MAILBOX_BARRIER();
+    s->seq = s->seq + 1u;
+}
+
+/* False while the interrupt is writing (or wrote during the read): no frame this tick. */
+static inline bool stamped_read(const stamped_slot *s, uint32_t *slot, uint32_t *time)
+{
+    uint32_t a = s->seq;
+    if (a & 1u) {
+        return false;
+    }
+    MAILBOX_BARRIER();
+    *slot = s->slot;
+    *time = s->time;
+    MAILBOX_BARRIER();
+    return s->seq == a;
+}
+
 /* A completed sensor read as one 32-bit word: generation (16 bits) | frame (16 bits). The
    interrupt writes the word once; the tick reads it once -- one aligned 32-bit access each, so the
    generation and its frame can never be torn apart (Codex B2a review). */
@@ -78,6 +111,30 @@ static inline bool slot_take(uint32_t slot, uint16_t *consumed, uint16_t *frame)
         return true;
     }
     return false;
+}
+
+/* An unconsumed completion is waiting in the slot (a frame deferred to the next tick): no new read may overwrite
+   it (Codex A1b-1a impl round 1 P2-1). */
+static inline bool stamped_pending(const stamped_slot *s, uint16_t consumed)
+{
+    return (uint16_t)(s->slot >> 16) != consumed;
+}
+
+/* The tick's take of a stamped read: fresh once per generation, never one acquired after the tick's time now (it
+   stays unconsumed for the next tick: a higher-priority interrupt may publish between the tick's clock read and
+   this one); *time is its acquisition time. */
+static inline bool stamped_take(const stamped_slot *s, uint16_t *consumed, uint32_t now, uint16_t *frame,
+                                uint32_t *time)
+{
+    uint32_t slot, t;
+    if (!stamped_read(s, &slot, &t)) {
+        return false;
+    }
+    if ((int32_t)(t - now) > 0) {
+        return false;
+    }
+    *time = t;
+    return slot_take(slot, consumed, frame);
 }
 
 #endif

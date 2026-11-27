@@ -163,6 +163,27 @@ static void cut_raises_drvoff_first(void)
     CHECK_EQ_U(regmodel_violations(), 0);
 }
 
+/* Bench console plan 4.2 A1b-1 (Codex impl round 2 P3): a fast DISARM and re-ARM in the same direction -- the cut
+   channel stays cut until the 0 is active (at most until the next update event, 50 us at 20 kHz, inside one tick),
+   then drives forward again. */
+static void same_direction_after_a_cut(void)
+{
+    boot();
+    regmodel_allow(2, RM_ALLOW_FWD);
+    cycle(outs(0, 0, 0.2f, 0));
+    CHECK_EQ_U(regmodel_channel(2).state, RM_FWD);
+    drive_outputs cut = outs(0, 0, 0, 0);
+    cut.drvoff[2] = true;
+    motor_out_apply(&cut);
+    drive_outputs fwd = outs(0, 0, 0.2f, 0);
+    motor_out_apply(&fwd); /* no update event since the cut */
+    CHECK(regmodel_channel(2).state != RM_FWD);
+    regmodel_uev();
+    cycle(fwd);
+    CHECK_EQ_U(regmodel_channel(2).state, RM_FWD);
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
 static void fault_handler_cuts_everything(void)
 {
     boot();
@@ -210,6 +231,7 @@ int main(void)
     direction_change_waits_for_an_update();
     update_event_at_every_write();
     cut_raises_drvoff_first();
+    same_direction_after_a_cut();
     fault_handler_cuts_everything();
     interpreter_follows_rm0433();
     return FW_TEST_RESULT();

@@ -389,7 +389,7 @@ export function escapeRequest(st) {
 export const BENCH_TEXT = {
   menu: "벤치",
   title: "모터 벤치",
-  hint: "벤치 이미지(bench5) 전용 · 한 축 듀티 구동 · 판정은 보드의 기록으로",
+  hint: "벤치 이미지(bench6) 전용 · 한 축 듀티 구동 · 판정은 보드의 기록으로",
   axis: { L: "L 왼쪽 바퀴", R: "R 오른쪽 바퀴", M: "M 조향", H: "H 승강" },
   source: { kth: "KTH(절대각)", none: "측정 없음", mt: "MT(모터축)" },
   mode: { duty: "듀티 구동", hold: "위치 유지" },

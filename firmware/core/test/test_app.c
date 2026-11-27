@@ -125,6 +125,7 @@ static void hal_read(void *ctx, drive_inputs *in)
     }
     in->abs_frame[0] = in->abs_frame[1] = kth_zero();
     in->abs_fresh[0] = in->abs_fresh[1] = true;
+    in->abs_time_us[0] = in->abs_time_us[1] = in->now_us;
     in->adc_fresh = true;
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         in->nfault_low[ch] = b->nfault_low[ch];

@@ -7,7 +7,7 @@ import { Graph, advice, bypassChips, clearView, createBenchController, fieldStat
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
 
 const BENCH = { t: "welcome", api: "console/1", session_epoch: 9, session: "bench", backend: "real",
-  product: "forklift-mcu commission OPEN v0 rec=0 lim=lr1 bench5", capabilities: { control: true, bench: true },
+  product: "forklift-mcu commission OPEN v0 rec=0 lim=lr1 bench6", capabilities: { control: true, bench: true },
   request_token: 77 };
 const REAL = { t: "welcome", api: "console/1", session_epoch: 9, backend: "real", capabilities: { control: true },
   request_token: 78 };

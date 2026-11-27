@@ -24,7 +24,7 @@ _ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
 _STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
-# Bench extension (contract section 8, wire generation bench5): the bench image only; the operating v3 messages above
+# Bench extension (contract section 8, wire generation bench6): the bench image only; the operating v3 messages above
 # are unchanged. BENCH_SET: boot_id, echo, run_id, mode, axis, source, count_sign, bypass, duty_max_e4[4], time_ms[4],
 # stop_counts. BENCH_ARM: boot_id, echo, run_id. BENCH_STATE: 48 bytes, the order of the contract's table.
 _BENCH_SET = struct.Struct("<IQIBBBbI4H4Ii")
@@ -132,14 +132,14 @@ class BenchMode(IntEnum):
     """Bench extension: the run's drive mode, fixed by its BENCH_SET (contract 8)."""
 
     DUTY = 1
-    HOLD = 2  # A1b
+    HOLD = 2  # A1b-2
 
 
 class BenchSource(IntEnum):
     """Bench extension: the run's measurement source (contract 8, plan 0.1)."""
 
     NONE = 0
-    KTH = 1  # A1b
+    KTH = 1  # bench6: M and H
     MT = 2  # A1c
 
 
@@ -173,11 +173,37 @@ class BenchStop(IntEnum):
     FAULT = 5
     ESTOP = 6
     LINK_BOUNDARY = 7
-    DISTANCE_REACHED = 8  # A1b
-    DISTANCE_PROVISIONAL = 9  # A1b
-    NO_PROGRESS = 10  # A1b
-    KTH_ZERO_SUSPECT = 11  # A1b
-    KTH_LOST = 12  # A1b
+    DISTANCE_REACHED = 8  # bench6
+    DISTANCE_PROVISIONAL = 9  # bench6: crossed on a 0x0000 frame; see distance_confirm
+    NO_PROGRESS = 10  # bench6: the progress watch, or the wrong way
+    KTH_ZERO_SUSPECT = 11  # bench6: 0x0000 only while driven (MISO stuck low?)
+    KTH_LOST = 12  # bench6
+
+
+class BenchCountState(IntEnum):
+    """bench6: the run axis's KTH count (contract 8.5)."""
+
+    NONE_YET = 0
+    VALID = 1
+    LOST = 2
+
+
+class BenchConfirm(IntEnum):
+    """bench6: a provisional cut's confirmation (0 also while waiting)."""
+
+    NONE = 0
+    REACHED = 1
+    HELD = 2
+
+
+class BenchRunFlag(IntFlag):
+    """bench6: BENCH_STATE.run_flags (plan 4.2 A1b-1 decision 5)."""
+
+    UNCLEAN = 1 << 0  # live: this run not valid at its drive start, or lost since its ARM (until the next ARM)
+    RES_UNCLEAN = 1 << 1  # the result: the above at the end
+    RES_LOSS = 1 << 2  # the result: the provisional confirmation ended by a loss
+    RES_TENTATIVE = 1 << 3  # the result: the last counted frame at the end was 0x0000
+    RES_NO_REF = 1 << 4  # the result: no fresh non-zero frame at the drive start
 
 
 _FAULT_MASK = (1 << 25) - 1
@@ -385,7 +411,7 @@ class BenchState:
     mcu_bypass: int
     drive: int  # bits 0-1 BenchDriveState, bits 4-5 BenchMode
     conn_gen: int
-    reserved: int
+    run_flags: int  # BenchRunFlag (bench6)
     result_axis: int
     result_source: int
 
@@ -448,7 +474,7 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.count_state, message.kth_lost, message.raw_angle, message.cumulative, message.target,
             message.distance_ref, message.cut_position, message.stop_reason, message.distance_confirm,
             message.blocked, message.dropped_pairs, message.evidence_age_ms, message.end_evidence_age_ms,
-            message.mcu_bypass, message.drive, message.conn_gen, message.reserved, message.result_axis,
+            message.mcu_bypass, message.drive, message.conn_gen, message.run_flags, message.result_axis,
             message.result_source)
     if isinstance(message, Arm):
         return TYPE_ARM, _ARM.pack(message.boot_id, message.echo_mcu_time_us)

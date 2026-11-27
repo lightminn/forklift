@@ -76,6 +76,7 @@ void plant_inputs(const plant *p, drive_inputs *in)
     in->abs_frame[0] = plant_kth_frame(p->steer_rad, &p->steer_axis);
     in->abs_frame[1] = plant_kth_frame(p->lift_m, &p->lift_axis);
     in->abs_fresh[0] = in->abs_fresh[1] = true;
+    in->abs_time_us[0] = in->abs_time_us[1] = in->now_us; /* acquired in this tick */
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         in->adc_raw[ch] = 0; /* no current */
         in->nfault_low[ch] = p->nfault_low[ch];

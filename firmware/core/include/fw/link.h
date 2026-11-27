@@ -18,7 +18,7 @@
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
 #define LINK_STATE 0x81u
-/* Bench extension (contract section 8, wire generation bench5): decoded only by a core compiled with
+/* Bench extension (contract section 8, wire generation bench6): decoded only by a core compiled with
    FW_CORE_BENCH (the bench image and the host tests); every other image drops these types as unknown. */
 #define LINK_BENCH_SET 0x06u
 #define LINK_BENCH_ARM 0x08u
@@ -101,7 +101,7 @@ typedef struct {
     int32_t cumulative, target, distance_ref, cut_position;
     uint8_t stop_reason, distance_confirm;
     uint16_t blocked, dropped_pairs, evidence_age_ms, end_evidence_age_ms;
-    uint8_t mcu_bypass, drive, conn_gen, reserved, result_axis, result_source;
+    uint8_t mcu_bypass, drive, conn_gen, run_flags, result_axis, result_source; /* run_flags: bench6 (contract 8.5) */
 } link_bench_state;
 #endif
 
