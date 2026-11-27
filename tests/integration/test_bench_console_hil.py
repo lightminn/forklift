@@ -773,3 +773,32 @@ def test_the_rest_of_a_clear_already_partly_out_is_not_held_for_a_pair(rig):
     finally:
         link._cur, link._off = saved
     bench_console.shutdown(c, wait_s=0.0)
+
+
+def test_a_partly_written_clear_stops_on_new_fault_bits_and_after_its_request_closed(rig):
+    """The rest of a partly written CLEAR: new fault bits in the latest STATE stop it without waiting for its pair, and
+    once the request is closed the check answers no (the link then abandons the frame) instead of raising (Codex C
+    round 11 P2-1, P2-2)."""
+    from types import SimpleNamespace
+
+    c, b, run_until = rig("--fault-at-ms", "300")
+    assert run_until(lambda: c.host.state is not None and c.host.state.mode == Mode.FAULT
+                     and c.host.bench_state_of is c.host.state, 3.0)
+    c.dev.receive = lambda host, now: host.tick(now)
+    st = c.host.state
+    b.send("clear_faults", cause="model fault")
+    assert run_until(lambda: c.clear is not None, 2.0)
+    c.clear.clear_seq = 4321
+    frame = SimpleNamespace(kind="CLEAR_FAULTS", seq=4321, expires_ns=None, nonzero=False, echo=None, generation=0)
+    link = c.dev.link
+    saved = (link._cur, link._off)
+    link._cur, link._off = SimpleNamespace(seq=4321), 3
+    try:
+        extra = next(f for f in FaultFlag if f and not (st.fault_flags & f))
+        more = dataclasses.replace(st, mcu_time_us=st.mcu_time_us + 1000, fault_flags=st.fault_flags | extra)
+        c.host._state, c.host._state_rx_ns = more, int(c.clock())  # its pair not in
+        assert not c.frame_allowed(frame)
+        bench_console.shutdown(c, wait_s=0.0)  # the request closed
+        assert c.clear is None and not c.frame_allowed(frame)
+    finally:
+        link._cur, link._off = saved
