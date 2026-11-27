@@ -196,3 +196,18 @@ def test_drop_frames_can_keep_the_arming_zero():
     r.host.drop_frames(("COMMISSION",), "bench_cancelled", keep_arming_zero=True)
     (zero,) = r.sent()
     assert zero.duty_e4 == 0 and zero.axis == 0
+
+
+def test_the_accepted_hooks_see_only_what_the_host_accepted():
+    """bench6 (Codex A1b-1b round 4): on_accepted and on_pair report the STATEs and pairs the host itself took, in
+    order -- an out-of-order STATE it dropped never reaches them."""
+    r = bench_rig()
+    got_states, got_pairs = [], []
+    r.host.on_accepted = lambda st, rx: got_states.append(st.mcu_time_us)
+    r.host.on_pair = lambda st, bs, rx: got_pairs.append(bs.result_run_id)
+    r.t_us += 10_000
+    r.now += 10 * MS
+    t_good = r.t_us
+    r.host.on_bytes(state(r.t_us) + encode(_bench_state(1), 2), r.now)
+    r.host.on_bytes(state(r.t_us - 5_000), r.now)  # older than the accepted one: dropped as out of order
+    assert got_states == [t_good] and got_pairs == [5]

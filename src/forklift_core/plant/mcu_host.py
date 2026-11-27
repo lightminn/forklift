@@ -130,6 +130,10 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 
 class McuLinkHost:
+    pre_bench_arm = None  # bench tools: called right before a BENCH_ARM's first byte; False drops it
+    on_accepted = None  # bench tools: (STATE, received ns) for every STATE this host accepted, in order
+    on_pair = None  # bench tools: (STATE, BENCH_STATE, received ns) for every pair whose STATE it accepted
+
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
                  allow_locked: bool = False, commission: bool = False,
                  on_state: Callable[[McuState, int], None] | None = None, initial_seq: int = 0,
@@ -318,6 +322,8 @@ class McuLinkHost:
             if id(st) in self._accepted_ids:
                 self.bench_state, self.bench_state_rx_ns, self.bench_state_boot = bs, now_ns, st.boot_id
                 self.bench_state_of = st
+                if self.on_pair is not None:
+                    self.on_pair(st, bs, now_ns)
         if self._decoder.errors != before:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
@@ -358,6 +364,8 @@ class McuLinkHost:
         self._accepted_ids.add(id(s))
         if self._on_state_cb is not None:
             self._on_state_cb(s, now_ns)
+        if self.on_accepted is not None:
+            self.on_accepted(s, now_ns)
         if prev is None:
             events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
         if self._stale_reported:
@@ -767,6 +775,12 @@ class McuLinkHost:
         are dropped here. The adapter writes the frame completely before asking again."""
         while self._outbox:
             o = self._outbox.popleft()
+            if o.kind == "BENCH_ARM" and self.pre_bench_arm is not None and not self.pre_bench_arm():
+                # the bench tool could not write down what the board still holds of its last run: this ARM, which
+                # clears it, never goes out (bench console plan 4.2 A1b-1b, Codex round 2 P2-4)
+                self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "pre_bench_arm"})
+                self._revoke("bench_arm_vetoed", [])
+                continue
             if o.kind in _MOTION and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
                 self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "expired or stale"})
                 if o.echo is not None and self._auth == _ZERO_PENDING and o.generation == self._auth_gen:

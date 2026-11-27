@@ -654,6 +654,25 @@ A1b 를 둘로 나눈다(총괄 동의 2026-11-28). 1 절의 계약은 그대로
    - `bench6` 판별(구세대 `bench5` 거부)과 고정 벡터, 운영 고정 벡터 불변, 비벤치 이미지의 unknown.
    - 교차 빌드 이미지 크기·제품 문자열, ws1 전체 pytest.
 
+### A1b-1b 구현 기록 (2026-11-28)
+
+- 판정은 `bench_session` 에 모았다. 콘솔과 CLI 가 같이 쓴다.
+  - `run_verdict(distance=True)`: 거리 실행은 8·9 도 정상 끝으로 본다.
+  - `distance_verdict`: reached/held/waiting/failed_loss/stopped:*/missed.
+  - `measure_verdict`: confirmed/provisional/withheld.
+  - `rest_position`: 100 Hz 관측 기준이다.
+  - `counts_diff`: 32 비트 모듈러다.
+- CLI `bringup commission --stop-kth-turns N [--count-sign ±1]`:
+  - 거리가 1–2³¹−1 카운트가 아니면 송신 전에 거부한다.
+  - 첫 비영은 한 건만 보낸다. 대기 한도는 그 명령의 만료 + 20 ms 다.
+  - 보드가 끝낸 거리 실행(8–12)은 권한 회수가 아니고, 끝 0 을 보내지 않는다.
+  - 래치 결과로 판정한다. 구동 표본이 없으면 `board_record_only` 다.
+  - 이전 결과는 칸 전부를 기록하고, BENCH_ARM 직전에 다시 기록한다. DISARMED 뒤 정지 위치도 기록한다.
+  - 듀티가 0.4 를 넘으면 안내를 띄운다(막지 않음).
+- 콘솔 백엔드: 이전 결과 칸 전부와 BENCH_ARM 직전 재기록. 콘솔 화면의 거리 칸과 높은 듀티 안내는 B2 다.
+- 모형: `--kth-start-raw M,H`(영점 오프셋), `--kth-zero-at-ms AXIS:MS`(보고 프레임만 0x0000). 구동 중 고착이 시작되는 경우는 모형 시각을 맞출 수 없어, 통합 시험에서는 '처음부터 고착 → 거리 ARM 거부'만 본다. 구동 중 규칙은 펌웨어 시험(`test_drive.c`)이 덮는다.
+- 벤치가 아닌 이미지의 제품 문자열 형식은 바뀌지 않았다. 그래서 `data/h743_check` 재스테이징은 필요 없다(총괄 확인 요청 2026-11-28).
+
 ### A1b-1 계획 검토
 
 - 원자료 재계산(Claude): 512 카운트/ms = 125 회전/s, 2,048 ÷ 512 = 4 ms, 반례 원시 4032 + 64 × 66 = 8,256 → 원시 64·실제 +4,224, dt = 3 ms 의 안전 속도 (4,096 − 1,536) ÷ 3 ≈ 853 카운트/ms. 계획 수치와 일치.

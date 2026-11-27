@@ -564,6 +564,11 @@ class BenchConsole:
             # the host's own arming zero (L, 0) for an ARM already out: a stop waits for it to land, then sends its
             # own zero -- refusing it would leave the arming open and the stop zero unqueueable (round 2 P1-2)
             return True
+        if f.kind == "BENCH_ARM":
+            r = self.run
+            if r is None or r.arm_seq is None or seq != r.arm_seq or not self._final_before_arm(r):
+                return False  # not this run's ARM, or the last run's result not written down (A1b-1b r2 P2-4)
+            now = int(self.clock())  # the record took time: the lease and the rest judged at the write (r3 P2-3)
         if f.kind == "DISARM":
             return False  # no DISARM this session did not ask for
         if f.kind == "CLEAR_FAULTS":
@@ -582,6 +587,22 @@ class BenchConsole:
             return False
         if f.kind == "COMMISSION" and f.generation != self.host.auth_epoch:
             return False
+        return True
+
+    def _final_before_arm(self, r: Run) -> bool:
+        """Right before the BENCH_ARM's first byte (under the send boundary): the last result the host holds of the
+        previous run is written down (again when it changed), else the ARM, which clears it, does not go out."""
+        prev, bst = r.previous_result, self.host.bench_state
+        if prev is None or bst is None or bst.result_run_id != prev["run_id"]:
+            return True
+        fields = bringup.result_fields(bst)
+        if all(prev.get(k) == v for k, v in fields.items()) and prev.get("t") == "bench_previous_result_final":
+            return True
+        final = {"t": "bench_previous_result_final", "boot_id": prev["boot_id"], **fields}
+        self._emit(r, final)
+        if r.cancel is not None:
+            return False  # not written down: the run is cancelled and the ARM never goes out
+        r.previous_result = final  # result.json carries the final value (impl r1 P2-5)
         return True
 
     def gate(self, f, write) -> bool:
@@ -770,8 +791,12 @@ class BenchConsole:
                 self._refuse(r, "no_bench_state_with_the_current_state", now)
             return
         if p.result_run_id != 0:
+            # every result field (a CLI distance run's confirmation, cut and flags too: plan 4.2 A1b-1 decision 7)
             prev = {"t": "bench_previous_result", "boot_id": p.boot_id, "run_id": p.result_run_id,
                     "stop_reason": _stop_name(p.stop_reason)}
+            bst = self.host.bench_state
+            if bst is not None and bst.result_run_id == p.result_run_id:
+                prev.update(bringup.result_fields(bst))
             r.previous_result = prev
             self._emit(r, prev)
             if r.cancel is not None:  # the next ARM clears the board's copy: never before it is written down
