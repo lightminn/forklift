@@ -145,6 +145,10 @@ static volatile uint32_t g_conn_begin, g_conn_end;
 /* A bus reset, unplug or suspend is counted in the OTG interrupt the moment it happens, so the tick stops
    reading at once, before the main loop's tud_task gets to it (Codex A1a round 2). */
 static volatile uint32_t g_conn_events, g_conn_handled, g_conn_since;
+/* A USBRST the tick sees still waiting for the OTG interrupt: counted by the tick itself (its own counter, so
+   the two interrupt levels never increment one variable), so the arming ends at the next tick even if that
+   interrupt is held up in TinyUSB's reset handling (Codex A1a round 7). */
+static volatile uint32_t g_conn_tick_events, g_conn_tick_handled;
 /* The generation the tick last saw settled: the start time is stamped only when nothing is pending and the tick
    has seen the last change, so the first start of a change survives until the tick reads it (Codex A1a round 3). */
 static volatile uint32_t g_conn_observed;
@@ -152,7 +156,8 @@ static bool g_last_dtr;
 
 static bool conn_idle(void)
 {
-    return g_conn_events == g_conn_handled && g_conn_begin == g_conn_end && g_conn_end == g_conn_observed;
+    return g_conn_events == g_conn_handled && g_conn_tick_events == g_conn_tick_handled &&
+           g_conn_begin == g_conn_end && g_conn_end == g_conn_observed;
 }
 
 static void conn_event_from_isr(void)
@@ -175,9 +180,15 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 /* Control tick only. */
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
+    if (g_link_stats.usb_started && (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        if (conn_idle()) {
+            g_conn_since = timebase_now_us();
+        }
+        g_conn_tick_events++;
+    }
     uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    *busy = events != handled || begin != end;
+    *busy = events != handled || g_conn_tick_events != g_conn_tick_handled || begin != end;
     *since_us = g_conn_since;
     if (!*busy) {
         g_conn_observed = end;
@@ -194,6 +205,7 @@ static void lifecycle(void)
        place (DWC2 slave), is cleared on whole indices (round 1). */
     dcd_int_disable(0);
     uint32_t events = g_conn_events;
+    uint32_t tick_events = g_conn_tick_events; /* the tick preempts this; a later count keeps busy */
     if (conn_idle()) {
         g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
     }
@@ -211,6 +223,7 @@ static void lifecycle(void)
     g_resync = true;
 #if defined(FW_BENCH_IMAGE)
     g_conn_handled = events;
+    g_conn_tick_handled = tick_events;
     g_conn_end = g_conn_begin;
 #endif
 }
@@ -269,7 +282,8 @@ void link_poll(void)
        image also takes the loss of the configuration as a connection change (Codex A1a P1). */
     static bool was_mounted;
     bool mounted = tud_mounted();
-    if ((was_mounted && !mounted) || g_conn_events != g_conn_handled) {
+    if ((was_mounted && !mounted) || g_conn_events != g_conn_handled ||
+        g_conn_tick_events != g_conn_tick_handled) {
         lifecycle();
     }
     was_mounted = mounted;
