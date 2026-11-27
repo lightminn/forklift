@@ -429,13 +429,13 @@ sha256sum ~/bench_runs_$(date +%m%d).tar.xz
 - 펌웨어나 도구를 고쳤다면 새 브랜치로 커밋해 push 하고(main 에 직접 push 하지 않음), 어느 커밋을 구웠는지(제품 문자열)를 요약에 적는다.
 - **끝나면 정상 이미지로 되돌린다**: 5.2 의 `fw-open.bin`(시운전 이미지 — 실행마다 L/R/M/H 중 축을 고름) 또는 `fw-single.bin`(한 번 ARM 하는 동안 고른 축 하나로 고정, 한 채널·KTH 하나 구성용)을 5.3 대로 굽고, 상태 읽기로 제품 문자열이 `lim=lr1`(또는 `lim=lr1 sa1`)으로 끝나는지 확인한다. 정상 이미지의 도구는 main 의 것이다(벤치 폴더 도구를 쓰지 않는다).
 
-## 9. 벤치 콘솔(GUI)로 듀티 구동 — main 의 `bench5` 이미지
+## 9. 벤치 콘솔(GUI)로 듀티 구동 — main 의 벤치 이미지(`bench6`)
 
 main 에는 모터 시험을 브라우저에서 하는 **벤치 콘솔**이 있다([계획](2026-11-27-bench-console.md), #664·#665). 지금은 축 하나를 **듀티·시간**으로 구동하고, STOP·고장 해제를 하고, 10 s 그래프를 본다. hold·거리 정지는 A1b·B2 뒤에 열린다(화면에 비활성으로 보임). 우회 체크와 물리 구성 안내는 막지 않고 기록만 한다.
 
-- **굽기가 필요하다.** 콘솔은 제품 문자열이 `… lim=lr1 bench5` 로 끝나는 이미지에만 붙는다. 3 절의 `bench3`·`bench4` 이미지는 거부한다. 3·4 절의 진단 도구 폴더(`~/forklift-fw-bench*`)와 짝이 아니므로 섞지 않는다.
+- **굽기가 필요하다.** 콘솔은 제품 문자열이 `… lim=lr1 bench6` 으로 끝나는 이미지에만 붙는다(A1b-1a 부터; 그 전 main 은 `bench5`). 3 절의 `bench3`·`bench4` 이미지는 거부한다. 3·4 절의 진단 도구 폴더(`~/forklift-fw-bench*`)와 짝이 아니므로 섞지 않는다.
 
-1. **이미지:** 5.1 빌드 블록을 태그 대신 main 으로 돌린다(`git fetch origin && git checkout --detach origin/main`, 나머지 `cmake` 인자는 같다). `strings` 줄이 `lim=lr1 bench5` 로 끝나는지 보고 5.3 대로 굽는다.
+1. **이미지:** 5.1 빌드 블록을 태그 대신 main 으로 돌린다(`git fetch origin && git checkout --detach origin/main`, 나머지 `cmake` 인자는 같다). `strings` 줄이 `lim=lr1 bench6` 으로 끝나는지 보고 5.3 대로 굽는다.
 2. **도구 폴더(노트북에서 한 번):** 굽은 것과 같은 커밋을 Jetson 에 옮긴다. `git archive` 라 git 은 없다.
 
    ```bash
