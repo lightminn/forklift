@@ -360,8 +360,11 @@ def test_a_budget_that_could_never_end_an_overdue_is_refused(tmp_path):
     """Codex U3e-2 P2-3: a .nan (or non-positive) overdue_end would hold layer_overdue for good."""
     import yaml
 
+    import dataclasses
+
     paths, _ = make_site(tmp_path)
     b = yaml.safe_load(Path(paths.budget).read_text())
     b["overdue_end"]["seconds"] = float("nan")
-    Path(paths.budget).write_text(yaml.safe_dump(b))
-    assert "precondition:C13:budget:values_invalid" in refused(paths)
+    budget = tmp_path / "budget_nan.yaml"  # a copy: the repository's own file is never written
+    budget.write_text(yaml.safe_dump(b))
+    assert "precondition:C13:budget:values_invalid" in refused(dataclasses.replace(paths, budget=str(budget)))
