@@ -374,6 +374,7 @@ class BenchConsole:
             self._emit(r, {**state_row(Sample(received_ns, st)), "conn": self.conn})
             r.peak_current_ma = [max(a, abs(int(b))) for a, b in zip(r.peak_current_ma, st.current_ma)]
         if self.clear is not None:
+            self._note_echo(self.clear, st, received_ns)
             try:
                 self.clear.rec.emit({**state_row(Sample(received_ns, st)), "conn": self.conn})
             except RecordError:
@@ -503,6 +504,12 @@ class BenchConsole:
             return (self.conn, None, None, FaultFlag(0))
         return (self.conn, bst.conn_gen, ps.boot_id, FaultFlag(ps.fault_flags))
 
+    def _continuing(self, seq: int) -> bool:
+        """The link is in the middle of that frame (some of its bytes already out)."""
+        link = getattr(self.dev, "link", None)
+        cur = getattr(link, "_cur", None)
+        return cur is not None and getattr(link, "_off", 0) > 0 and (int(cur.seq) & 0xFFFF) == seq
+
     def _holds(self, c: Clear) -> bool | None:
         """The clear's binding against the latest STATE: None while that STATE's pair is not in (its generation is not
         known yet: nothing is sent, nothing refused), else whether it still holds (round 9 P2-1)."""
@@ -543,7 +550,8 @@ class BenchConsole:
         if seq in self.cleanup_seqs and (f.kind == "DISARM" or zero):
             c = self.clear
             if c is not None and f.kind == "DISARM" and seq == c.disarm_seq:
-                return self._holds(c) is True  # the clear's DISARM: its request still holds (r4 P2-3, r9 P2-1)
+                held = self._holds(c)  # the clear's DISARM: its request still holds (r4 P2-3, r9 P2-1, r10 P2-3)
+                return held is True or (held is None and self._continuing(seq))
             return True  # this session's own stop frame, by its seq and its kind (round 3 P1-1)
         arming_zero = f.echo is not None or (self.host.arming_zero_seq is not None
                                              and seq == self.host.arming_zero_seq & 0xFFFF)
@@ -555,8 +563,12 @@ class BenchConsole:
             return False  # no DISARM this session did not ask for
         if f.kind == "CLEAR_FAULTS":
             c, st = self.clear, self.host.state
-            # every byte, the first and each continuation, on the latest STATE's own pair (round 9 P2-1)
-            return c is not None and c.clear_seq == seq and st is not None and self._holds(c) is True
+            # the first byte on the latest STATE's own pair (round 9 P2-1); the rest of a frame already partly out is
+            # not held for a pair still to come (holding it is abandoning it, round 10 P2-3), only stopped when the
+            # binding no longer holds
+            held = self._holds(c)
+            return (c is not None and c.clear_seq == seq and st is not None
+                    and (held is True or (held is None and self._continuing(seq))))
         r = self.run
         if r is None or f.kind not in RUN_KINDS or r.phase in ("stop", "closed"):
             return False
@@ -1098,19 +1110,23 @@ class BenchConsole:
         self._put(out)
         self.clear = None
 
-    def _echoed(self, seq: int, kind: str, c: Clear) -> bool:
-        """The latest completed pair of the request's epoch echoed ``seq`` -- kept once seen, so a newer STATE in the
-        same read (its pair not in yet, or naming a later frame) never hides it (Codex C round 9 P2-2). The seq is
-        one no recent STATE named, so its echo is the board's reply to this frame whenever it was received."""
-        if seq in c.echoed:
-            return True
-        ps, bst, w = self.host.bench_state_of, self.host.bench_state, self.written.get(seq)
-        if (w is not None and w[0] == kind and ps is not None and bst is not None and self.conn == c.binding.conn
-                and bst.conn_gen == c.binding.conn_gen and ps.boot_id == c.binding.boot_id
-                and ps.mcu_time_us > c.floor_us and ps.last_rx_seq == seq):
+    def _note_echo(self, c: Clear, st, received_ns: int) -> None:
+        """Every STATE the host accepts, each in its read (so two pairs in one read never hide the first one's echo,
+        Codex C round 10 P2-2): one received after the request's own frame went out whole, naming its seq, of the
+        request's boot and host opening, is that frame's reply, kept (round 9 P2-2). Never one received before the
+        frame went out (round 10 P2-1). Its board generation is not asked: a frame the board answered was taken
+        whatever the generation, and a generation change is the boundary check's (the clear then unconfirmed)."""
+        seq = st.last_rx_seq & 0xFFFF
+        if seq not in (c.disarm_seq, c.clear_seq):
+            return
+        kind = "DISARM" if seq == c.disarm_seq else "CLEAR_FAULTS"
+        w = self.written.get(seq)
+        if (w is not None and w[0] == kind and received_ns > w[1] and st.boot_id == c.binding.boot_id
+                and self.conn == c.binding.conn and st.mcu_time_us > c.floor_us):
             c.echoed.add(seq)
-            return True
-        return False
+
+    def _echoed(self, seq: int, kind: str, c: Clear) -> bool:  # noqa: ARG002 -- kind checked when it was noted
+        return seq is not None and seq in c.echoed
 
     def _step_clear(self, c: Clear, now: int) -> None:
         st = self.host.state
