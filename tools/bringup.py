@@ -723,6 +723,7 @@ class CommissionSession(Session):
         self.run_id: int | None = None
         self.bench_taken: dict | None = None
         self._prev_result: tuple | None = None
+        self._prev_final: dict | None = None
         self.board_ended: str | None = None  # a distance run the board ended itself (stop 8-12)
         self.bench_start: str | None = None  # a distance run's first non-zero: accepted/refused/unconfirmed/...
         self._bench_pending: dict | None = None
@@ -905,16 +906,7 @@ class CommissionSession(Session):
             if self.b.state is None or self.b.state.boot_id != self._boot0:
                 raise Refused("the board rebooted (a new boot id on the same link) before the ARM: run it again to "
                               "confirm")
-            prev = self.b.host.bench_state
-            if self._prev_result is not None and prev is not None and prev.result_run_id == self._prev_result[1]:
-                # the confirmation may change until the ARM clears it: the last one seen is the record's final one
-                errors0 = self.b.record_errors
-                self.b.emit({"t": "bench_previous_result_final", "boot_id": self._prev_result[0],
-                             **result_fields(prev)})
-                self.b.flush_record()
-                if self.b.record_errors != errors0:
-                    # the ARM clears the board's record: never before its final value is written down (impl r1 P2-6)
-                    raise Refused("bench: the last run's final board record could not be written: nothing is armed")
+            self.b.host.pre_bench_arm = self._final_before_arm
             return self.b.host.request_bench_arm(self.run_id, now_ns)
         return self.b.host.request_arm(now_ns)
 
@@ -937,6 +929,25 @@ class CommissionSession(Session):
             return {"run_id": self.run_id, "confirmed": False}
         return {"confirmed": True, **result_fields(bs)}
 
+    def _final_before_arm(self) -> bool:
+        """Right before the BENCH_ARM's first byte (the host's pre_bench_arm): the last result the host holds of the
+        previous run is written down (again when it changed since), or the ARM, which clears it, is dropped (Codex
+        A1b-1b round 1 P2-6, round 2 P2-4)."""
+        b, prev = self.b, self.b.host.bench_state
+        if self._prev_result is None or prev is None or prev.result_run_id != self._prev_result[1]:
+            return True
+        fields = result_fields(prev)
+        if fields == self._prev_final:
+            return True
+        errors0 = b.record_errors
+        b.emit({"t": "bench_previous_result_final", "boot_id": self._prev_result[0], **fields})
+        b.flush_record()
+        if b.record_errors != errors0:
+            self.aborted = self.aborted or "previous_result_not_recorded"
+            return False
+        self._prev_final = fields
+        return True
+
     def _distance_run(self) -> bool:
         return self.bench_image and self.bench is not None and self.bench.distance
 
@@ -945,8 +956,9 @@ class CommissionSession(Session):
         if not self._distance_run():
             return None
         br = self.bench_result() or {}
-        reason = br.get("stop_reason")
-        return reason if br.get("confirmed") and reason in BOARD_ENDS else None
+        # any first cause of this run: a distance rule, or an expiry after a lost acceptance sample (round 2 P2-3);
+        # the run's verdict classifies it
+        return br.get("stop_reason") if br.get("confirmed") else None
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
         raise Refused("the commissioning tool sends no DRIVE")
@@ -1017,7 +1029,7 @@ class CommissionSession(Session):
             self.aborted = "bench_start_not_queued"
             return False
         seq16 = seq & 0xFFFF
-        refused = {"why": None}
+        refused, accepted = {"why": None}, {"yes": False}
 
         def write():
             return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq16
@@ -1032,13 +1044,32 @@ class CommissionSession(Session):
                 return None, w
             return s, w
 
+        deadline = {}
+
+        def in_time(mcu_us: int | None, rx_ns: int | None) -> bool:
+            # made before the command's own deadline plus two STATE periods, received before the host-clock bound
+            return (mcu_us is not None and rx_ns is not None and "mcu_us" in deadline
+                    and mcu_us <= deadline["mcu_us"] and rx_ns <= deadline["host_ns"])
+
+        def result_in_time() -> bool:
+            if not (self.bench_result() or {}).get("confirmed"):
+                return False
+            st = b.host.bench_state_of
+            return st is not None and in_time(st.mcu_time_us, b.host.bench_state_rx_ns)
+
         def answered() -> bool:
-            if (self.bench_result() or {}).get("confirmed"):
+            if result_in_time():
                 return True
             s, w = evidence()
             if s is None:
                 return False
+            if "mcu_us" not in deadline and w.valid_ms is not None:
+                deadline["mcu_us"] = w.echo_mcu_time_us + w.valid_ms * 1000 + int(FIRST_NONZERO_SLACK_S * 1e6)
+                deadline["host_ns"] = (echo_rx_ns or w.done_ns) + w.valid_ms * 1_000_000 + 50_000_000
+            if not in_time(s.mcu_time_us, b.host.state_rx_ns):
+                return True  # past a deadline: judged now, on what came in time
             if s.last_rx_seq == seq16:
+                accepted["yes"] = True
                 return True
             if s.reject_reason != RejectReason.NONE and refused["why"] is None:
                 refused["why"] = s.reject_reason.name.lower()  # kept: a refused command is never taken later
@@ -1058,11 +1089,10 @@ class CommissionSession(Session):
                                  - time.monotonic_ns()) / 1e9)
         b.run_until(answered, host_bound_s)
         br = self.bench_result() or {}
-        s, _w = evidence()
-        if br.get("confirmed"):
+        if result_in_time():
             self.bench_start = "confirmed_by_result"  # it drove: the board's own end follows
             self.board_ended = br.get("stop_reason")
-        elif s is not None and s.last_rx_seq == seq16 and refused["why"] is None:
+        elif accepted["yes"] and refused["why"] is None:
             self.bench_start = "accepted"
         elif refused["why"] is not None:
             self.bench_start = "refused"
@@ -1074,7 +1104,11 @@ class CommissionSession(Session):
         if self.bench_start in ("accepted", "confirmed_by_result"):
             return True
         if b.host.ready:
-            self.send_duty(0)  # closed with a zero (then the cleanup's DISARM), never another non-zero
+            zero = self.send_duty(0)  # closed with a zero (then the cleanup's DISARM), never another non-zero
+            if zero is not None:
+                # written, not only queued: the cleanup drops what is still queued (Codex round 2 P2-2)
+                b.run_until(lambda: any(w.kind == "COMMISSION" and (w.seq & 0xFFFF) == (zero & 0xFFFF)
+                                        and w.conn == conn0 for w in b.writes), 0.2)
         return False
 
     def observe_rest(self, seconds: float = REST_OBSERVE_S) -> dict | None:
@@ -1165,7 +1199,7 @@ def result_fields(bs) -> dict:
                                                        cut_position=bs.cut_position)
         if stop in BOARD_ENDS:
             out["distance"] = bench_session.distance_verdict(
-                stop_reason=stop, confirm=bs.distance_confirm, run_flags=bs.run_flags, stop_counts=0,
+                stop_reason=stop, confirm=bs.distance_confirm, run_flags=bs.run_flags, stop_counts=None,
                 distance_ref=bs.distance_ref, cut_position=bs.cut_position)
     return out
 

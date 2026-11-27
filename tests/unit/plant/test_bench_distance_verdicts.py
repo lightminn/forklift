@@ -49,6 +49,7 @@ def test_a_distance_end_is_a_normal_end_of_a_distance_run_only():
                                                                 **kw)["why"]
     assert "stop_reason:distance_reached" in bs.run_verdict(stop_reason="distance_reached", **kw)["why"]
     assert "stop_reason:no_progress" in bs.run_verdict(stop_reason="no_progress", distance=True, **kw)["why"]
+    assert "stop_reason:end_zero" in bs.run_verdict(stop_reason="end_zero", distance=True, **kw)["why"]
 
 
 @pytest.mark.parametrize(("flags", "status"), [
@@ -82,10 +83,12 @@ def test_the_rest_position():
     assert bs.rest_position(series(51, count_state=2))["why"] == "continuity"
     assert bs.rest_position(series(51, evidence_age_ms=150))["why"] == "evidence_age"
     assert bs.rest_position([])["result"] == "unconfirmed"
-    two = [(0, BASE), (500_000, BASE)]  # 0 and 500 ms only: no 100 Hz observation in between
-    assert bs.rest_position(two)["result"] == "unconfirmed"
+    for gap in (500_000, 540_000):  # two samples only: no 100 Hz observation in between
+        assert bs.rest_position([(0, BASE), (gap, BASE)])["result"] == "unconfirmed"
+    assert bs.rest_position(series(30, step_us=20_000))["result"] == "unconfirmed"  # 50 Hz
     assert bs.rest_position(series(51, raw_angle=0))["why"] == "not_reanchored"
     assert bs.rest_position(series(51, step_us=40_000))["why"] == "sparse"
+    assert bs.rest_position(series(51, step_us=15_000))["result"] == "settled_at_100hz"
     assert Mode.DISARMED  # the caller passes samples after DISARMED
 
 

@@ -142,8 +142,8 @@ def run_verdict(*, closed: str, stop_reason: str | None, aborted: str | None, cl
     why = []
     if closed != "ended":
         why.append(closed)
-    elif stop_reason != "end_zero" and not (distance and stop_reason in DISTANCE_ENDS):
-        why.append(f"stop_reason:{stop_reason}")  # a distance run also ends by its distance (its own verdict apart)
+    elif (distance and stop_reason not in DISTANCE_ENDS) or (not distance and stop_reason != "end_zero"):
+        why.append(f"stop_reason:{stop_reason}")  # a distance run ends by its distance only (its own verdict apart)
     if aborted:
         why.append(f"aborted:{aborted}")
     if not cleanup_confirmed:
@@ -183,7 +183,7 @@ def counts_diff(a: int, b: int) -> int:
 _STOPPED = {"no_progress", "kth_zero_suspect", "kth_lost"}
 
 
-def distance_verdict(*, stop_reason: str | None, confirm: int, run_flags: int, stop_counts: int,
+def distance_verdict(*, stop_reason: str | None, confirm: int, run_flags: int, stop_counts: int | None,
                      distance_ref: int, cut_position: int) -> dict:
     """Verdict ② of a distance run (plan 4.2 A1b-1 decision 8), apart from the run and cleanup verdict:
     ``reached`` (stop 8, or 9 confirmed reached), ``held`` (9 held by a rebound), ``waiting`` (9 with no confirmation
@@ -192,7 +192,7 @@ def distance_verdict(*, stop_reason: str | None, confirm: int, run_flags: int, s
     (or the first trusted sample after it), never the final rest."""
     flags = BenchRunFlag(run_flags & 0x1F)
     moved = counts_diff(cut_position, distance_ref)
-    out = {"stop_counts": int(stop_counts), "moved_at_cut": moved}
+    out = {"stop_counts": None if stop_counts is None else int(stop_counts), "moved_at_cut": moved}
     if BenchRunFlag.RES_UNCLEAN in flags:
         return {**out, "result": "failed_continuity"}  # never with a distance end (the drive is refused), defensive
     if stop_reason == "distance_reached":
@@ -225,7 +225,7 @@ def measure_verdict(*, run_flags: int, distance_ref: int, cut_position: int) -> 
 
 REST_SETTLE_US = 500_000  # 0.5 s with no change at 100 Hz
 REST_EVIDENCE_MS = 100
-REST_GAP_US = 30_000  # 100 Hz with up to two pairs missed
+REST_GAP_US = 15_000  # 1.5 x the 10 ms STATE period (plan 3): a 100 Hz observation, never 50 Hz
 
 
 def rest_position(samples) -> dict:
@@ -240,18 +240,24 @@ def rest_position(samples) -> dict:
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "continuity"}
     if last.evidence_age_ms > REST_EVIDENCE_MS:
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "evidence_age"}
-    window = [(t, b) for t, b in samples if t_last - t <= REST_SETTLE_US]
-    if samples[0][0] > t_last - REST_SETTLE_US or any(b.cumulative != last.cumulative for _t, b in window):
-        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "not_settled"}
-    # the 0.5 s covered by the 100 Hz samples (no gap over REST_GAP_US), of one run, each re-anchored on a non-zero
-    # frame with fresh evidence (impl r1 P1-4)
-    covering = [(t, b) for t, b in samples if t >= t_last - REST_SETTLE_US - REST_GAP_US]
-    times = [t for t, _b in covering]
-    if any(t2 - t1 > REST_GAP_US for t1, t2 in zip(times, times[1:])):
-        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "sparse"}
-    if any(b.run_id != last.run_id or b.raw_angle == 0 or b.evidence_age_ms > REST_EVIDENCE_MS
-           for _t, b in covering):
-        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "not_reanchored"}
+    # back from the last sample, the contiguous segment where every sample has the same count, re-anchored on a
+    # non-zero frame with fresh evidence, of the same run, each within REST_GAP_US of the next; settled only when
+    # that segment itself spans 0.5 s (impl r1 P1-4, r2 P1)
+    start, why = t_last, None
+    for i in range(len(samples) - 1, -1, -1):
+        t, b = samples[i]
+        if b.run_id != last.run_id or b.raw_angle == 0 or b.evidence_age_ms > REST_EVIDENCE_MS:
+            why = "not_reanchored"
+            break
+        if b.cumulative != last.cumulative:
+            why = "not_settled"
+            break
+        if i + 1 < len(samples) and samples[i + 1][0] - t > REST_GAP_US:
+            why = "sparse"
+            break
+        start = t
+    if t_last - start < REST_SETTLE_US:
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": why or "too_short"}
     return {"result": "settled_at_100hz", "cumulative": last.cumulative,
             "wording": "100 Hz 관측에서 0.5 s 동안 위치 변화 없음"}
 

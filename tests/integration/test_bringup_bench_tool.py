@@ -273,10 +273,11 @@ def test_a_one_count_run_has_no_driving_sample(model):
     res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
     assert res["distance"]["result"] == "reached", res
-    if res["result"] == "board_record_only":
-        assert res["metrics"]["reason"] == "no_driving_sample"
+    driven = any(s.state.mode == Mode.ARMED and s.state.duty_e4[2] for s in b.samples)
+    if driven:
+        assert res["result"] == "ok", res
     else:
-        assert res["result"] == "ok"  # the model's slow axis left a driving sample
+        assert res["result"] == "board_record_only" and res["metrics"]["reason"] == "no_driving_sample", res
 
 
 def test_the_window_is_judged_before_a_second_non_zero(model):
@@ -286,7 +287,7 @@ def test_the_window_is_judged_before_a_second_non_zero(model):
     res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, window=(-0.5, 0.0001), bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=0.5, observed="none"), b)
     assert res["stop"] == "window", res
-    assert len(nonzero_writes(b)) <= 2  # the first, and at most the one in flight when the sample came
+    assert len(nonzero_writes(b)) == 1  # the first accepted sample was already outside: no second non-zero
 
 
 def test_a_measuring_kth_run(model):
@@ -297,3 +298,34 @@ def test_a_measuring_kth_run(model):
     assert res["bench_set"]["source"] == 1 and res["bench_set"]["stop_counts"] == 0, res
     assert res["result"] == "ok" and res["aborted"] is None, res
     assert res["measure"]["status"] == "confirmed" and res["measure"]["moved"] > 0, res["measure"]
+
+
+def test_a_refused_first_non_zero_is_written_once_and_closed_with_a_written_zero(mcu_model, monkeypatch):  # noqa: F811
+    """The ARM taken, then the axis pushed to raw 0 (SIGUSR1) before the first non-zero: the board refuses it
+    (sensor_invalid); exactly one non-zero is written, then a written zero and the cleanup (Codex A1b-1b r2)."""
+    import io
+    import signal
+
+    from test_bringup_commission_tool import Model, PtyLink
+
+    m = Model(mcu_model, "--bench", "1", "--kth-start-raw", "256,256", "--axis-push-steer-rad", "-0.3926990817",
+              commission=True)
+    try:
+        b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = BENCH5
+        orig = bringup.CommissionSession.confirm_bench_arm
+
+        def confirm_then_push(self):
+            orig(self)
+            m.proc.send_signal(signal.SIGUSR1)  # M to raw 0 during the preparation zeros
+
+        monkeypatch.setattr(bringup.CommissionSession, "confirm_bench_arm", confirm_then_push)
+        res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                                   bench_time_max=5.0, stop_kth_turns=0.5, observed="none"), b)
+        assert res.get("start") == "refused" and res["aborted"] == "bench_start_refused_sensor_invalid", res
+        coms = [w for w in b.writes if w.kind == "COMMISSION"]
+        nz = [i for i, w in enumerate(coms) if w.duty_e4]
+        assert len(nz) == 1, coms
+        assert any(w.duty_e4 == 0 for w in coms[nz[0] + 1:])  # the closing zero went out
+    finally:
+        m.close()

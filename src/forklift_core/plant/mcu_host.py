@@ -130,6 +130,8 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 
 class McuLinkHost:
+    pre_bench_arm = None  # bench tools: called right before a BENCH_ARM's first byte; False drops it
+
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
                  allow_locked: bool = False, commission: bool = False,
                  on_state: Callable[[McuState, int], None] | None = None, initial_seq: int = 0,
@@ -767,6 +769,12 @@ class McuLinkHost:
         are dropped here. The adapter writes the frame completely before asking again."""
         while self._outbox:
             o = self._outbox.popleft()
+            if o.kind == "BENCH_ARM" and self.pre_bench_arm is not None and not self.pre_bench_arm():
+                # the bench tool could not write down what the board still holds of its last run: this ARM, which
+                # clears it, never goes out (bench console plan 4.2 A1b-1b, Codex round 2 P2-4)
+                self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "pre_bench_arm"})
+                self._revoke("bench_arm_vetoed", [])
+                continue
             if o.kind in _MOTION and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
                 self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "expired or stale"})
                 if o.echo is not None and self._auth == _ZERO_PENDING and o.generation == self._auth_gen:
