@@ -1,4 +1,4 @@
-/* Bench extension of mcu-link (contract section 8, wire generation bench5): the golden vectors shared with
+/* Bench extension of mcu-link (contract section 8, wire generation bench6): the golden vectors shared with
    tests/unit/mcu_link/test_bench_messages.py (generated there with Python struct and binascii.crc_hqx), and the
    bench types round trip through the stream decoder. Built against the core with FW_CORE_BENCH. */
 #include "fw/link.h"

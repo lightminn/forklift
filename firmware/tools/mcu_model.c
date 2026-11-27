@@ -25,7 +25,7 @@
    commissioning model with one axis per arming; the product string ends " lim=lr1 sa1".
   --bench 1: the bench image (bench console plan A1, mcu-link contract 8): an open commissioning model that takes
   BENCH_SET/BENCH_ARM (one run per arming) and sends a BENCH_STATE with every STATE; the board's product string ends
-  " lim=lr1 bench5". The model has no connection changes (no link_conn).
+  " lim=lr1 bench6". The model has no connection changes (no link_conn).
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-frozen W: wheel W's counts never move (a wheel with no encoder
    fitted, design 2026-11-25-bench-commission-limits 4). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05

@@ -162,9 +162,9 @@ def confirmation_phrase(ask: RunAsk) -> str:
 
 # ---- the bench image (bench console plan A1a, mcu-link contract 8) ------------------------------------------------------
 # The bench image ends its USB product string with exactly these tokens (gen_build_info.cmake); the generation names the
-# wire contract it speaks (bench5: BENCH_SET / BENCH_ARM / BENCH_STATE). Any other generation is not this one: it is
+# wire contract it speaks (bench6: BENCH_SET / BENCH_ARM / BENCH_STATE). Any other generation is not this one: it is
 # refused for every run and stays out of gates (judgement.diagnostic_image).
-BENCH_SUFFIX = ("lim=lr1", "bench5")
+BENCH_SUFFIX = ("lim=lr1", "bench6")
 # The checks a BENCH_SET may turn off for one run (firmware drive.h DRIVE_BENCH_*). The stopping side -- overcurrent,
 # current sense, driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun -- has no name and never will.
 BENCH_BYPASS_BITS = {"steer_range": 1 << 0, "lift_range": 1 << 1}

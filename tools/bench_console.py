@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The bench console's back end (docs/plans/2026-11-27-bench-console.md 3, 3.1 B1): the operator console served on
-the Jetson for the bench image (``lim=lr1 bench5``), one board writer, the shared lease, STOP and request ledger, and a
+the Jetson for the bench image (``lim=lr1 bench6``), one board writer, the shared lease, STOP and request ledger, and a
 run engine that drives one axis by duty for a time (A1a). Hold, distance stops and the MT source come with B2.
 
 usage: bench_console.py (--device /dev/forklift-mcu [--baud B] | --model PATH) [--host 127.0.0.1] [--port 8765]
@@ -433,7 +433,7 @@ class BenchConsole:
                     self.run.cancel = kind
                 return None, {}
             if kind == "bench_disarm":
-                why = self.not_ready()  # this fd's bench5 image and a pair after the boundary, as every command
+                why = self.not_ready()  # this fd's bench6 image and a pair after the boundary, as every command
                 if why is not None and why != "board_initialising":
                     return "board_not_ready", {"detail": why}
                 self.host.request_disarm(now)
@@ -475,7 +475,7 @@ class BenchConsole:
         if self.clear is not None:
             return "busy_clearing", {}
         why = self.not_ready()
-        if why is not None:  # this fd's bench5 image and a pair after the boundary first (round 3 P1-4)
+        if why is not None:  # this fd's bench6 image and a pair after the boundary first (round 3 P1-4)
             return "board_not_ready", {"detail": why}
         st = self.host.state
         if st.mode not in (Mode.FAULT, Mode.ESTOP):
@@ -545,7 +545,7 @@ class BenchConsole:
         now = int(self.clock())
         if not self.boundary_ok or self.host.bench_refusal() is not None:
             # a reopened host sends nothing at all until a pair after the connection boundary (plan 3: the board
-            # ended its arming there itself), and nothing to a board that is not this fd's bench5 image (round 3
+            # ended its arming there itself), and nothing to a board that is not this fd's bench6 image (round 3
             # P1-4) -- not a DISARM, not a zero
             return False
         if f.expires_ns is not None and f.expires_ns <= now:
@@ -1250,7 +1250,7 @@ def _stop_name(v: int):
     return BenchStop(v).name.lower() if 0 <= v <= max(BenchStop) else v
 
 
-MODEL_PRODUCT = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench5"
+MODEL_PRODUCT = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench6"
 
 
 class ModelDevice:

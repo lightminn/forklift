@@ -27,7 +27,7 @@ import bench_console  # noqa: E402
 from real_mcu_link import BenchTtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
-BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench5"
+BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench6"
 
 
 class PtyDevice:
@@ -329,7 +329,7 @@ def test_another_bench_generation_is_never_ready(mcu_model, tmp_path):  # noqa: 
         while time.monotonic() < end:
             c.cycle()
             time.sleep(0.002)
-        assert c.not_ready() == "bench_refused:not_bench5_image"
+        assert c.not_ready() == "bench_refused:not_bench6_image"
     finally:
         m.close()
 

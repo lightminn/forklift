@@ -13,7 +13,7 @@ from forklift_core.plant import judgement
 REPO = Path(__file__).resolve().parents[3]
 BOARD = (REPO / "firmware" / "boards" / "weact_h743" / "src" / "board_config.c").read_text()
 DRIVE_H = (REPO / "firmware" / "core" / "include" / "fw" / "drive.h").read_text()
-BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench5"
+BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench6"
 
 
 def test_the_names_are_the_firmware_bits_and_nothing_stops_less():
@@ -51,9 +51,10 @@ def test_the_bench_image_is_told_by_its_exact_suffix():
     assert bl.bench_image(BENCH5)
     for other in ("forklift-mcu commission OPEN v rec=1 lim=lr1",
                   "forklift-mcu commission OPEN v rec=1 lim=lr1 bench4",
+                  "forklift-mcu commission OPEN v rec=1 lim=lr1 bench5",  # A1a's generation (plan 4.2 A1b-1)
                   "forklift-mcu commission OPEN diag-fw-bench-2 rec=1f4207f4 lim=lr1 bench3",
-                  "forklift-mcu commission OPEN v rec=1 lim=lr1 bench5x",
-                  "forklift-mcu normal OPEN v rec=1 lim=lr1 bench5", None):
+                  "forklift-mcu commission OPEN v rec=1 lim=lr1 bench6x",
+                  "forklift-mcu normal OPEN v rec=1 lim=lr1 bench6", None):
         assert not bl.bench_image(other), other
     assert bl.any_bench_image("forklift-mcu commission OPEN v rec=1 lim=lr1 bench4")
 

@@ -1,5 +1,5 @@
 """The bench image on the mcu_link host (bench console plan A1a 1, contract 8): only a commission-mode host, on the
-opened tty whose product string is exactly the bench5 image, whose STATE says an open commissioning build, sends
+opened tty whose product string is exactly the bench6 image, whose STATE says an open commissioning build, sends
 BENCH_SET and BENCH_ARM; a plain ARM is refused there; a BENCH_STATE counts only right after its STATE."""
 
 import pytest
@@ -11,7 +11,7 @@ from forklift_core.plant.mcu_host import McuLinkHost
 
 from test_mcu_host_commission import CB, CFG, MS, Rig, state
 
-BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench5"
+BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench6"
 ASK = bl.BenchAsk(0, (), None, None)
 
 
@@ -21,7 +21,7 @@ def bench_rig(product=BENCH5, **kw):
     return r
 
 
-def test_only_a_commission_host_on_the_bench5_image_sends_a_bench_set():
+def test_only_a_commission_host_on_the_bench6_image_sends_a_bench_set():
     for client in (Client.REAL, Client.HIL, Client.BRINGUP):
         h = McuLinkHost(CFG, client=client)
         h.usb_product = BENCH5
@@ -31,7 +31,7 @@ def test_only_a_commission_host_on_the_bench5_image_sends_a_bench_set():
                     "forklift-mcu commission OPEN v rec=1 lim=lr1 bench4"):
         r = bench_rig(product)
         r.feed()
-        assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_bench5_image"
+        assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_bench6_image"
     r = bench_rig()
     r.feed(flags=StateFlag.DRIVERS_READY)  # not a commissioning build
     assert r.host.bench_set(1, ASK, r.now).reason == "bench_refused: not_commission_build"

@@ -18,7 +18,7 @@ if(FW_SINGLE_AXIS AND NOT (FW_BUILD STREQUAL "commission" AND FW_MOTOR_OUTPUT))
 endif()
 # The bench image (bench console plan A1, mcu-link contract 8): the open commissioning build that takes the
 # bench extension (BENCH_SET / BENCH_ARM / BENCH_STATE) and arms one run at a time; its product string ends
-# "lim=lr1 bench5". It is never the operating, HIL or fw-single image (plan A1 completion condition 1).
+# "lim=lr1 bench6". It is never the operating, HIL or fw-single image (plan A1 completion condition 1).
 set(FW_BENCH 0 CACHE STRING "1 = the bench image (bench console plan A1): the open commissioning build with the bench extension")
 if(NOT FW_BENCH MATCHES "^[01]$")
     message(FATAL_ERROR "FW_BENCH must be 0 or 1")

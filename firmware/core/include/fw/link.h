@@ -18,7 +18,7 @@
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
 #define LINK_STATE 0x81u
-/* Bench extension (contract section 8, wire generation bench5): decoded only by a core compiled with
+/* Bench extension (contract section 8, wire generation bench6): decoded only by a core compiled with
    FW_CORE_BENCH (the bench image and the host tests); every other image drops these types as unknown. */
 #define LINK_BENCH_SET 0x06u
 #define LINK_BENCH_ARM 0x08u

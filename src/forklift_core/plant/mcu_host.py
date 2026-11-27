@@ -177,7 +177,7 @@ class McuLinkHost:
         self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
         self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
         # the bench image (mcu-link contract 8): the latest BENCH_STATE whose pair_seq names the STATE decoded right
-        # before it, and that STATE's seq; only a commission-mode host on a bench5 image sends bench commands
+        # before it, and that STATE's seq; only a commission-mode host on a bench6 image sends bench commands
         self.bench_state: BenchState | None = None
         self.bench_state_rx_ns: int | None = None
         self.bench_state_boot: int | None = None  # the boot of the accepted STATE it came with
@@ -564,13 +564,13 @@ class McuLinkHost:
     # ---------------------------------------------------------------- operator requests
     def bench_refusal(self, s: McuState | None = None) -> str | None:
         """Why this host must not send a bench command (plan A1a 1, contract 8): only a commission-mode (bring-up)
-        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench5``), whose
+        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench6``), whose
         STATE says a commissioning build with open outputs and no HIL plant."""
         s = self._state if s is None else s
         if not self.commission_mode:
             return "not_commission_host"
         if not bl.bench_image(self.usb_product):
-            return "not_bench5_image"
+            return "not_bench6_image"
         if s is None or self._conn_first_flags is None:
             return "no_state"
         # this connection's first valid STATE and the latest both (plan A1a 1: the first STATE decides the image)
