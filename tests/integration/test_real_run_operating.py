@@ -506,7 +506,8 @@ def test_the_operating_run_drives_to_the_lift_stops_and_disarms(mcu_model, tmp_p
             assert r["t"] == "ack", r
             s = c.wait(lambda s: s["operator_request"] is not None or s["permit"]["state"] == "LATCHED", 120)
             op = s["operator_request"]
-            assert op is not None and op["kind"] == "lifted", s
+            # the cause in the message, not a truncated dict (a latch names its reason in permit)
+            assert op is not None and op["kind"] == "lifted", (s["permit"], s["mission"], s["last_refusal"])
             r = c.ask("operator_answer", kind=op["kind"], serial=op["serial"], verdict="confirm")
             assert r["t"] == "ack", r
             c.wait(lambda s: s["permit"]["state"] == "LATCHED", 60)
