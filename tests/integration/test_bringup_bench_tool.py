@@ -329,3 +329,14 @@ def test_a_refused_first_non_zero_is_written_once_and_closed_with_a_written_zero
         assert any(w.duty_e4 == 0 for w in coms[nz[0] + 1:])  # the closing zero went out
     finally:
         m.close()
+
+
+def test_a_short_distance_run_waits_for_the_boards_result(model):
+    """--seconds 0.1 with a one-count target: the board may stop before the duty loop's own end; the CLI waits for the
+    result pair instead of trying an end zero into the stop (Codex A1b-1b round 3 P2-2)."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=0.1, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
+    assert res["aborted"] != "bench_end_zero_not_queued", res
+    assert res["distance"]["result"] in ("reached", "missed"), res

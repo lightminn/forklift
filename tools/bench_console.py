@@ -568,6 +568,7 @@ class BenchConsole:
             r = self.run
             if r is None or r.arm_seq is None or seq != r.arm_seq or not self._final_before_arm(r):
                 return False  # not this run's ARM, or the last run's result not written down (A1b-1b r2 P2-4)
+            now = int(self.clock())  # the record took time: the lease and the rest judged at the write (r3 P2-3)
         if f.kind == "DISARM":
             return False  # no DISARM this session did not ask for
         if f.kind == "CLEAR_FAULTS":

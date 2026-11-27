@@ -1000,6 +1000,11 @@ class CommissionSession(Session):
         if nonzero and self._distance_run():
             if not self._first_nonzero_answered(duty_e4, bound):
                 return None
+            if not self.b.host.ready and self.board_ended is None:
+                why = self._abort_reason()  # out of ARMED already: its result pair decides (impl r3 P2-2)
+                if why is not None:
+                    self.aborted = why
+                    return None
             if stop is not None and (reason := stop()) is not None:
                 self.stop_reason = reason  # the samples seen while its answer was awaited (impl r1 P1-2)
                 return None
@@ -1024,6 +1029,7 @@ class CommissionSession(Session):
         b = self.b
         conn0 = b.conn
         echo_rx_ns = b.host.state_rx_ns  # the STATE the command echoes was received then (the host-clock bound)
+        i0 = len(b.samples)  # every accepted STATE from here on, in receipt order (impl r3 P2-1)
         seq = self.send_duty(duty_e4, bound)
         if seq is None:
             self.aborted = "bench_start_not_queued"
@@ -1051,11 +1057,25 @@ class CommissionSession(Session):
             return (mcu_us is not None and rx_ns is not None and "mcu_us" in deadline
                     and mcu_us <= deadline["mcu_us"] and rx_ns <= deadline["host_ns"])
 
+        def in_time_samples(pred) -> bool:
+            # any accepted STATE of this connection received after the write, of its boot and arming, made after the
+            # echo and in time: a later STATE of the same read never hides an earlier one (impl r3 P2-1)
+            w = write()
+            if w is None or w.echo_mcu_time_us is None:
+                return False
+            for k in range(i0, len(b.samples)):
+                smp, st = b.samples[k], b.samples[k].state
+                if (b.sample_conn[k] == conn0 and smp.host_ns >= w.done_ns and st.boot_id == w.boot_id
+                        and st.arm_gen == w.arm_gen and st.mcu_time_us > w.echo_mcu_time_us
+                        and in_time(st.mcu_time_us, smp.host_ns) and pred(st)):
+                    return True
+            return False
+
         def result_in_time() -> bool:
+            # this run's result latched, and the board's own stop (out of ARMED) seen in time: it drove
             if not (self.bench_result() or {}).get("confirmed"):
                 return False
-            st = b.host.bench_state_of
-            return st is not None and in_time(st.mcu_time_us, b.host.bench_state_rx_ns)
+            return in_time_samples(lambda st: st.mode != Mode.ARMED)
 
         def answered() -> bool:
             if result_in_time():
@@ -1066,11 +1086,11 @@ class CommissionSession(Session):
             if "mcu_us" not in deadline and w.valid_ms is not None:
                 deadline["mcu_us"] = w.echo_mcu_time_us + w.valid_ms * 1000 + int(FIRST_NONZERO_SLACK_S * 1e6)
                 deadline["host_ns"] = (echo_rx_ns or w.done_ns) + w.valid_ms * 1_000_000 + 50_000_000
-            if not in_time(s.mcu_time_us, b.host.state_rx_ns):
-                return True  # past a deadline: judged now, on what came in time
-            if s.last_rx_seq == seq16:
+            if in_time_samples(lambda st: st.last_rx_seq == seq16):
                 accepted["yes"] = True
                 return True
+            if not in_time(s.mcu_time_us, b.host.state_rx_ns):
+                return True  # past a deadline: judged now, on what came in time
             if s.reject_reason != RejectReason.NONE and refused["why"] is None:
                 refused["why"] = s.reject_reason.name.lower()  # kept: a refused command is never taken later
             # the command's own deadline plus two STATE periods passed on the MCU's clock (impl r1 P2-1)
