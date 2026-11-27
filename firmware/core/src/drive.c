@@ -1090,13 +1090,6 @@ static void handle_clear(drive *d, const link_msg *m)
         d->reject_reason = DRIVE_REJECT_SENSOR_INVALID;
         return;
     }
-#if defined(FW_CORE_BENCH)
-    if (BENCH(d->cfg) && d->boundary_us != 0 &&
-        d->time_us < d->boundary_us + (uint64_t)DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS * US_PER_MS) {
-        d->reject_reason = DRIVE_REJECT_STALE_ECHO; /* possibly the old host's, late across the change */
-        return;
-    }
-#endif
     /* Driver faults and overcurrent are not conditions: the re-initialisation decides. The
        commissioning time limit stays until the next ARM (contract 3.4). */
     d->latched &= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
@@ -1122,7 +1115,8 @@ static void bench_apply_link_change(drive *d, uint32_t now32)
     uint64_t began = (uint64_t)ago <= d->time_us ? d->time_us - ago : 0u;
     if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
         bool expired_first = d->has_deadline && d->deadline_us < began;
-        if (!expired_first) { /* else the expiry below is the first cause */
+        bool limit_first = d->cm_on && d->cm_on_since_us + (uint64_t)d->cm_on_limit_ms * US_PER_MS < began;
+        if (!expired_first && !limit_first) { /* else the expiry or the limit below is the first cause */
             bench_end(d, DRIVE_BENCH_STOP_LINK_BOUNDARY);
             enter_stopping(d, 0);
         }

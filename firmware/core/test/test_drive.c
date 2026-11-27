@@ -2488,23 +2488,23 @@ static void bench_change_versus_expiry_order(void)
     }
 }
 
-/* Codex A1a round 2: a CLEAR_FAULTS right after a change may be the old host's, late: refused for a while. */
-static void bench_clear_waits_after_a_change(void)
+/* Codex A1a round 3: an output time limit passed before the change began is the first cause. */
+static void bench_change_versus_time_limit(void)
 {
     boot_with(mod_bench);
-    in.nfault_low[DRIVE_CH_L] = true;
-    tick();
-    in.nfault_low[DRIVE_CH_L] = false;
-    tick();
-    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
-    link_change();
-    send(simple(LINK_CLEAR_FAULTS, 30));
-    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
-    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
-    ticks((int)DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS);
-    send(simple(LINK_CLEAR_FAULTS, 31));
-    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
-    CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT);
+    link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+    b.time_ms[DRIVE_CH_M] = 30;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 1, echo_now()));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    ticks(25); /* the interval opened ~25 ms ago; its limit is 30 ms */
+    uint32_t t_change = in.now_us + 12000u; /* after the limit (5 ms from now), before the command deadline */
+    in.now_us += 15000;
+    drive_note_link_change(&d, t_change, true);
+    tick_msgs(NULL, 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
 }
 
 /* Codex A1a round 2: another axis's request is not counted as blocked in DISARMED either. */
@@ -2592,7 +2592,7 @@ int main(void)
     bench_blocked_counts_the_end_only();
     bench_change_brake_is_full_length();
     bench_change_versus_expiry_order();
-    bench_clear_waits_after_a_change();
+    bench_change_versus_time_limit();
     bench_blocked_other_axis_after_disarm();
     return FW_TEST_RESULT();
 }

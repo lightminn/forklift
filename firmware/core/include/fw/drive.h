@@ -82,9 +82,6 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_STOP_ESTOP 6u
 #define DRIVE_BENCH_STOP_LINK_BOUNDARY 7u
 #define DRIVE_BENCH_SET_TTL_MS 1000u /* an unconsumed BENCH_SET expires */
-/* CLEAR_FAULTS is refused this long after a connection change settles: an OUT packet of the old host that was
-   in flight across the change is never taken for the new host's clear (contract 8.4). */
-#define DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS 100u
 
 /* STATE.flags bits. */
 #define DRIVE_STATE_LIMITED 0x01u
@@ -302,9 +299,9 @@ void drive_fill_state(const drive *d, link_state *s);
 #if defined(FW_CORE_BENCH)
 /* A link connection change (bench image, contract 8.4), noted before drive_begin, which applies it with the
    tick's own time: one that began (since_hal_us) while armed ends the arming through STOPPING unless the command
-   deadline had passed before it began (then the expiry is the first cause); once settled, the pending BENCH_SET
-   is dropped, bench commands must echo a STATE sent from this tick on, and CLEAR_FAULTS waits
-   DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS. No effect on other builds. */
+   deadline or the output interval's time limit had passed before it began (then that is the first cause); once
+   settled, the pending BENCH_SET is dropped and bench commands must echo a STATE sent from this tick on. No
+   effect on other builds. */
 void drive_note_link_change(drive *d, uint32_t since_hal_us, bool settled);
 
 /* Fills everything but pair_seq and dropped_pairs (owned by the app). */

@@ -121,25 +121,38 @@ static volatile uint32_t g_conn_begin, g_conn_end;
 /* A bus reset, unplug or suspend is counted in the OTG interrupt the moment it happens, so the tick stops
    reading at once, before the main loop's tud_task gets to it (Codex A1a round 2). */
 static volatile uint32_t g_conn_events, g_conn_handled, g_conn_since;
+/* The generation the tick last saw settled: the start time is stamped only when nothing is pending and the tick
+   has seen the last change, so the first start of a change survives until the tick reads it (Codex A1a round 3). */
+static volatile uint32_t g_conn_observed;
+static bool g_last_dtr;
+
+static bool conn_idle(void)
+{
+    return g_conn_events == g_conn_handled && g_conn_begin == g_conn_end && g_conn_end == g_conn_observed;
+}
 
 void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 {
     (void)rhport;
     if (in_isr && (eventid == DCD_EVENT_BUS_RESET || eventid == DCD_EVENT_UNPLUGGED ||
                    eventid == DCD_EVENT_SUSPEND)) {
-        if (g_conn_events == g_conn_handled) {
+        if (conn_idle()) {
             g_conn_since = timebase_now_us();
         }
         g_conn_events++;
     }
 }
 
+/* Control tick only. */
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
     uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
     *busy = events != handled || begin != end;
     *since_us = g_conn_since;
+    if (!*busy) {
+        g_conn_observed = end;
+    }
     return end;
 }
 #endif
@@ -148,7 +161,7 @@ static void lifecycle(void)
 {
 #if defined(FW_BENCH_IMAGE)
     uint32_t events = g_conn_events;
-    if (events == g_conn_handled && g_conn_begin == g_conn_end) {
+    if (conn_idle()) {
         g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
     }
     g_conn_begin = g_conn_end + 1u;
@@ -171,9 +184,14 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
     (void)itf;
     (void)rts;
 #if defined(FW_BENCH_IMAGE)
-    lifecycle(); /* first: the bench image marks the change before anything else */
-    if (dtr) {
-        g_link_stats.reopened++;
+    /* Only a change of DTR is a connection change: TinyUSB calls this for every SET_CONTROL_LINE_STATE, and an
+       RTS-only request or the same DTR again must not end a run (Codex A1a round 3). */
+    if (dtr != g_last_dtr) {
+        g_last_dtr = dtr;
+        lifecycle(); /* first: the bench image marks the change before anything else */
+        if (dtr) {
+            g_link_stats.reopened++;
+        }
     }
 #else
     if (dtr) {
