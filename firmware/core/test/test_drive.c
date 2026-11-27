@@ -2343,6 +2343,106 @@ static void bench_link_boundary(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
 }
 
+
+/* Codex A1a round 1: the bench image never cuts a STOPPING brake short with a DISARM. */
+static void bench_disarm_keeps_the_brake(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now())); /* the end: STOPPING */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    send(simple(LINK_DISARM, 23));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING); /* the brake goes on */
+    CHECK_EQ_U(d.last_rx_seq, 23);
+    CHECK(!out.drvoff[DRIVE_CH_M]);
+    ticks(50);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    ticks(60);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+
+    CHECK(bench_arm_run(2, DRIVE_CH_M, 0)); /* a connection change's STOPPING, then a late DISARM */
+    send(commission_msg(30, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(31, DRIVE_CH_M, 800, 150, echo_now()));
+    tick();
+    drive_link_boundary(&d);
+    send(simple(LINK_DISARM, 32));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+}
+
+/* Codex A1a round 1: an output interval keeps the run's limit after the run ends. */
+static void bench_run_limit_outlives_the_run(void)
+{
+    for (int via_fault = 0; via_fault < 2; via_fault++) {
+        boot_with(mod_bench); /* the build's M limit is 2000 ms */
+        link_bench_set b = bench_defaults(1, DRIVE_CH_M);
+        b.time_ms[DRIVE_CH_M] = 30000;
+        send(bench_set_msg(10, b));
+        send(bench_arm_msg(11, 1, echo_now()));
+        send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+        for (int i = 0; i < 2500; i++) { /* 2.5 s of output: past the build's limit, inside the run's */
+            send(commission_msg((uint16_t)(21 + i), DRIVE_CH_M, 800, 150, echo_now()));
+        }
+        CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+        if (via_fault) {
+            in.nfault_low[DRIVE_CH_R] = true;
+            tick();
+            in.nfault_low[DRIVE_CH_R] = false;
+            CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+        } else {
+            send(simple(LINK_DISARM, 9000));
+            CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+        }
+        ticks(3);
+        CHECK((d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT) == 0);
+        CHECK_EQ_U(bench_state_now().stop_reason, via_fault ? DRIVE_BENCH_STOP_FAULT : DRIVE_BENCH_STOP_DISARM);
+        if (!via_fault) {
+            CHECK(bench_arm_run(2, DRIVE_CH_M, 0)); /* no re-arm hold either */
+        }
+    }
+}
+
+/* Codex A1a round 1: an unconsumed SET does not outlive an e-stop and its clear. */
+static void bench_set_does_not_outlive_an_estop(void)
+{
+    boot_with(mod_bench);
+    send(bench_set_msg(10, bench_defaults(3, DRIVE_CH_M)));
+    CHECK(d.bset_valid);
+    in.estop_active = true;
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ESTOP);
+    in.estop_active = false;
+    tick();
+    send(simple(LINK_CLEAR_FAULTS, 11));
+    for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(bench_arm_msg(12, 3, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+/* Codex A1a round 1: blocked counts only what the end refused (stopping, not armed). */
+static void bench_blocked_counts_the_end_only(void)
+{
+    boot_with(mod_bench);
+    CHECK(bench_arm_run(1, DRIVE_CH_M, 0));
+    send(commission_msg(20, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(21, DRIVE_CH_M, 800, 150, echo_now()));
+    send(commission_msg(22, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(23, DRIVE_CH_L, 500, 150, echo_now())); /* another axis: bad_value */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    link_msg m = commission_msg(24, DRIVE_CH_M, 0, 150, echo_now());
+    m.u.commission.boot_id = d.boot_id + 1u; /* another boot */
+    send(m);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BOOT_MISMATCH);
+    CHECK_EQ_U(bench_state_now().blocked, 0);
+    send(commission_msg(25, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2405,5 +2505,9 @@ int main(void)
     bench_run_end_causes();
     bench_range_bypass_is_the_runs();
     bench_link_boundary();
+    bench_disarm_keeps_the_brake();
+    bench_run_limit_outlives_the_run();
+    bench_set_does_not_outlive_an_estop();
+    bench_blocked_counts_the_end_only();
     return FW_TEST_RESULT();
 }

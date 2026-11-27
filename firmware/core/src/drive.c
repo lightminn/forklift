@@ -668,7 +668,7 @@ static bool commission_over_limit(const drive *d)
     return d->cfg->commission_build && d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT &&
            d->time_us - d->cm_on_since_us >
 #if defined(FW_CORE_BENCH)
-               (uint64_t)cm_time_ms(d, d->cm_on_axis) * US_PER_MS;
+               (uint64_t)(BENCH(d->cfg) ? d->cm_on_limit_ms : cm_time_ms(d, d->cm_on_axis)) * US_PER_MS;
 #else
                (uint64_t)d->cfg->commission_time_ms[d->cm_on_axis] * US_PER_MS;
 #endif
@@ -751,6 +751,9 @@ void drive_begin(drive *d, const drive_inputs *in)
     d->estop_now = in->estop_active;
     if (in->estop_active) {
         bench_end(d, DRIVE_BENCH_STOP_ESTOP); /* the result only: ESTOP keeps its own outputs */
+#if defined(FW_CORE_BENCH)
+        d->bset_valid = false;
+#endif
         d->latched |= DRIVE_FAULT_ESTOP_INPUT;
         d->mode = DRIVE_MODE_ESTOP;
     }
@@ -995,6 +998,7 @@ static void handle_commission(drive *d, const link_msg *m)
     if (d->reject_reason != DRIVE_REJECT_NONE) {
 #if defined(FW_CORE_BENCH)
         if (BENCH(d->cfg) && d->run_drive == DRIVE_BENCH_RUN_ENDED && d->res_run_id == d->run_id &&
+            (d->reject_reason == DRIVE_REJECT_STOPPING || d->reject_reason == DRIVE_REJECT_NOT_ARMED) &&
             d->res_blocked < UINT16_MAX) {
             d->res_blocked++; /* refused after the run that drove had ended */
         }
@@ -1079,6 +1083,9 @@ static void handle_clear(drive *d, const link_msg *m)
     /* Driver faults and overcurrent are not conditions: the re-initialisation decides. The
        commissioning time limit stays until the next ARM (contract 3.4). */
     d->latched &= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
+#if defined(FW_CORE_BENCH)
+    d->bset_valid = false; /* a SET from before the fault never outlives it */
+#endif
     d->mode = DRIVE_MODE_BOOT;
     d->reject_reason = DRIVE_REJECT_NONE;
     d->last_rx_seq = m->seq;
@@ -1183,7 +1190,7 @@ void drive_link_boundary(drive *d)
         return;
     }
     d->conn_gen++;
-    d->boundary_us = d->time_us;
+    d->boundary_us = d->time_us + 1u; /* strictly after every STATE already sent */
     d->bset_valid = false;
     if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
         bench_end(d, DRIVE_BENCH_STOP_LINK_BOUNDARY);
@@ -1228,6 +1235,14 @@ void drive_handle(drive *d, const link_msg *m)
     case LINK_DISARM:
 #if defined(FW_CORE_BENCH)
         d->bset_valid = false;
+#endif
+#if defined(FW_CORE_BENCH)
+        /* The bench image never cuts a STOPPING brake short: the MCU's own end, a connection change or a
+           late frame of an old host all leave the brake to stop_grace_ms (contract 8.3). */
+        if (BENCH(d->cfg) && d->mode == DRIVE_MODE_STOPPING) {
+            d->last_rx_seq = m->seq;
+            break;
+        }
 #endif
         if (driving(d)) {
             bench_end(d, DRIVE_BENCH_STOP_DISARM);
@@ -1337,6 +1352,11 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
         d->cm_on = true;
         d->cm_on_axis = d->cm_axis;
         d->cm_on_since_us = d->time_us;
+#if defined(FW_CORE_BENCH)
+        /* The interval keeps the limit it opened under, also past the run's end (a DISARM before cm_on
+           clears must not judge it against the build's shorter default). */
+        d->cm_on_limit_ms = cm_time_ms(d, d->cm_axis);
+#endif
     }
 }
 

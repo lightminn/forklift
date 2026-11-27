@@ -20,6 +20,9 @@
 #include "board/link_cfg.h"
 #include "stm32h7xx.h"
 #include "tusb.h"
+#if defined(FW_BENCH_IMAGE)
+#include "device/dcd.h" /* dcd_int_disable/enable around the receive FIFO clear */
+#endif
 
 #define USB_IRQ_PRIORITY 3u
 
@@ -128,7 +131,11 @@ static void lifecycle(void)
 {
 #if defined(FW_BENCH_IMAGE)
     g_conn_begin = g_conn_end + 1u;
+    /* The OTG interrupt writes the CDC receive FIFO in place (DWC2 slave): clear it with that interrupt off,
+       so a packet never lands on half-reset indices (Codex A1a P2). */
+    dcd_int_disable(0);
     tud_cdc_read_flush();
+    dcd_int_enable(0);
 #endif
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
     g_resync = true;
@@ -141,10 +148,17 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void)itf;
     (void)rts;
+#if defined(FW_BENCH_IMAGE)
+    lifecycle(); /* first: the bench image marks the change before anything else */
+    if (dtr) {
+        g_link_stats.reopened++;
+    }
+#else
     if (dtr) {
         g_link_stats.reopened++;
     }
     lifecycle();
+#endif
 }
 
 void tud_mount_cb(void)
@@ -174,6 +188,16 @@ void link_poll(void)
         return;
     }
     tud_task();
+#if defined(FW_BENCH_IMAGE)
+    /* A USB bus reset clears the device state without an unmount callback (TinyUSB usbd), so the bench
+       image also takes the loss of the configuration as a connection change (Codex A1a P1). */
+    static bool was_mounted;
+    bool mounted = tud_mounted();
+    if (was_mounted && !mounted) {
+        lifecycle();
+    }
+    was_mounted = mounted;
+#endif
     uint8_t buf[CFG_TUD_CDC_EP_BUFSIZE];
     for (;;) {
         uint32_t n = link_ring_space(&g_rx);

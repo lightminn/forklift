@@ -101,6 +101,7 @@ typedef struct {
     uint16_t last_state_seq;
     link_bench_state last_bench;
     int bench_pairs, bench_unpaired;
+    size_t write_cap; /* 0: any length; else a write longer than this is refused (a nearly full ring) */
 } board;
 
 static board B;
@@ -152,6 +153,9 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
     board *b = ctx;
     b->write_calls++;
     if (b->refuse_every_other && (b->write_calls % 2) == 0) {
+        return false;
+    }
+    if (b->write_cap != 0 && len > b->write_cap) {
         return false;
     }
     link_msg m;
@@ -494,6 +498,62 @@ static void bench_connection_boundary(void)
     CHECK_EQ_U(B.last_bench.conn_gen, 2);
 }
 
+static void host_commission(uint8_t axis, int16_t duty_e4, uint16_t valid)
+{
+    link_msg m = {.type = LINK_COMMISSION, .seq = host_seq++};
+    m.u.commission = (link_commission){.axis = axis,
+                                       .duty_e4 = duty_e4,
+                                       .valid_after_echo_ms = valid,
+                                       .arm_gen = B.last_state.arm_gen,
+                                       .boot_id = B.last_state.boot_id,
+                                       .echo_mcu_time_us = B.last_state.mcu_time_us};
+    host_send(m);
+}
+
+/* Codex A1a round 1: a change settled before the deadline is the first cause even when the next tick is past
+   the deadline. */
+static void bench_boundary_before_expiry(void)
+{
+    start_bench();
+    run_ms(100);
+    host_bench_set_arm(9);
+    run_ms(12);
+    host_commission(DRIVE_CH_L, 0, 150);
+    run_ms(12);
+    host_commission(DRIVE_CH_L, 1000, 100); /* deadline: its echo (<= 10 ms old) + 100 ms */
+    run_ms(5);
+    CHECK_EQ_U(B.last_bench.drive & 3u, DRIVE_BENCH_RUN_DRIVING);
+    run_ms(80); /* 85 ms after it was sent: still before the deadline (>= 90 ms) */
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_ARMED);
+    B.conn_gen++; /* the change settles; the next tick (104 ms) is past the deadline (<= 100 ms) */
+    B.now += 18000; /* under the encoder gap limit (20 ms) */
+    run_ms(1);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(app.d.res_stop, DRIVE_BENCH_STOP_LINK_BOUNDARY);
+    CHECK((app.d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT) == 0);
+}
+
+/* Codex A1a round 1: room for a STATE but not for the pair sends neither; seq wraps across a pair. */
+static void bench_pair_room_and_seq_wrap(void)
+{
+    start_bench();
+    run_ms(100);
+    int states = B.states;
+    uint16_t dropped = B.last_bench.dropped_pairs;
+    B.write_cap = LINK_WIRE_MAX; /* a whole STATE fits, the pair does not */
+    run_ms(30);
+    CHECK_EQ_I(B.states, states);
+    B.write_cap = 0;
+    run_ms(10);
+    CHECK(B.last_bench.dropped_pairs >= (uint16_t)(dropped + 2u));
+    app.tx_seq = 0xFFFFu; /* the pair straddles the wrap: STATE 0xFFFF, BENCH_STATE 0x0000 */
+    int pairs = B.bench_pairs;
+    run_ms(10);
+    CHECK_EQ_I(B.bench_pairs, pairs + 1);
+    CHECK_EQ_I(B.bench_unpaired, 0);
+    CHECK_EQ_U(app.tx_seq, 1);
+}
+
 int main(void)
 {
     boots_through_spi_with_drvoff_first();
@@ -504,5 +564,7 @@ int main(void)
     overruns_and_watchdog();
     bench_pairs_go_out_together();
     bench_connection_boundary();
+    bench_boundary_before_expiry();
+    bench_pair_room_and_seq_wrap();
     return FW_TEST_RESULT();
 }

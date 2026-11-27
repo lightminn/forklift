@@ -243,7 +243,8 @@ typedef struct drive {
     uint8_t res_stop, res_axis, res_source;
     uint16_t res_blocked; /* drive requests refused after the run ended (saturating) */
     uint8_t conn_gen;     /* link connection changes seen (mod 256) */
-    uint64_t boundary_us; /* MCU time of the last one: bench commands must echo a STATE after it */
+    uint64_t boundary_us; /* after every STATE sent before the last one: bench commands echo a later STATE */
+    uint32_t cm_on_limit_ms; /* the open output interval's time limit, fixed when it opened (a run's own) */
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

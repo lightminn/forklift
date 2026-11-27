@@ -120,6 +120,11 @@ void fw_app_tick(fw_app *app)
         drive_spi_result(&app->d, ch, rx, tag);
     }
 
+#if defined(FW_CORE_BENCH)
+    /* Before drive_begin: a change settled since the last tick ends the arming before this tick judges the
+       command expiry, so the result's first cause is the connection's (contract 8.4). */
+    bool read_link = link_boundary(app);
+#endif
     drive_inputs in;
     memset(&in, 0, sizeof in);
     hal->read_inputs(hal->ctx, &in);
@@ -130,7 +135,7 @@ void fw_app_tick(fw_app *app)
     uint8_t buf[LINK_READ_CHUNK];
     unsigned chunks = LINK_READ_CHUNKS_PER_TICK;
 #if defined(FW_CORE_BENCH)
-    if (!link_boundary(app)) {
+    if (!read_link) {
         chunks = 0;
     }
 #endif
