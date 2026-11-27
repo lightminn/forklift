@@ -394,6 +394,9 @@ class BenchConsole:
     def _on_request(self, kind: str, msg: dict, now_s: float):
         now = int(self.clock())
         if kind == "bench_run":
+            if self.arbiter.mode == "STOPPED":
+                # the STOP is released only once the board shows it stopped (round 6 P2-3): asked again after it
+                return "stopped", {"detail": "waiting for the board's stop to be confirmed"}
             if self.run is not None:
                 return "busy_running", {}
             if self.clear is not None:
@@ -452,7 +455,7 @@ class BenchConsole:
         """Why no run or clear may start now (None: it may)."""
         if self.host.state is None:
             return "no_state"
-        if not self.boundary_ok:
+        if not self.boundary_ok or self.pair() is None:
             return "no_pair_after_the_connection_boundary"
         if self.reopen == "boot_wait" and self.host.state.mode == Mode.BOOT:
             return "board_initialising"
@@ -595,7 +598,7 @@ class BenchConsole:
             self.boundary_from = self.last_seen
             self.boundary_ok = False
             self.reopen = None
-            self.cleanup_seqs.clear()  # nothing queued for the old connection is this one's stop frame
+            self._drop_for_boundary("reopened")  # nothing queued for the old connection is this one's to send
             if self.run is not None:
                 self.run.link_reopened = True
                 if self.run.cancel is None:
@@ -621,7 +624,7 @@ class BenchConsole:
             # nothing is sent and no clear is bound until a pair of this boot arrives
             self.boundary_ok, self.boundary_from, self.connected_ns = False, self.last_seen, now
             self.reopen = None
-            self.cleanup_seqs.clear()
+            self._drop_for_boundary("rebooted")
             if self.run is not None:
                 self.run.link_reopened = True
                 if self.run.cancel is None:
@@ -631,12 +634,19 @@ class BenchConsole:
             return
         if not self.boundary_ok:
             if self.pair_rx_ns is not None and self.pair_rx_ns >= self.connected_ns \
-                    and bs.after_boundary(self.boundary_from, p):
+                    and bs.after_boundary(self.boundary_from, p) \
+                    and latest is not None and p.boot_id == latest.boot_id:  # one read may hold two boots (r6 P2-1)
                 self.boundary_ok = True
                 self.reopen = bs.reopen_action(p)
             else:
                 return
         self.last_seen = (p.boot_id, p.conn_gen)
+
+    def _drop_for_boundary(self, why: str) -> None:
+        """At a connection or boot boundary: the exceptions end and the frames they were for leave the queue (round 6
+        P2-2) -- left there, a refused DISARM would sit at the queue head in front of every later frame."""
+        self.cleanup_seqs.clear()
+        self.host.drop_frames(("DISARM", "COMMISSION", "CLEAR_FAULTS", "BENCH_SET", "BENCH_ARM"), f"boundary: {why}")
 
     def pair(self) -> bs.Pair | None:
         """The latest pair after the boundary, only while it is of the current STATE's boot."""

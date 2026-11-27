@@ -96,7 +96,8 @@ class Browser:
         msg = {"t": kind, "request_id": rid, "session_epoch": self.c.epoch, "request_token": self.token,
                "request_seq": seq, **fields}
         if leased:
-            msg.update(lease_id=self.lease_id, control_gen=self.c.arbiter.control_gen)
+            msg.setdefault("lease_id", self.lease_id)
+            msg.setdefault("control_gen", self.c.arbiter.control_gen)
         self.c.channels.message(self.conn, self.client, msg)
         return rid
 
@@ -485,8 +486,14 @@ def test_a_reopening_whose_new_generation_shows_up_late_closes_and_the_next_run_
 def test_an_idle_stop_is_released_once_the_board_shows_it_stopped(rig):
     c, b, run_until = rig()
     b.c.channels.message(b.conn, b.client, {"t": "stop", "request_id": "S9", "source": "console"})
-    assert run_until(lambda: c.arbiter.stops == 1, 1.0)
+    gen = c.arbiter.control_gen
+    rid = b.send("bench_run", control_gen=gen + 1, **RUN)  # a start sent with the STOP, before its release
+    assert run_until(lambda: rid in b.replies, 1.0)
+    assert b.replies[rid]["reason"] in ("stopped", "stale_control"), b.replies[rid]
     assert run_until(lambda: c.arbiter.mode == "PAUSED", 1.0)
+    rid2 = b.send("bench_run", **RUN)  # asked again after the release: it runs
+    assert run_until(lambda: b.results, 6.0), b.replies.get(rid2)
+    assert b.results[-1]["verdict"]["run_cleanup"]["ok"], b.results[-1]
 
 
 def test_the_result_carries_the_peak_current_from_the_runs_states(rig):
