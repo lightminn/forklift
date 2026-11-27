@@ -274,6 +274,7 @@ class Run:
     record_errors: int = 0
     faults_at_drive: int = 0
     nonzero_written: bool = False
+    peak_current_ma: list = field(default_factory=lambda: [0, 0, 0, 0])
 
 
 @dataclass
@@ -370,6 +371,7 @@ class BenchConsole:
         r = self.run
         if r is not None:
             self._emit(r, {**state_row(Sample(received_ns, st)), "conn": self.conn})
+            r.peak_current_ma = [max(a, abs(int(b))) for a, b in zip(r.peak_current_ma, st.current_ma)]
         if self.clear is not None:
             try:
                 self.clear.rec.emit({**state_row(Sample(received_ns, st)), "conn": self.conn})
@@ -569,6 +571,11 @@ class BenchConsole:
             self._step(self.run, now)
         if self.clear is not None:
             self._step_clear(self.clear, now)
+        if self.run is None and self.clear is None and self.arbiter.mode == "STOPPED":
+            p = self.pair()
+            if p is not None and p.mode in STOPPED and self.host.state.mode in STOPPED:
+                # nothing running and the board stopped: the screen leaves STOPPED (round 5 P2-2)
+                self.arbiter.release_stop(now / 1e9, "bench_stop_confirmed")
         for e in self.dev.transmit(self.host, now):
             self._device_event(e, now)
         self.link.tick(now / 1e9)
@@ -607,6 +614,18 @@ class BenchConsole:
         if bst is not None and bst is not self._pair_obj:
             self._pair_obj = bst
             self.pair_rx_ns = self.host.bench_state_rx_ns
+        latest = self.host.state
+        if self.boundary_ok and latest is not None and self.last_seen is not None \
+                and latest.boot_id != self.last_seen[0]:
+            # a new boot on the same fd (round 5 P2-1): the host keeps the old boot's pair until a new one comes, so
+            # nothing is sent and no clear is bound until a pair of this boot arrives
+            self.boundary_ok, self.boundary_from, self.connected_ns = False, self.last_seen, now
+            self.reopen = None
+            self.cleanup_seqs.clear()
+            if self.run is not None:
+                self.run.link_reopened = True
+                if self.run.cancel is None:
+                    self.run.cancel = "rebooted"
         p = bs.pair_of(st, bst)
         if p is None or self.connected_ns is None:
             return
@@ -620,9 +639,14 @@ class BenchConsole:
         self.last_seen = (p.boot_id, p.conn_gen)
 
     def pair(self) -> bs.Pair | None:
+        """The latest pair after the boundary, only while it is of the current STATE's boot."""
         if not self.boundary_ok:
             return None
-        return bs.pair_of(self.host.bench_state_of, self.host.bench_state)
+        p = bs.pair_of(self.host.bench_state_of, self.host.bench_state)
+        st = self.host.state
+        if p is None or st is None or p.boot_id != st.boot_id:
+            return None
+        return p
 
     # --- one run ------------------------------------------------------------------------------------------------------
     def _phase(self, r: Run, name: str, now: int) -> None:
@@ -990,6 +1014,7 @@ class BenchConsole:
                   "previous_result": r.previous_result,
                   "bypass_mcu": list(r.bench_taken["bypass"]) if r.bench_taken else [], "bypass_host": [],
                   "not_for_gate": True, "physical_setup": r.ask.physical_setup,
+                  "peak_current_ma": list(r.peak_current_ma),  # from the run's own STATEs, not the screen stream
                   "final": None if p is None else {"mode": p.mode.name, "duty_e4": list(p.duty_e4)}}
         r.phase = "closed"
         try:

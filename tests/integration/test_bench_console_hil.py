@@ -170,10 +170,11 @@ def assert_stopped_in_time(res, axis=0, bound_s=0.2):
     stop = next(r for r in rows if r.get("t") == "stop")
     nonzero = [r for r in rows if r.get("t") == "written" and r.get("kind") == "COMMISSION" and r.get("duty_e4")]
     assert not [r for r in nonzero if r["host_ns"] > stop["host_ns"]], "a non-zero COMMISSION after the cancel"
-    if nonzero:
-        last = nonzero[-1]["host_ns"]
-        zero = next(r for r in rows if r.get("t") == "state" and r["host_ns"] > last and r["duty_e4"][axis] == 0)
-        assert zero["host_ns"] - last <= bound_s * 1e9, (zero["host_ns"] - last) / 1e9
+    assert nonzero, "the run never drove: nothing to bound"
+    assert any(r.get("t") == "state" and r["duty_e4"][axis] != 0 for r in rows), "the board never reported the duty"
+    last = nonzero[-1]["host_ns"]
+    zero = next(r for r in rows if r.get("t") == "state" and r["host_ns"] > last and r["duty_e4"][axis] == 0)
+    assert zero["host_ns"] - last <= bound_s * 1e9, (zero["host_ns"] - last) / 1e9
 
 
 RUN = dict(axis="L", duty=0.1, seconds=0.6, power_switch_in_hand=True)
@@ -210,8 +211,7 @@ def test_a_steering_run_with_its_range_off(rig):
 def test_a_shared_stop_mid_drive_ends_with_a_zero_and_no_disarm(rig):
     c, b, run_until = rig()
     b.send("bench_run", axis="L", duty=0.1, seconds=1.4, power_switch_in_hand=True)
-    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 4.0)
-    run_until(lambda: False, 0.2)
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written and c.host.state.duty_e4[0] != 0, 4.0)
     n_before = len(c.written)
     b.c.channels.message(b.conn, b.client, {"t": "stop", "request_id": "S1", "source": "console"})
     assert run_until(lambda: b.results, 4.0)
@@ -226,7 +226,7 @@ def test_a_shared_stop_mid_drive_ends_with_a_zero_and_no_disarm(rig):
 def test_a_lost_lease_cancels_the_run(rig):
     c, b, run_until = rig()
     b.send("bench_run", axis="L", duty=0.1, seconds=1.4, power_switch_in_hand=True)
-    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 4.0)
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written and c.host.state.duty_e4[0] != 0, 4.0)
     b.echo = False  # the heartbeat stops
     assert run_until(lambda: b.results, 4.0)
     res = b.results[-1]
@@ -237,7 +237,7 @@ def test_a_lost_lease_cancels_the_run(rig):
 def test_a_lost_connection_cancels_the_run(rig):
     c, b, run_until = rig()
     b.send("bench_run", axis="L", duty=0.1, seconds=1.4, power_switch_in_hand=True)
-    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 4.0)
+    assert run_until(lambda: c.run is not None and c.run.nonzero_written and c.host.state.duty_e4[0] != 0, 4.0)
     c.channels.disconnect(b.conn, b.client)
     assert run_until(lambda: c.last_result is not None, 4.0)
     res = c.last_result
@@ -476,6 +476,24 @@ def test_a_reopening_whose_new_generation_shows_up_late_closes_and_the_next_run_
     assert run_until(lambda: b.results, 6.0)
     res = b.results[-1]
     assert res["aborted"] == "link_reopened" and res["stop_reason"] == "command_timeout", res
+    assert res["cleanup_confirmed"], res
     rid = b.send("bench_run", **RUN)
     assert run_until(lambda: len(b.results) == 2, 6.0), b.replies.get(rid)
     assert b.results[-1]["verdict"]["run_cleanup"]["ok"], b.results[-1]
+
+
+def test_an_idle_stop_is_released_once_the_board_shows_it_stopped(rig):
+    c, b, run_until = rig()
+    b.c.channels.message(b.conn, b.client, {"t": "stop", "request_id": "S9", "source": "console"})
+    assert run_until(lambda: c.arbiter.stops == 1, 1.0)
+    assert run_until(lambda: c.arbiter.mode == "PAUSED", 1.0)
+
+
+def test_the_result_carries_the_peak_current_from_the_runs_states(rig):
+    c, b, run_until = rig()
+    b.send("bench_run", **RUN)
+    assert run_until(lambda: b.results, 6.0)
+    res = b.results[-1]
+    rows = record_rows(res)
+    peak = [max(abs(r["current_ma"][k]) for r in rows if r.get("t") == "state") for k in range(4)]
+    assert res["peak_current_ma"] == peak
