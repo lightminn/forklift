@@ -5,6 +5,8 @@ board's USB product string and the operator's answers."""
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 
 from forklift_core.mcu_link.messages import FaultFlag
@@ -208,6 +210,9 @@ class BenchAsk:
     names: tuple[str, ...]
     duty_max: float | None  # None: the image's default for the axis
     time_max_s: float | None
+    source: int = 0  # bench6: 1 the run axis's KTH count (M, H)
+    stop_counts: int = 0  # bench6: the signed distance stop in counts, 0 none
+    count_sign: int = 1  # bench6: the duty sign x the count's direction
 
     @property
     def bypass(self) -> int:
@@ -232,6 +237,30 @@ class BenchAsk:
         return (self.bypass != 0 or self.duty_max_e4() != BENCH_DEFAULT_DUTY_E4
                 or self.time_ms() != BENCH_DEFAULT_TIME_MS)
 
+    @property
+    def distance(self) -> bool:
+        return self.stop_counts != 0
+
+
+HIGH_DUTY_DISTANCE = 0.4  # above this a distance stop is shown as unverified, never refused (lead 2026-11-28)
+KTH_COUNTS_PER_TURN = 4096
+
+
+def kth_stop_counts(turns: float, duty: float, count_sign: int) -> int:
+    """The distance stop for ``turns`` sensor turns in the duty's direction (plan 4.2 A1b-1 decision 8):
+    ``round(turns x 4096) x count_sign x sign(duty)``, refused unless 1 <= |counts| < 2^31 (a tiny distance never
+    rounds to 0, which would mean no distance stop)."""
+    if not math.isfinite(turns) or turns <= 0:
+        raise LimitRefused("stop-kth-turns: a positive finite number of turns")
+    if count_sign not in (1, -1):
+        raise LimitRefused("count-sign: 1 or -1")
+    if duty == 0 or not math.isfinite(duty):
+        raise LimitRefused("stop-kth-turns: needs a non-zero duty (its sign is the direction)")
+    mag = round(turns * KTH_COUNTS_PER_TURN)
+    if not 1 <= mag < 2 ** 31:
+        raise LimitRefused(f"stop-kth-turns: {turns} turns is {mag} counts; 1 .. 2^31-1 counts")
+    return mag * count_sign * (1 if duty > 0 else -1)
+
 
 def bench_refusal(ask: BenchAsk) -> str | None:
     if ask.duty_max is not None and not 0 < ask.duty_max <= 1.0:
@@ -242,4 +271,10 @@ def bench_refusal(ask: BenchAsk) -> str | None:
         return "bench-bypass steer_range: the steering axis (M) only"
     if "lift_range" in ask.names and ask.axis != 3:
         return "bench-bypass lift_range: the lift axis (H) only"
+    if ask.source not in (0, 1):
+        return "bench source: none or kth (the MT source comes with A1c)"
+    if ask.source == 1 and ask.axis not in (2, 3):
+        return "stop-kth-turns: the KTH count is M's or H's"
+    if ask.stop_counts != 0 and ask.source != 1:
+        return "stop-kth-turns: a distance stop needs the KTH source"
     return None

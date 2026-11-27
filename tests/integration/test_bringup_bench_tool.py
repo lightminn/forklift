@@ -187,3 +187,62 @@ def test_a_record_that_cannot_be_written_stops_the_next_arm(model, monkeypatch):
     second = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
     assert second["result"] == "refused" and "could not be written" in second["why"]
     assert not {"BENCH_SET", "BENCH_ARM"} & {w.kind for w in b.writes[n:]}
+
+
+# ---- bench6 distance runs (plan 4.2 A1b-1b) -------------------------------------------------------------------------
+
+def test_a_steering_distance_run_ends_at_its_distance(model):
+    """--stop-kth-turns: the board cuts the output at the distance and stops the run itself; the CLI reads the latched
+    result (never an authorization revoked), records the distance verdict and the rest position at 100 Hz."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=3.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=0.02, observed="none"), b)
+    taken = res["bench_set"]
+    assert taken["source"] == 1 and taken["stop_counts"] == 82 and taken["count_sign"] == 1, taken
+    assert res["aborted"] is None and res["cleanup_confirmed"], res
+    assert res["stop"] == "board_distance_reached", res
+    assert res["distance"]["result"] == "reached" and res["distance"]["moved_at_cut"] >= 82, res["distance"]
+    assert res["start"] == "accepted"
+    assert res["rest"]["result"] in ("settled_at_100hz", "unconfirmed"), res["rest"]
+    post = [w for w in b.writes if w.kind == "COMMISSION" and w.phase == "post_zero"]
+    assert post == []  # the board ended it: no zero sent into its stop
+
+
+def test_a_wrong_count_sign_stops_without_progress(model):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=3.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, stop_kth_turns=0.5, count_sign=-1, observed="none"), b)
+    assert res["distance"]["result"] == "stopped:no_progress", res
+    assert res["aborted"] == "bench_stop_no_progress"
+
+
+def test_a_count_stuck_from_the_start_refuses_the_distance_arm(model):
+    """The KTH frame 0x0000 from the start: no trusted sample, so the board refuses the distance run's ARM."""
+    b = model("--bench", "1", "--kth-zero-at-ms", "M:0")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis="M", duty=0.2, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               stop_kth_turns=0.02, observed="none"), b)
+    assert res["result"] == "refused", res
+    assert not [w for w in b.writes if w.kind == "COMMISSION" and w.duty_e4 != 0]
+
+
+@pytest.mark.parametrize(("axis", "turns", "why"), [
+    ("M", 0.0001, "counts"),  # rounds to 0: never a run without its distance stop
+    ("M", -1.0, "positive"),
+    ("L", 0.5, "M's or H's"),
+])
+def test_bad_distances_are_refused_before_anything(model, axis, turns, why):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(args(axis=axis, duty=0.1, seconds=1.0, stop_kth_turns=turns, observed="none"), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert not {"BENCH_SET", "BENCH_ARM"} & set(kinds_written(b))
+
+
+def test_a_high_duty_distance_is_shown_never_refused(capsys):
+    ask = bringup._bench_ask(args(axis="M", duty=0.5, stop_kth_turns=1.0, bench_bypass=None, bench_duty_max=0.6,
+                                  bench_time_max=None))
+    assert ask.distance and ask.stop_counts == 4096
+    assert "advisory: a distance stop at duty 0.5 is unverified" in capsys.readouterr().err
