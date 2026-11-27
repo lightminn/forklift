@@ -77,19 +77,8 @@ void link_init(void)
     g_link_stats.usb33rdy = (PWR->CR3 & PWR_CR3_USB33RDY) != 0u;
 }
 
-#if defined(FW_BENCH_IMAGE)
-static void conn_event_from_isr(void);
-#endif
-
 void OTG_FS_IRQHandler(void)
 {
-#if defined(FW_BENCH_IMAGE)
-    /* A bus reset is a connection change from the moment the controller reports USBRST, before TinyUSB clears
-       it and long before its BUS_RESET event (at ENUMDNE) (Codex A1a round 4). */
-    if ((USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
-        conn_event_from_isr();
-    }
-#endif
     tud_int_handler(BOARD_TUD_RHPORT);
 }
 
@@ -159,14 +148,29 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
     }
 }
 
+/* The device is between a bus reset and its new address: the controller reports USBRST (the OTG interrupt has not
+   run yet) or the device address is 0 (TinyUSB's reset handling clears it at USBRST; SET_ADDRESS sets it again
+   during enumeration). Both are register state, so no reset slips between two reads (Codex A1a rounds 4-5).
+   Read only once the USB clock is on (RM0433: a register read with the bus clock off is not valid). */
+static bool usb_unaddressed(void)
+{
+    if (!g_link_stats.usb_started) {
+        return true;
+    }
+    const USB_OTG_DeviceTypeDef *dev = (const USB_OTG_DeviceTypeDef *)(USB2_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE);
+    return (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u || (dev->DCFG & USB_OTG_DCFG_DAD_Msk) == 0u;
+}
+
 /* Control tick only. */
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
     uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    /* A USBRST still pending (the tick preempted the OTG interrupt) counts as a change in progress. */
-    bool reset_pending = (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u;
-    *busy = events != handled || begin != end || reset_pending;
+    bool unaddressed = usb_unaddressed();
+    if (unaddressed && conn_idle()) {
+        g_conn_since = timebase_now_us(); /* first seen by this tick: its time is the change's start */
+    }
+    *busy = events != handled || begin != end || unaddressed;
     *since_us = g_conn_since;
     if (!*busy) {
         g_conn_observed = end;
@@ -187,7 +191,9 @@ static void lifecycle(void)
         g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
     }
     g_conn_begin = g_conn_end + 1u;
-    tud_cdc_read_flush();
+    if (tud_mounted()) { /* unmounted (reset, unplug): the class reset closed the stream; re-arming it would fail */
+        tud_cdc_read_flush();
+    }
     dcd_int_enable(0);
 #endif
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
