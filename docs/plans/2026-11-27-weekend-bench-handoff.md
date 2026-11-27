@@ -428,3 +428,36 @@ sha256sum ~/bench_runs_$(date +%m%d).tar.xz
 
 - 펌웨어나 도구를 고쳤다면 새 브랜치로 커밋해 push 하고(main 에 직접 push 하지 않음), 어느 커밋을 구웠는지(제품 문자열)를 요약에 적는다.
 - **끝나면 정상 이미지로 되돌린다**: 5.2 의 `fw-open.bin`(시운전 이미지 — 실행마다 L/R/M/H 중 축을 고름) 또는 `fw-single.bin`(한 번 ARM 하는 동안 고른 축 하나로 고정, 한 채널·KTH 하나 구성용)을 5.3 대로 굽고, 상태 읽기로 제품 문자열이 `lim=lr1`(또는 `lim=lr1 sa1`)으로 끝나는지 확인한다. 정상 이미지의 도구는 main 의 것이다(벤치 폴더 도구를 쓰지 않는다).
+
+## 9. 벤치 콘솔(GUI)로 듀티 구동 — main 의 `bench5` 이미지
+
+main 에는 모터 시험을 브라우저에서 하는 **벤치 콘솔**이 있다([계획](2026-11-27-bench-console.md), #664·#665). 지금은 축 하나를 **듀티·시간**으로 구동하고, STOP·고장 해제를 하고, 10 s 그래프를 본다. hold·거리 정지는 A1b·B2 뒤에 열린다(화면에 비활성으로 보임). 우회 체크와 물리 구성 안내는 막지 않고 기록만 한다.
+
+- **굽기가 필요하다.** 콘솔은 제품 문자열이 `… lim=lr1 bench5` 로 끝나는 이미지에만 붙는다. 3 절의 `bench3`·`bench4` 이미지는 거부한다. 3·4 절의 진단 도구 폴더(`~/forklift-fw-bench*`)와 짝이 아니므로 섞지 않는다.
+
+1. **이미지:** 5.1 빌드 블록을 태그 대신 main 으로 돌린다(`git fetch origin && git checkout --detach origin/main`, 나머지 `cmake` 인자는 같다). `strings` 줄이 `lim=lr1 bench5` 로 끝나는지 보고 5.3 대로 굽는다.
+2. **도구 폴더(노트북에서 한 번):** 굽은 것과 같은 커밋을 Jetson 에 옮긴다. `git archive` 라 git 은 없다.
+
+   ```bash
+   C=$(git rev-parse origin/main)   # 1 에서 구운 커밋
+   ssh zetin@forklift-jetson.local "rm -rf ~/forklift-bench-console && mkdir ~/forklift-bench-console && echo $C > ~/forklift-bench-console/SYNCED_FROM"
+   git archive "$C" | ssh zetin@forklift-jetson.local tar -x -C ~/forklift-bench-console
+   ```
+
+   venv 는 4.1 의 `~/forklift/.venv` 를 쓴다. 콘솔 서버는 `websockets>=13` 이 있어야 한다. 처음 한 번 `~/forklift/.venv/bin/python -c 'import websockets'` 로 보고, 없으면 `~/forklift/.venv/bin/pip install 'websockets>=13'` 로 설치한다(인터넷 필요).
+3. **Jetson 에서 한 줄:** 운영 REAL 콘솔과 함께 띄우지 않는다(같은 잠금이라 둘째가 거부됨).
+
+   ```bash
+   PYTHONPATH=~/forklift-bench-console/src ~/forklift/.venv/bin/python ~/forklift-bench-console/tools/bench_console.py --device /dev/forklift-mcu --runs-root ~/bench_runs
+   ```
+
+   첫 줄에 `"t": "started"` 가 나오면 된 것이다. 이미지가 맞지 않으면 `refused: … is not the bench image` 로 끝난다. 끝낼 때는 Ctrl-C 를 쓴다. 진행 중인 실행은 정지 규칙대로 세우고, 실행·해제를 모두 기록으로 닫은 뒤 끝난다.
+4. **노트북 브라우저:** 노트북에서 터널을 하나 열고 `http://127.0.0.1:8765/` 를 연다. 왼쪽 메뉴의 **'벤치'** 가 이 화면이다.
+
+   ```bash
+   ssh -N -L 8765:127.0.0.1:8765 zetin@forklift-jetson.local
+   ```
+
+   - 터널 대신 LAN 으로 열 수도 있다. 3 의 명령에 `--host 0.0.0.0 --console-lan --console-origin-host forklift-jetson.local` 을 붙이고 `http://forklift-jetson.local:8765/` 를 연다. 인증이 없어 같은 망의 누구나 조종 권한을 가져갈 수 있다.
+- **기록:** 실행마다 `~/bench_runs/duty_<축>_<시각>/` 에 `run.jsonl`·`result.json` 이 생긴다. 고장 해제는 `clear_-_<시각>/` 에 남는다. 8 절대로 묶어 돌려준다.
+- **끝나면** 8 절 마지막 항목대로 정상 이미지로 되돌린다.
