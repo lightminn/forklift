@@ -1117,6 +1117,9 @@ static void bench_apply_link_change(drive *d, uint32_t now32)
         return;
     }
     uint32_t ago = now32 - d->lc_since32;
+    if ((int32_t)ago < 0) {
+        ago = 0; /* stamped after this tick read its clock: it began now */
+    }
     uint64_t began = (uint64_t)ago <= d->time_us ? d->time_us - ago : 0u;
     if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
         bool expired_first = d->has_deadline && d->deadline_us < began;

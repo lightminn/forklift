@@ -77,9 +77,33 @@ void link_init(void)
     g_link_stats.usb33rdy = (PWR->CR3 & PWR_CR3_USB33RDY) != 0u;
 }
 
+#if defined(FW_BENCH_IMAGE)
+static void conn_event_from_isr(void);
+static volatile bool g_otg_in_isr; /* the tick (priority 2) may preempt this interrupt (3) mid-way */
+
+static uint32_t usb_dev_addr(void)
+{
+    const USB_OTG_DeviceTypeDef *dev = (const USB_OTG_DeviceTypeDef *)(USB2_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE);
+    return dev->DCFG & USB_OTG_DCFG_DAD_Msk;
+}
+#endif
+
 void OTG_FS_IRQHandler(void)
 {
+#if defined(FW_BENCH_IMAGE)
+    /* A bus reset handled in this interrupt zeroes the device address (TinyUSB handle_bus_reset): an address that
+       was set before and is 0 after is a connection change, counted here whatever TinyUSB's event queue does
+       (Codex A1a rounds 5-6). While this runs, the tick reads no byte (link_read). */
+    g_otg_in_isr = true;
+    uint32_t addr_before = usb_dev_addr();
     tud_int_handler(BOARD_TUD_RHPORT);
+    if (addr_before != 0u && usb_dev_addr() == 0u) {
+        conn_event_from_isr();
+    }
+    g_otg_in_isr = false;
+#else
+    tud_int_handler(BOARD_TUD_RHPORT);
+#endif
 }
 
 static bool sink_connected(void *ctx)
@@ -148,29 +172,12 @@ void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
     }
 }
 
-/* The device is between a bus reset and its new address: the controller reports USBRST (the OTG interrupt has not
-   run yet) or the device address is 0 (TinyUSB's reset handling clears it at USBRST; SET_ADDRESS sets it again
-   during enumeration). Both are register state, so no reset slips between two reads (Codex A1a rounds 4-5).
-   Read only once the USB clock is on (RM0433: a register read with the bus clock off is not valid). */
-static bool usb_unaddressed(void)
-{
-    if (!g_link_stats.usb_started) {
-        return true;
-    }
-    const USB_OTG_DeviceTypeDef *dev = (const USB_OTG_DeviceTypeDef *)(USB2_OTG_FS_PERIPH_BASE + USB_OTG_DEVICE_BASE);
-    return (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u || (dev->DCFG & USB_OTG_DCFG_DAD_Msk) == 0u;
-}
-
 /* Control tick only. */
 uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
 {
     uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    bool unaddressed = usb_unaddressed();
-    if (unaddressed && conn_idle()) {
-        g_conn_since = timebase_now_us(); /* first seen by this tick: its time is the change's start */
-    }
-    *busy = events != handled || begin != end || unaddressed;
+    *busy = events != handled || begin != end;
     *since_us = g_conn_since;
     if (!*busy) {
         g_conn_observed = end;
@@ -191,6 +198,10 @@ static void lifecycle(void)
         g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
     }
     g_conn_begin = g_conn_end + 1u;
+    /* The receive ring's consumer is the tick, which reads nothing while begin != end and cannot run inside this
+       (it preempts the main loop, not the other way): dropping the old connection's bytes here is safe, and does
+       not depend on the tick's own drain, which link_read may hold back while the OTG interrupt runs. */
+    (void)link_ring_drop_all(&g_rx);
     if (tud_mounted()) { /* unmounted (reset, unplug): the class reset closed the stream; re-arming it would fail */
         tud_cdc_read_flush();
     }
@@ -287,6 +298,13 @@ void link_poll(void)
 
 size_t link_read(uint8_t *buf, size_t cap)
 {
+#if defined(FW_BENCH_IMAGE)
+    /* Not one byte while the OTG interrupt is mid-way (a reset it handles is counted when it returns) or while a
+       USBRST waits for it; the USB registers only once the clock is on (RM0433). */
+    if (g_otg_in_isr || !g_link_stats.usb_started || (USB_OTG_FS->GINTSTS & USB_OTG_GINTSTS_USBRST) != 0u) {
+        return 0;
+    }
+#endif
     return link_ring_get(&g_rx, buf, (uint32_t)cap);
 }
 
