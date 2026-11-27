@@ -146,6 +146,7 @@ static void tick_msgs(const link_msg *msgs, int count)
 {
     in.now_us += cfg.period_us;
     in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0]); /* wheels idle unless a test moves them */
+    in.abs_time_us[0] = in.abs_time_us[1] = in.now_us; /* acquired this tick */
     drive_begin(&d, &in);
     for (int i = 0; i < count; i++) {
         drive_handle(&d, &msgs[i]);
@@ -2090,23 +2091,25 @@ static void bench_set_refusals(void)
 
     struct {
         int field;
-    } bad[11];
-    for (int i = 0; i < 11; i++) {
+    } bad[13];
+    for (int i = 0; i < 13; i++) {
         bad[i].field = i;
     }
-    for (int i = 0; i < 11; i++) {
+    for (int i = 0; i < 13; i++) {
         b = bench_defaults(1, DRIVE_CH_M);
         switch (bad[i].field) {
         case 0: b.run_id = 0; break;
         case 1: b.mode = 2; break; /* hold: A1b */
         case 2: b.axis = 4; break;
-        case 3: b.source = 1; break; /* kth: A1b */
+        case 3: b.source = 2; break; /* mt: A1c */
         case 4: b.count_sign = 0; break;
         case 5: b.bypass = 1u << 4; break;
         case 6: b.stop_counts = 5; break; /* distance stop: A1b */
         case 7: b.duty_max_e4[2] = 0; break;
         case 8: b.duty_max_e4[2] = 10001; break;
         case 9: b.time_ms[1] = 0; break;
+        case 11: b.axis = DRIVE_CH_L; b.source = 1; break; /* kth only on M and H */
+        case 12: b.source = 1; b.stop_counts = INT32_MIN; break;
         default: b.time_ms[3] = 0x7FFFFFFFu / 1000u + 1u; break;
         }
         send(bench_set_msg(10, b));
@@ -2543,6 +2546,344 @@ static void bench_blocked_other_axis_after_disarm(void)
     CHECK_EQ_U(bench_state_now().blocked, 1);
 }
 
+
+/* ---- bench6: KTH count, distance stop, watch (plan 4.2 A1b-1) ------------------------------------------------ */
+
+static void kraw(int i, uint16_t raw)
+{
+    in.abs_frame[i] = (uint16_t)((uint16_t)(raw << 4) | crc4_kth7801(raw, KTH_CRC_G704_BYTES));
+}
+
+/* A KTH run on M (index 0) with the range bypass, stopping at stop counts (0: measuring only). */
+static bool kth_arm(uint32_t run_id, int32_t stop, int8_t count_sign)
+{
+    link_bench_set b = bench_defaults(run_id, DRIVE_CH_M);
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.stop_counts = stop;
+    b.count_sign = count_sign;
+    b.bypass = DRIVE_BENCH_STEER_RANGE;
+    send(bench_set_msg(10, b));
+    if (d.reject_reason != DRIVE_REJECT_NONE) {
+        return false;
+    }
+    send(bench_arm_msg(11, run_id, echo_now()));
+    return d.mode == DRIVE_MODE_ARMED;
+}
+
+static uint16_t cm_seq = 100;
+
+static void cm(int16_t duty)
+{
+    send(commission_msg(cm_seq++, DRIVE_CH_M, duty, 150, echo_now()));
+}
+
+static void bench_distance_reached(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(60, 40, 1));
+    cm(0);
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.count_state, DRIVE_BENCH_COUNT_VALID);
+    int32_t ref = s.distance_ref;
+    for (uint16_t raw = 1010; raw <= 1030; raw += 10) {
+        kraw(0, raw);
+        tick();
+        CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    }
+    kraw(0, 1040);
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+    CHECK_EQ_I(s.cut_position - ref, 40);
+    CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_NONE);
+    CHECK_EQ_U(s.run_flags, 0);
+    CHECK(s.end_evidence_age_ms <= 1u);
+    cm(1000); /* refused after the cut, counted */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+}
+
+static void bench_distance_provisional_and_confirmation(void)
+{
+    for (int variant = 0; variant < 3; variant++) {
+        boot_with(mod_bench);
+        kraw(0, 30);
+        ticks(3);
+        CHECK(kth_arm(61, -25, 1));
+        cm(0);
+        cm(-1000);
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        int32_t ref = bench_state_now().distance_ref;
+        kraw(0, 20);
+        tick();
+        kraw(0, 0); /* crossing on a 0x0000 frame */
+        tick();
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        link_bench_state s = bench_state_now();
+        CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_PROVISIONAL);
+        CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_NONE);
+        CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_TENTATIVE);
+        if (variant == 0) {
+            kraw(0, 4090); /* -26 from 20: -36 from the reference */
+            tick();
+            CHECK_EQ_U(bench_state_now().distance_confirm, DRIVE_BENCH_CONFIRM_REACHED);
+        } else if (variant == 1) {
+            kraw(0, 25); /* -5: the fake step undone */
+            tick();
+            s = bench_state_now();
+            CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_HELD);
+            CHECK((s.run_flags & DRIVE_BENCH_FLAG_RES_LOSS) == 0);
+        } else {
+            kraw(0, 2000); /* a too-fast step: the count lost before a confirming frame */
+            tick();
+            kraw(0, 2010);
+            ticks(2);
+            s = bench_state_now();
+            CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_HELD);
+            CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_LOSS);
+        }
+        (void)ref;
+        kraw(0, 3000); /* settled once */
+        ticks(2);
+        CHECK(bench_state_now().distance_confirm != DRIVE_BENCH_CONFIRM_NONE);
+    }
+}
+
+static void bench_distance_first_drive_needs_a_fresh_reference(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 256);
+    ticks(3);
+    CHECK(kth_arm(62, 100, 1));
+    cm(0);
+    kraw(0, 0); /* MISO low for a frame: a counted 0x0000 is no reference */
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    CHECK_EQ_U(bench_state_now().drive & 3u, DRIVE_BENCH_RUN_PREP);
+    kraw(0, 256);
+    in.abs_fresh[0] = false; /* no frame in the command's tick */
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    in.abs_fresh[0] = true;
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(bench_state_now().drive & 3u, DRIVE_BENCH_RUN_DRIVING);
+}
+
+static void bench_distance_loss_since_arm_refuses_the_drive(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(63, 100, 1));
+    cm(0);
+    kraw(0, 3000); /* a CRC-good step too fast for the bound: the count lost (the joint stays valid) */
+    tick();
+    CHECK_EQ_U(bench_state_now().count_state, DRIVE_BENCH_COUNT_LOST);
+    kraw(0, 3010); /* a normal step from the detecting frame: recovered */
+    ticks(2);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(bench_state_now().count_state, DRIVE_BENCH_COUNT_VALID);
+    CHECK(bench_state_now().run_flags & DRIVE_BENCH_FLAG_UNCLEAN);
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+}
+
+static void bench_distance_direction_rules(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(64, 100, 1));
+    cm(0);
+    cm(-1000); /* -: the target + needs count_sign x duty = + */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    cm(1000);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    cm(-1000); /* one direction per distance run */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+static void bench_distance_wrong_way_stops_at_once(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 2000);
+    ticks(3);
+    CHECK(kth_arm(65, 1000, 1)); /* the operator's count_sign is wrong: the counts fall */
+    cm(0);
+    cm(1000);
+    uint16_t raw = 2000;
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 40) {
+        raw = (uint16_t)(raw - 10);
+        kraw(0, raw);
+        tick();
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK_EQ_I(n, 13); /* -130: the first trusted sample past -128 */
+}
+
+static void bench_distance_zero_run_and_its_recovery(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 100);
+    ticks(3);
+    CHECK(kth_arm(66, 2000, 1));
+    cm(0);
+    cm(1000);
+    kraw(0, 0); /* stuck low near zero: counted, tentative */
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 20) {
+        tick();
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT);
+    CHECK(n >= 4 && n <= 6);
+    ticks(150);
+    link_bench_set b = bench_defaults(67, DRIVE_CH_M);
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.stop_counts = 100;
+    b.bypass = DRIVE_BENCH_STEER_RANGE;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 67, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID); /* until a non-zero frame */
+    kraw(0, 5);
+    ticks(2);
+    CHECK(kth_arm(68, 100, 1));
+}
+
+static void bench_distance_watch_stops_a_stalled_axis(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(69, 500, 1));
+    cm(0);
+    cm(1000);
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        if (n % 100 == 50) {
+            cm(1000); /* keep the command fresh */
+        } else {
+            tick();
+        }
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK(n >= 298 && n <= 302);
+}
+
+static void bench_distance_slow_progress_keeps_going(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(70, 500, 1));
+    cm(0);
+    cm(1000);
+    uint16_t raw = 1000;
+    for (int n = 1; n <= 1000; n++) {
+        if (n % 250 == 0) {
+            raw = (uint16_t)(raw + 2); /* 2 counts every 0.25 s */
+            kraw(0, raw);
+        }
+        if (n % 100 == 0) {
+            cm(1000);
+        } else {
+            tick();
+        }
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+}
+
+static void bench_measuring_run_flags(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 256);
+    ticks(3);
+    CHECK(kth_arm(71, 0, 1)); /* measuring only */
+    cm(0);
+    kraw(0, 0);
+    cm(1000); /* starts on a tentative sample: no reference */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    kraw(0, 256);
+    ticks(3);
+    kraw(0, 0);
+    tick();
+    cm(0); /* ends on a tentative sample */
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_END_ZERO);
+    CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_NO_REF);
+    CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_TENTATIVE);
+    int32_t end_counts = s.cut_position;
+    kraw(0, 256);
+    ticks(2); /* re-anchored after the end: the end position stays */
+    CHECK_EQ_I(bench_state_now().cut_position, end_counts);
+}
+
+static void bench_evidence_age(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(kth_arm(72, 0, 1));
+    CHECK_EQ_U(bench_state_now().evidence_age_ms, 0xFFFFu); /* none since the ARM */
+    tick();
+    CHECK(bench_state_now().evidence_age_ms <= 1u);
+    in.abs_fresh[0] = false;
+    ticks(2);
+    CHECK(bench_state_now().evidence_age_ms >= 2u);
+}
+
+static void bench_h_axis_counts_its_own(void)
+{
+    boot_with(mod_bench);
+    kraw(1, 1500);
+    kraw(0, 700);
+    ticks(3);
+    link_bench_set b = bench_defaults(73, DRIVE_CH_H);
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.stop_counts = 30;
+    b.bypass = DRIVE_BENCH_LIFT_RANGE;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 73, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    send(commission_msg(cm_seq++, DRIVE_CH_H, 0, 150, echo_now()));
+    send(commission_msg(cm_seq++, DRIVE_CH_H, 1000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    kraw(0, 900); /* M moves: not H's count */
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    kraw(1, 1530);
+    tick();
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+}
+
+static void bench_bench6_tests(void)
+{
+    bench_distance_reached();
+    bench_distance_provisional_and_confirmation();
+    bench_distance_first_drive_needs_a_fresh_reference();
+    bench_distance_loss_since_arm_refuses_the_drive();
+    bench_distance_direction_rules();
+    bench_distance_wrong_way_stops_at_once();
+    bench_distance_zero_run_and_its_recovery();
+    bench_distance_watch_stops_a_stalled_axis();
+    bench_distance_slow_progress_keeps_going();
+    bench_measuring_run_flags();
+    bench_evidence_age();
+    bench_h_axis_counts_its_own();
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2614,5 +2955,6 @@ int main(void)
     bench_change_versus_time_limit();
     bench_limit_change_deadline_order();
     bench_blocked_other_axis_after_disarm();
+    bench_bench6_tests();
     return FW_TEST_RESULT();
 }

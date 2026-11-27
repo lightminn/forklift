@@ -101,7 +101,7 @@ typedef struct {
     int32_t cumulative, target, distance_ref, cut_position;
     uint8_t stop_reason, distance_confirm;
     uint16_t blocked, dropped_pairs, evidence_age_ms, end_evidence_age_ms;
-    uint8_t mcu_bypass, drive, conn_gen, reserved, result_axis, result_source;
+    uint8_t mcu_bypass, drive, conn_gen, run_flags, result_axis, result_source; /* run_flags: bench6 (contract 8.5) */
 } link_bench_state;
 #endif
 

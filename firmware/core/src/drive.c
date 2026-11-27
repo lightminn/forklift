@@ -129,6 +129,24 @@ bool drive_config_valid(const drive_config *c)
 
 /* ---- bench image (contract 8) --------------------------------------------------------- */
 
+#if defined(FW_CORE_BENCH)
+/* The KTH counter of an axis (M 0, H 1; plan 4.2 A1b-1). */
+static int kth_index(uint8_t axis)
+{
+    return axis == DRIVE_CH_M ? 0 : 1;
+}
+
+/* The evidence age of this run (ms): 0xFFFF none yet since the ARM, 0xFFFE saturated. */
+static uint16_t bench_age(const drive *d)
+{
+    if (!d->run_ev) {
+        return 0xFFFFu;
+    }
+    uint64_t a = (d->time_us - d->run_ev_t) / US_PER_MS;
+    return a >= 0xFFFEu ? 0xFFFEu : (uint16_t)a;
+}
+#endif
+
 /* The run ends (a run that drove gets its result, kept until the next BENCH_ARM consumes a new SET). Only
    the first cause is recorded. */
 static void bench_end(drive *d, uint8_t reason)
@@ -143,6 +161,27 @@ static void bench_end(drive *d, uint8_t reason)
         d->res_axis = d->run_axis;
         d->res_source = d->run_source;
         d->res_blocked = 0;
+        /* fixed at the end transition (plan 4.2 A1b-1 decision 7) */
+        d->res_ref = d->run_ref;
+        d->res_stop_counts = d->run_stop;
+        d->res_confirm = DRIVE_BENCH_CONFIRM_NONE;
+        d->res_flags = 0;
+        d->res_cut = 0;
+        d->res_end_age = bench_age(d);
+        if (d->run_source == DRIVE_BENCH_SOURCE_KTH) {
+            const bench_kth *k = &d->kth[kth_index(d->run_axis)];
+            d->res_cut = k->cum; /* the end position of every run, the cut one included */
+            d->res_losses = k->losses;
+            if (d->run_unclean || k->losses != d->run_losses0) {
+                d->res_flags |= DRIVE_BENCH_FLAG_RES_UNCLEAN;
+            }
+            if (k->last_zero) {
+                d->res_flags |= DRIVE_BENCH_FLAG_RES_TENTATIVE;
+            }
+            if (d->run_no_ref) {
+                d->res_flags |= DRIVE_BENCH_FLAG_RES_NO_REF;
+            }
+        }
     }
     d->run_drive = DRIVE_BENCH_RUN_ENDED;
 #else
@@ -701,6 +740,108 @@ static void enter_stopping(drive *d, uint32_t why)
     d->stop_until_us = d->time_us + (uint64_t)d->cfg->stop_grace_ms * US_PER_MS;
 }
 
+#if defined(FW_CORE_BENCH)
+/* Both axes' travel counters, every tick, on the frames' acquisition times widened to 64 bits. */
+static void bench_kth_update(drive *d, const drive_inputs *in)
+{
+    const kth_crc_variant v[2] = {d->cfg->steer.crc, d->cfg->lift.crc};
+    for (int i = 0; i < 2; i++) {
+        bool fresh = in->abs_fresh[i];
+        uint32_t back = in->now_us - in->abs_time_us[i];
+        if (fresh && back > 0x7fffffffu) {
+            fresh = false; /* acquired after this tick's time: never counted (the board keeps such a frame) */
+        }
+        uint64_t t = fresh ? d->time_us - back : d->time_us;
+        d->kth_bits[i] = bench_kth_tick(&d->kth[i], fresh, in->abs_frame[i], v[i], t, d->time_us);
+        if (d->kth_bits[i] & BENCH_KTH_TRUSTED) {
+            d->kth_zs_wait[i] = false; /* a non-zero frame counted after the zero suspicion */
+        }
+    }
+}
+
+/* A provisional cut's confirmation, once, until the next BENCH_ARM: the first trusted sample after the cut, or a
+   loss of that axis's count (plan 4.2 A1b-1 decision 4). */
+static void bench_confirm_step(drive *d)
+{
+    if (d->res_run_id == 0 || d->res_stop != DRIVE_BENCH_STOP_DISTANCE_PROVISIONAL ||
+        d->res_confirm != DRIVE_BENCH_CONFIRM_NONE) {
+        return;
+    }
+    int i = kth_index(d->res_axis);
+    const bench_kth *k = &d->kth[i];
+    if (k->losses != d->res_losses) {
+        d->res_confirm = DRIVE_BENCH_CONFIRM_HELD;
+        d->res_flags |= DRIVE_BENCH_FLAG_RES_LOSS;
+    } else if (d->kth_bits[i] & BENCH_KTH_TRUSTED) {
+        int64_t sgn = d->res_stop_counts < 0 ? -1 : 1;
+        int64_t mag = sgn * (int64_t)d->res_stop_counts;
+        d->res_confirm = sgn * bench_kth_diff(k->trust_cum, d->res_ref) >= mag ? DRIVE_BENCH_CONFIRM_REACHED
+                                                                             : DRIVE_BENCH_CONFIRM_HELD;
+    }
+}
+
+/* A distance run's stops, judged after the existing faults and before this tick's commands (plan 4.2 A1b-1
+   decisions 4-5): the count lost, the distance crossed, the wrong way, a driven 0x0000-only run, the progress
+   watch. Attributed output: the duty the previous tick wrote on the run axis. */
+static void bench_run_step(drive *d)
+{
+    uint64_t dt = d->time_us - d->bench_last_us;
+    d->bench_last_us = d->time_us;
+    if (d->run_active && d->run_source == DRIVE_BENCH_SOURCE_KTH &&
+        (d->kth_bits[kth_index(d->run_axis)] & BENCH_KTH_TRUSTED)) {
+        d->run_ev = true; /* the evidence: the last trusted sample since the ARM (decision 6) */
+        d->run_ev_t = d->kth[kth_index(d->run_axis)].trust_t;
+    }
+    if (d->run_active && d->run_source == DRIVE_BENCH_SOURCE_KTH && d->mode == DRIVE_MODE_ARMED &&
+        d->run_drive == DRIVE_BENCH_RUN_DRIVING && d->run_stop != 0) {
+        int i = kth_index(d->run_axis);
+        bench_kth *k = &d->kth[i];
+        uint8_t bits = d->kth_bits[i];
+        bool driven = d->out.duty[d->run_axis] != 0.0f;
+        int64_t e = (int64_t)d->run_sign * d->run_dir;
+        int64_t sgn = d->run_stop < 0 ? -1 : 1;
+        int64_t mag = sgn * (int64_t)d->run_stop;
+        uint8_t why = DRIVE_BENCH_STOP_NONE;
+        if (k->lost || k->losses != d->run_losses0) {
+            why = DRIVE_BENCH_STOP_KTH_LOST;
+        } else if (sgn * bench_kth_diff(k->cum, d->run_ref) >= mag) {
+            why = k->last_zero ? DRIVE_BENCH_STOP_DISTANCE_PROVISIONAL : DRIVE_BENCH_STOP_DISTANCE_REACHED;
+        } else if ((bits & BENCH_KTH_TRUSTED) &&
+                   e * bench_kth_diff(k->trust_cum, d->run_ref) <= -(int64_t)DRIVE_BENCH_REVERSE_COUNTS) {
+            why = DRIVE_BENCH_STOP_NO_PROGRESS; /* the wrong way at once (a wrong count_sign) */
+        } else {
+            if (bits & BENCH_KTH_TRUSTED) {
+                d->w_trusted = true;
+                if (e * bench_kth_diff(k->trust_cum, d->w_base) >= DRIVE_BENCH_PROGRESS_COUNTS) {
+                    d->w_timer_us = 0; /* progress on a trusted sample only */
+                    d->w_base = k->trust_cum;
+                    d->w_trusted = false;
+                }
+            }
+            if (k->last_zero) {
+                d->zr_us += driven ? dt : 0u; /* frameless ticks included until a non-zero frame or a loss */
+            } else {
+                d->zr_us = 0;
+            }
+            d->w_timer_us += driven ? dt : 0u;
+            if (d->zr_us > DRIVE_BENCH_ZERO_RUN_US) {
+                why = DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
+            } else if (d->w_timer_us >= DRIVE_BENCH_WATCH_US) {
+                why = d->w_trusted ? DRIVE_BENCH_STOP_NO_PROGRESS : DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
+            }
+        }
+        if (why != DRIVE_BENCH_STOP_NONE) {
+            if (why == DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT) {
+                d->kth_zs_wait[i] = true;
+            }
+            bench_end(d, why);
+            enter_stopping(d, 0); /* the MCU stops the run itself (plan 1, end transition) */
+        }
+    }
+    bench_confirm_step(d);
+}
+#endif
+
 void drive_begin(drive *d, const drive_inputs *in)
 {
     d->time_us += (uint32_t)(in->now_us - d->last_now32); /* widen the HAL clock */
@@ -712,6 +853,11 @@ void drive_begin(drive *d, const drive_inputs *in)
         hold_commission(d);
     }
     read_sensors(d, in);
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        bench_kth_update(d, in);
+    }
+#endif
     check_spi_timeout(d);
 
 #if defined(FW_CORE_BENCH)
@@ -772,6 +918,11 @@ void drive_begin(drive *d, const drive_inputs *in)
         d->mode = DRIVE_MODE_ESTOP;
     }
 
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        bench_run_step(d);
+    }
+#endif
     step_driver_init(d, in);
     step_status_poll(d);
     bench_close_if_left(d);
@@ -1001,6 +1152,27 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
 #endif
         return DRIVE_REJECT_SENSOR_INVALID; /* the picked axis must be measurable */
     }
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->run_active && d->run_source == DRIVE_BENCH_SOURCE_KTH && d->run_stop != 0 &&
+        c->duty_e4 != 0 && c->axis == d->run_axis) {
+        int i = kth_index(d->run_axis);
+        const bench_kth *k = &d->kth[i];
+        int8_t dir = c->duty_e4 > 0 ? 1 : -1;
+        if (d->run_drive == DRIVE_BENCH_RUN_PREP) {
+            /* a distance run's first non-zero: no loss since the ARM, and a non-zero frame counted in this very
+               tick, the reference (plan 4.2 A1b-1 decisions 3-4) */
+            if (d->run_unclean || k->losses != d->run_losses0 || !k->have || k->lost || d->kth_zs_wait[i] ||
+                !(d->kth_bits[i] & BENCH_KTH_TRUSTED)) {
+                return DRIVE_REJECT_SENSOR_INVALID;
+            }
+            if ((d->run_stop < 0 ? -1 : 1) != d->run_sign * dir) {
+                return DRIVE_REJECT_BAD_VALUE; /* the target's sign must be count_sign x the duty's */
+            }
+        } else if (dir != d->run_dir) {
+            return DRIVE_REJECT_BAD_VALUE; /* one direction per distance run */
+        }
+    }
+#endif
     return DRIVE_REJECT_NONE;
 }
 
@@ -1033,6 +1205,20 @@ static void handle_commission(drive *d, const link_msg *m)
         }
         if (c->duty_e4 != 0 && d->run_drive == DRIVE_BENCH_RUN_PREP) {
             d->run_drive = DRIVE_BENCH_RUN_DRIVING;
+            if (d->run_source == DRIVE_BENCH_SOURCE_KTH) {
+                int i = kth_index(d->run_axis);
+                const bench_kth *k = &d->kth[i];
+                d->run_dir = c->duty_e4 > 0 ? 1 : -1;
+                d->run_ref = d->w_base = k->cum;
+                d->w_timer_us = d->zr_us = 0;
+                d->w_trusted = false;
+                if (!k->have || k->lost) {
+                    d->run_unclean = true; /* not valid at its drive start */
+                }
+                if (!(d->kth_bits[i] & BENCH_KTH_TRUSTED)) {
+                    d->run_no_ref = true; /* a measuring run started without a fresh non-zero frame */
+                }
+            }
         }
     }
 #endif
@@ -1157,10 +1343,17 @@ static uint8_t bench_set_check(const drive *d, const link_bench_set *b)
     if (!bench_echo_ok(d, b->echo_mcu_time_us)) {
         return DRIVE_REJECT_STALE_ECHO;
     }
-    /* A1a: duty runs without a measurement source and without a distance stop. */
+    /* bench6: duty runs, measured by the KTH count on M or H and stopped at a distance; hold (A1b-2) and the MT
+       source (A1c) are not yet. */
     if (b->run_id == 0 || b->mode != DRIVE_BENCH_MODE_DUTY || b->axis >= DRIVE_CH_COUNT ||
-        b->source != DRIVE_BENCH_SOURCE_NONE || (b->count_sign != 1 && b->count_sign != -1) ||
-        (b->bypass & ~DRIVE_BENCH_KNOWN) != 0 || b->stop_counts != 0) {
+        (b->count_sign != 1 && b->count_sign != -1) || (b->bypass & ~DRIVE_BENCH_KNOWN) != 0) {
+        return DRIVE_REJECT_BAD_VALUE;
+    }
+    if (b->source != DRIVE_BENCH_SOURCE_NONE &&
+        !(b->source == DRIVE_BENCH_SOURCE_KTH && (b->axis == DRIVE_CH_M || b->axis == DRIVE_CH_H))) {
+        return DRIVE_REJECT_BAD_VALUE;
+    }
+    if (b->stop_counts != 0 && (b->source != DRIVE_BENCH_SOURCE_KTH || b->stop_counts == INT32_MIN)) {
         return DRIVE_REJECT_BAD_VALUE;
     }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
@@ -1203,6 +1396,13 @@ static void handle_bench_arm(drive *d, const link_msg *m)
          d->time_us - d->bset_at_us > (uint64_t)DRIVE_BENCH_SET_TTL_MS * US_PER_MS)) {
         why = DRIVE_REJECT_BAD_VALUE;
     }
+    if (why == DRIVE_REJECT_NONE && d->bset.stop_counts != 0) {
+        /* a distance run arms only on a valid count with no zero suspicion pending (plan 4.2 A1b-1 decision 3) */
+        int i = kth_index(d->bset.axis);
+        if (!d->kth[i].have || d->kth[i].lost || d->kth_zs_wait[i]) {
+            why = DRIVE_REJECT_SENSOR_INVALID;
+        }
+    }
     d->reject_reason = why;
     if (why != DRIVE_REJECT_NONE) {
         return;
@@ -1223,6 +1423,20 @@ static void handle_bench_arm(drive *d, const link_msg *m)
     d->res_stop = DRIVE_BENCH_STOP_NONE;
     d->res_axis = d->res_source = 0;
     d->res_blocked = 0;
+    d->res_ref = d->res_cut = d->res_losses = 0;
+    d->res_stop_counts = 0;
+    d->res_confirm = DRIVE_BENCH_CONFIRM_NONE;
+    d->res_flags = 0;
+    d->res_end_age = 0xFFFFu;
+    d->run_losses0 = d->kth[kth_index(d->run_axis)].losses;
+    d->run_unclean = d->run_no_ref = d->run_ev = false;
+    d->run_ev_t = 0;
+    d->run_stop = d->bset.stop_counts;
+    d->run_sign = d->bset.count_sign;
+    d->run_dir = 0;
+    d->run_ref = d->w_base = 0;
+    d->w_timer_us = d->zr_us = 0;
+    d->w_trusted = false;
     d->bset_valid = false;
 }
 
@@ -1238,11 +1452,6 @@ void drive_note_link_change(drive *d, uint32_t since_hal_us, bool settled)
     d->lc_settled = d->lc_settled || settled;
 }
 
-static uint16_t sat_age_ms(void)
-{
-    return 0xFFFFu; /* A1a: no measurement source, so no evidence yet */
-}
-
 void drive_fill_bench_state(const drive *d, link_bench_state *s)
 {
     memset(s, 0, sizeof *s);
@@ -1252,8 +1461,23 @@ void drive_fill_bench_state(const drive *d, link_bench_state *s)
     s->source = d->run_source;
     s->stop_reason = d->res_stop;
     s->blocked = d->res_blocked;
-    s->evidence_age_ms = sat_age_ms();
-    s->end_evidence_age_ms = sat_age_ms();
+    s->evidence_age_ms = bench_age(d);
+    s->end_evidence_age_ms = d->res_run_id != 0 ? d->res_end_age : 0xFFFFu;
+    if (d->run_source == DRIVE_BENCH_SOURCE_KTH) {
+        const bench_kth *k = &d->kth[kth_index(d->run_axis)];
+        s->count_state = !k->have ? DRIVE_BENCH_COUNT_NONE_YET : k->lost ? DRIVE_BENCH_COUNT_LOST
+                                                                         : DRIVE_BENCH_COUNT_VALID;
+        s->raw_angle = k->last_raw;
+        s->cumulative = bench_kth_diff(k->cum, 0u);
+        if (d->run_id != 0 && (d->run_unclean || k->losses != d->run_losses0)) {
+            s->run_flags |= DRIVE_BENCH_FLAG_UNCLEAN; /* live until the next ARM */
+        }
+    }
+    s->kth_lost = (uint8_t)((d->kth[0].lost ? 1u : 0u) | (d->kth[1].lost ? 2u : 0u));
+    s->distance_ref = bench_kth_diff(d->run_drive == DRIVE_BENCH_RUN_DRIVING ? d->run_ref : d->res_ref, 0u);
+    s->cut_position = bench_kth_diff(d->res_cut, 0u);
+    s->distance_confirm = d->res_confirm;
+    s->run_flags |= d->res_flags;
     s->mcu_bypass = (uint8_t)(d->run_active ? d->run_bypass : 0u);
     s->drive = (uint8_t)((d->run_drive & 0x03u) | ((d->run_mode & 0x03u) << 4));
     s->conn_gen = d->conn_gen;

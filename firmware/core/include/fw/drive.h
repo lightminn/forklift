@@ -9,6 +9,7 @@
 
 #include "fw/abs_axis.h"
 #include "fw/drv8244.h"
+#include "fw/bench_kth.h"
 #include "fw/link.h"
 #include "fw/pi.h"
 #include "fw/wheel_enc.h"
@@ -67,6 +68,25 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_KNOWN (DRIVE_BENCH_STEER_RANGE | DRIVE_BENCH_LIFT_RANGE)
 #define DRIVE_BENCH_MODE_DUTY 1u
 #define DRIVE_BENCH_SOURCE_NONE 0u
+#define DRIVE_BENCH_SOURCE_KTH 1u /* bench6: the run axis's KTH travel count (M, H) */
+/* BENCH_STATE.count_state */
+#define DRIVE_BENCH_COUNT_NONE_YET 0u
+#define DRIVE_BENCH_COUNT_VALID 1u
+#define DRIVE_BENCH_COUNT_LOST 2u
+/* BENCH_STATE.distance_confirm */
+#define DRIVE_BENCH_CONFIRM_NONE 0u /* none, or waiting (with distance_provisional) */
+#define DRIVE_BENCH_CONFIRM_REACHED 1u
+#define DRIVE_BENCH_CONFIRM_HELD 2u
+/* BENCH_STATE.run_flags (bench6, plan 4.2 A1b-1 decision 5) */
+#define DRIVE_BENCH_FLAG_UNCLEAN 0x01u    /* this run: not valid at its drive start, or lost since the ARM */
+#define DRIVE_BENCH_FLAG_RES_UNCLEAN 0x02u /* the result: the above, fixed at the end */
+#define DRIVE_BENCH_FLAG_RES_LOSS 0x04u    /* the result: the provisional confirmation ended by a loss */
+#define DRIVE_BENCH_FLAG_RES_TENTATIVE 0x08u /* the result: the last counted frame at the end was 0x0000 */
+#define DRIVE_BENCH_FLAG_RES_NO_REF 0x10u    /* the result: no fresh non-zero frame at the drive start */
+#define DRIVE_BENCH_ZERO_RUN_US 4000u     /* driven 0x0000-only time before kth_zero_suspect */
+#define DRIVE_BENCH_WATCH_US 300000u      /* driven time without progress */
+#define DRIVE_BENCH_PROGRESS_COUNTS 2     /* R */
+#define DRIVE_BENCH_REVERSE_COUNTS 128    /* the wrong way from the push start */
 /* BENCH_STATE.drive bits 0-1. */
 #define DRIVE_BENCH_RUN_NONE 0u    /* no run consumed since boot */
 #define DRIVE_BENCH_RUN_PREP 1u    /* armed, no accepted non-zero COMMISSION yet */
@@ -81,6 +101,11 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_STOP_FAULT 5u
 #define DRIVE_BENCH_STOP_ESTOP 6u
 #define DRIVE_BENCH_STOP_LINK_BOUNDARY 7u
+#define DRIVE_BENCH_STOP_DISTANCE_REACHED 8u
+#define DRIVE_BENCH_STOP_DISTANCE_PROVISIONAL 9u
+#define DRIVE_BENCH_STOP_NO_PROGRESS 10u
+#define DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT 11u
+#define DRIVE_BENCH_STOP_KTH_LOST 12u
 #define DRIVE_BENCH_SET_TTL_MS 1000u /* an unconsumed BENCH_SET expires */
 
 /* STATE.flags bits. */
@@ -174,6 +199,7 @@ typedef struct {
     uint16_t wheel_hw[2];
     uint16_t abs_frame[2]; /* steering, lift */
     bool abs_fresh[2];
+    uint32_t abs_time_us[2]; /* HAL clock when each fresh frame was acquired (SPI completion), never after now_us */
     uint32_t adc_raw[DRIVE_CH_COUNT];
     bool adc_fresh;
     bool nfault_low[DRIVE_CH_COUNT];
@@ -243,6 +269,25 @@ typedef struct drive {
     uint8_t res_stop, res_axis, res_source;
     uint16_t res_blocked; /* drive requests refused after the run ended (saturating) */
     uint8_t conn_gen;     /* link connection changes seen (mod 256) */
+    /* bench6 (plan 4.2 A1b-1): the KTH travel counters (0 M, 1 H), this tick's result bits, the zero-suspect waits */
+    bench_kth kth[2];
+    uint8_t kth_bits[2];
+    bool kth_zs_wait[2];
+    uint64_t bench_last_us; /* the previous tick's time: the driven-time increments */
+    /* the run */
+    uint32_t run_losses0; /* the axis's loss count at the ARM */
+    bool run_unclean, run_no_ref, run_ev;
+    uint64_t run_ev_t; /* the last trusted sample's acquisition time since the ARM */
+    int32_t run_stop;
+    int8_t run_sign, run_dir;
+    uint32_t run_ref, w_base;
+    uint64_t w_timer_us, zr_us;
+    bool w_trusted; /* a trusted sample since the watch last reset */
+    /* the result's distance fields */
+    uint32_t res_ref, res_cut, res_losses;
+    int32_t res_stop_counts;
+    uint8_t res_confirm, res_flags;
+    uint16_t res_end_age;
     uint64_t boundary_us; /* after every STATE sent before the last one: bench commands echo a later STATE */
     uint32_t cm_on_limit_ms; /* the open output interval's time limit, fixed when it opened (a run's own) */
     bool lc_pending, lc_settled; /* a link change noted for the next drive_begin */
