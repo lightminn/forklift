@@ -717,6 +717,8 @@ class CommissionSession(Session):
         self.bench_image = False
         self.run_id: int | None = None
         self.bench_taken: dict | None = None
+        self._bench_pending: dict | None = None
+        self._boot0: int | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -798,17 +800,20 @@ class CommissionSession(Session):
 
         # the board's record of the last run first (a CLI that ended before writing it down, same boot): recovered
         # here, before this run's BENCH_ARM clears it (contract 8.3; A1a-2 P2)
+        stopped = (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
+        t_stop = b.state.mcu_time_us  # Session.arm saw this DISARMED STATE
+
         def stopped_pair() -> bool:
-            # a pair that came with the latest accepted STATE, in a stopped mode: an older pair (an empty record seen
-            # while the last run drove) never stands for the board's record now (A1a-2 r3)
-            st = b.host.bench_state_of
-            return (st is not None and st is b.host.state
-                    and st.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP))
+            # a pair that came with an accepted STATE of this boot and arming generation, in a stopped mode, no older
+            # than the stop seen now, with the latest STATE still stopped: an older pair (an empty record seen while
+            # the last run drove) never stands for the board's record now (A1a-2 r3, r4)
+            st, cur = b.host.bench_state_of, b.host.state
+            return (st is not None and cur is not None and st.boot_id == cur.boot_id and st.arm_gen == cur.arm_gen
+                    and st.mode in stopped and cur.mode in stopped and st.mcu_time_us >= t_stop)
 
         if not b.run_until(lambda: not same_link() or stopped_pair(), 1.0):
             raise Refused("bench: no BENCH_STATE with the board's current STATE on this connection")
-        if not same_link():
-            raise Refused("the link reconnected before the ARM: run it again to confirm")
+        self._link_check(same_link, conn0, disc0)
         prev = b.host.bench_state
         if prev.result_run_id != 0:
             errors0 = b.record_errors
@@ -845,11 +850,41 @@ class CommissionSession(Session):
                     and st.reject_reason == RejectReason.NONE)
 
         if not b.run_until(taken, 1.0):
+            self._link_check(same_link, conn0, disc0)
             why = None if b.state is None else b.state.reject_reason.name
             raise Refused(f"bench: the board did not take BENCH_SET seq {seq} (reject {why})")
-        self.bench_taken = {"seq": seq, "run_id": self.run_id, "bypass": list(ask.names),
-                            "duty_max_e4": list(ask.duty_max_e4()), "time_ms": list(ask.time_ms()),
-                            "overrides": ask.overrides()}
+        # provisional: the seq is the board's answer only once its arming names this run (confirm_bench_arm)
+        self._bench_pending = {"seq": seq, "run_id": self.run_id, "bypass": list(ask.names),
+                               "duty_max_e4": list(ask.duty_max_e4()), "time_ms": list(ask.time_ms()),
+                               "overrides": ask.overrides()}
+        b.emit({"t": "bench_set_sent", **self._bench_pending})
+
+    def _link_check(self, same_link, conn0: int, disc0: int) -> None:
+        if same_link():
+            return
+        b = self.b
+        if b.conn != conn0 or b.host.disconnects != disc0:
+            raise Refused("the link reconnected before the ARM: run it again to confirm")
+        raise Refused("the board rebooted (a new boot id on the same link) before the ARM: run it again to confirm")
+
+    def arm(self, budget_s: float) -> None:
+        super().arm(budget_s)
+        if self.bench_image:
+            self.confirm_bench_arm()
+
+    def confirm_bench_arm(self) -> None:
+        """The BENCH_SET consumed: a BENCH_STATE of this boot, paired with an ARMED STATE, naming this run -- before
+        the first non-zero COMMISSION (A1a-2 r4). Only then is the board's acceptance recorded."""
+        b = self.b
+
+        def named() -> bool:
+            bs, st = b.host.bench_state, b.host.bench_state_of
+            return (bs is not None and st is not None and st.boot_id == self._boot0 and st.mode == Mode.ARMED
+                    and bs.run_id == self.run_id)
+
+        if not b.run_until(named, 0.5):
+            raise Refused("bench: the board's arming never named this run's BENCH_SET")
+        self.bench_taken = self._bench_pending
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def request_arm(self, now_ns: int):
@@ -857,7 +892,8 @@ class CommissionSession(Session):
             if self.b.conn > 1 or self.b.host.disconnects:
                 raise Refused("the link reconnected before the ARM: run it again to confirm")
             if self.b.state is None or self.b.state.boot_id != self._boot0:
-                raise Refused("the board rebooted before the ARM: run it again to confirm")
+                raise Refused("the board rebooted (a new boot id on the same link) before the ARM: run it again to "
+                              "confirm")
             return self.b.host.request_bench_arm(self.run_id, now_ns)
         return self.b.host.request_arm(now_ns)
 
