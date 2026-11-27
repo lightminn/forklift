@@ -65,10 +65,10 @@ static void hal_kick(void *ctx)
 }
 
 #if defined(FW_BENCH_IMAGE)
-static uint32_t hal_link_conn(void *ctx, bool *busy)
+static uint32_t hal_link_conn(void *ctx, bool *busy, uint32_t *since_us)
 {
     (void)ctx;
-    return link_conn_gen(busy);
+    return link_conn_gen(busy, since_us);
 }
 #endif
 

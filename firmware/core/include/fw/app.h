@@ -29,10 +29,10 @@ typedef struct {
     void (*frame_handled)(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
                           const drive *after);
 #if defined(FW_CORE_BENCH)
-    /* Optional, bench image only (contract 8): the link's connection generation, bumped when a connection
-       change starts and again when it is done; *busy while a change is in progress (the tick then reads no
-       byte). NULL: no connection changes. */
-    uint32_t (*link_conn)(void *ctx, bool *busy);
+    /* Optional, bench image only (contract 8.4): the link's connection generation, settled when a change is
+       done; *busy while one is in progress (the tick then reads no byte); *since_us the HAL clock when the
+       latest one began. NULL: no connection changes. */
+    uint32_t (*link_conn)(void *ctx, bool *busy, uint32_t *since_us);
 #endif
 } fw_hal;
 

@@ -118,11 +118,28 @@ static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_
    they differ and, once settled on a new value, drops what the receive ring still holds. The send FIFO is
    left alone: a DWC2 IN transfer reads it in place (board design 5.1). */
 static volatile uint32_t g_conn_begin, g_conn_end;
+/* A bus reset, unplug or suspend is counted in the OTG interrupt the moment it happens, so the tick stops
+   reading at once, before the main loop's tud_task gets to it (Codex A1a round 2). */
+static volatile uint32_t g_conn_events, g_conn_handled, g_conn_since;
 
-uint32_t link_conn_gen(bool *busy)
+void tud_event_hook_cb(uint8_t rhport, uint32_t eventid, bool in_isr)
 {
+    (void)rhport;
+    if (in_isr && (eventid == DCD_EVENT_BUS_RESET || eventid == DCD_EVENT_UNPLUGGED ||
+                   eventid == DCD_EVENT_SUSPEND)) {
+        if (g_conn_events == g_conn_handled) {
+            g_conn_since = timebase_now_us();
+        }
+        g_conn_events++;
+    }
+}
+
+uint32_t link_conn_gen(bool *busy, uint32_t *since_us)
+{
+    uint32_t events = g_conn_events, handled = g_conn_handled;
     uint32_t begin = g_conn_begin, end = g_conn_end;
-    *busy = begin != end;
+    *busy = events != handled || begin != end;
+    *since_us = g_conn_since;
     return end;
 }
 #endif
@@ -130,6 +147,10 @@ uint32_t link_conn_gen(bool *busy)
 static void lifecycle(void)
 {
 #if defined(FW_BENCH_IMAGE)
+    uint32_t events = g_conn_events;
+    if (events == g_conn_handled && g_conn_begin == g_conn_end) {
+        g_conn_since = timebase_now_us(); /* a change first seen here (DTR, mount) */
+    }
     g_conn_begin = g_conn_end + 1u;
     /* The OTG interrupt writes the CDC receive FIFO in place (DWC2 slave): clear it with that interrupt off,
        so a packet never lands on half-reset indices (Codex A1a P2). */
@@ -140,6 +161,7 @@ static void lifecycle(void)
     g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
     g_resync = true;
 #if defined(FW_BENCH_IMAGE)
+    g_conn_handled = events;
     g_conn_end = g_conn_begin;
 #endif
 }
@@ -193,7 +215,7 @@ void link_poll(void)
        image also takes the loss of the configuration as a connection change (Codex A1a P1). */
     static bool was_mounted;
     bool mounted = tud_mounted();
-    if (was_mounted && !mounted) {
+    if ((was_mounted && !mounted) || g_conn_events != g_conn_handled) {
         lifecycle();
     }
     was_mounted = mounted;

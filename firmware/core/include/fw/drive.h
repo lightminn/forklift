@@ -82,6 +82,9 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_STOP_ESTOP 6u
 #define DRIVE_BENCH_STOP_LINK_BOUNDARY 7u
 #define DRIVE_BENCH_SET_TTL_MS 1000u /* an unconsumed BENCH_SET expires */
+/* CLEAR_FAULTS is refused this long after a connection change settles: an OUT packet of the old host that was
+   in flight across the change is never taken for the new host's clear (contract 8.4). */
+#define DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS 100u
 
 /* STATE.flags bits. */
 #define DRIVE_STATE_LIMITED 0x01u
@@ -245,6 +248,8 @@ typedef struct drive {
     uint8_t conn_gen;     /* link connection changes seen (mod 256) */
     uint64_t boundary_us; /* after every STATE sent before the last one: bench commands echo a later STATE */
     uint32_t cm_on_limit_ms; /* the open output interval's time limit, fixed when it opened (a run's own) */
+    bool lc_pending, lc_settled; /* a link change noted for the next drive_begin */
+    uint32_t lc_since32;         /* HAL clock when it began */
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
@@ -295,9 +300,12 @@ void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint32_t tag);
 void drive_fill_state(const drive *d, link_state *s);
 
 #if defined(FW_CORE_BENCH)
-/* The link's connection changed (bench image, contract 8): the pending BENCH_SET is dropped, an armed run ends
-   through STOPPING, and bench commands must echo a STATE sent after now. No effect on other builds. */
-void drive_link_boundary(drive *d);
+/* A link connection change (bench image, contract 8.4), noted before drive_begin, which applies it with the
+   tick's own time: one that began (since_hal_us) while armed ends the arming through STOPPING unless the command
+   deadline had passed before it began (then the expiry is the first cause); once settled, the pending BENCH_SET
+   is dropped, bench commands must echo a STATE sent from this tick on, and CLEAR_FAULTS waits
+   DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS. No effect on other builds. */
+void drive_note_link_change(drive *d, uint32_t since_hal_us, bool settled);
 
 /* Fills everything but pair_seq and dropped_pairs (owned by the app). */
 void drive_fill_bench_state(const drive *d, link_bench_state *s);

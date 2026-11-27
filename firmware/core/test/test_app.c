@@ -96,7 +96,7 @@ typedef struct {
     int write_calls;
     int kicks;
     /* bench image (contract 8) */
-    uint32_t conn_gen;
+    uint32_t conn_gen, conn_since;
     bool conn_busy;
     uint16_t last_state_seq;
     link_bench_state last_bench;
@@ -183,10 +183,11 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
     return true;
 }
 
-static uint32_t hal_link_conn(void *ctx, bool *busy)
+static uint32_t hal_link_conn(void *ctx, bool *busy, uint32_t *since_us)
 {
     board *b = ctx;
     *busy = b->conn_busy;
+    *since_us = b->conn_since;
     return b->conn_gen;
 }
 
@@ -473,6 +474,7 @@ static void bench_connection_boundary(void)
     start_bench();
     run_ms(100);
     B.conn_busy = true; /* a change in progress: not one byte is read */
+    B.conn_since = B.now;
     host_bench_set_arm(5);
     size_t queued = B.to_mcu_len;
     size_t pos = B.to_mcu_pos;
@@ -490,6 +492,7 @@ static void bench_connection_boundary(void)
     run_ms(12);
     CHECK_EQ_U(app.d.mode, DRIVE_MODE_ARMED);
     CHECK_EQ_U(B.last_bench.run_id, 6);
+    B.conn_since = B.now;
     B.conn_gen += 2; /* ... and a later change ends the arming */
     run_ms(1);
     CHECK_EQ_U(app.d.mode, DRIVE_MODE_STOPPING);
@@ -525,6 +528,7 @@ static void bench_boundary_before_expiry(void)
     CHECK_EQ_U(B.last_bench.drive & 3u, DRIVE_BENCH_RUN_DRIVING);
     run_ms(80); /* 85 ms after it was sent: still before the deadline (>= 90 ms) */
     CHECK_EQ_U(app.d.mode, DRIVE_MODE_ARMED);
+    B.conn_since = B.now; /* it began before the deadline */
     B.conn_gen++; /* the change settles; the next tick (104 ms) is past the deadline (<= 100 ms) */
     B.now += 18000; /* under the encoder gap limit (20 ms) */
     run_ms(1);
@@ -534,6 +538,25 @@ static void bench_boundary_before_expiry(void)
 }
 
 /* Codex A1a round 1: room for a STATE but not for the pair sends neither; seq wraps across a pair. */
+/* A change still in progress ends the arming at once, before it settles. */
+static void bench_change_in_progress_ends_the_arming(void)
+{
+    start_bench();
+    run_ms(100);
+    host_bench_set_arm(4);
+    run_ms(12);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_ARMED);
+    B.conn_busy = true;
+    B.conn_since = B.now;
+    run_ms(1);
+    CHECK_EQ_U(app.d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(app.d.conn_gen, 0); /* not settled yet */
+    B.conn_busy = false;
+    B.conn_gen++;
+    run_ms(1);
+    CHECK_EQ_U(app.d.conn_gen, 1);
+}
+
 static void bench_pair_room_and_seq_wrap(void)
 {
     start_bench();
@@ -566,5 +589,6 @@ int main(void)
     bench_connection_boundary();
     bench_boundary_before_expiry();
     bench_pair_room_and_seq_wrap();
+    bench_change_in_progress_ends_the_arming();
     return FW_TEST_RESULT();
 }

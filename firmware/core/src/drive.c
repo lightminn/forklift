@@ -193,6 +193,10 @@ static uint32_t cm_time_ms(const drive *d, uint8_t ch)
 }
 #endif
 
+#if defined(FW_CORE_BENCH)
+static void bench_apply_link_change(drive *d, uint32_t now32);
+#endif
+
 /* ---- faults ------------------------------------------------------------------------- */
 
 static void enter_fault(drive *d, uint32_t bits)
@@ -710,6 +714,11 @@ void drive_begin(drive *d, const drive_inputs *in)
     read_sensors(d, in);
     check_spi_timeout(d);
 
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        bench_apply_link_change(d, in->now_us);
+    }
+#endif
     /* Expiry first, so a DRIVE arriving after the deadline cannot extend it. The command
        deadline and the commissioning time limit (applied output, design 3) are judged
        independently before the mode changes, so one cannot hide the other (Codex PR review 2). */
@@ -999,6 +1008,7 @@ static void handle_commission(drive *d, const link_msg *m)
 #if defined(FW_CORE_BENCH)
         if (BENCH(d->cfg) && d->run_drive == DRIVE_BENCH_RUN_ENDED && d->res_run_id == d->run_id &&
             (d->reject_reason == DRIVE_REJECT_STOPPING || d->reject_reason == DRIVE_REJECT_NOT_ARMED) &&
+            (c->duty_e4 == 0 || c->axis == d->res_axis) &&
             d->res_blocked < UINT16_MAX) {
             d->res_blocked++; /* refused after the run that drove had ended */
         }
@@ -1080,6 +1090,13 @@ static void handle_clear(drive *d, const link_msg *m)
         d->reject_reason = DRIVE_REJECT_SENSOR_INVALID;
         return;
     }
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg) && d->boundary_us != 0 &&
+        d->time_us < d->boundary_us + (uint64_t)DRIVE_BENCH_CLEAR_AFTER_CHANGE_MS * US_PER_MS) {
+        d->reject_reason = DRIVE_REJECT_STALE_ECHO; /* possibly the old host's, late across the change */
+        return;
+    }
+#endif
     /* Driver faults and overcurrent are not conditions: the re-initialisation decides. The
        commissioning time limit stays until the next ARM (contract 3.4). */
     d->latched &= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
@@ -1095,6 +1112,29 @@ static void handle_clear(drive *d, const link_msg *m)
 
 #if defined(FW_CORE_BENCH)
 /* A bench command's echo: fresh, and of a STATE sent after the last connection change. */
+/* drive_begin, after the clock: a noted link change, against this tick's time. */
+static void bench_apply_link_change(drive *d, uint32_t now32)
+{
+    if (!d->lc_pending) {
+        return;
+    }
+    uint32_t ago = now32 - d->lc_since32;
+    uint64_t began = (uint64_t)ago <= d->time_us ? d->time_us - ago : 0u;
+    if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
+        bool expired_first = d->has_deadline && d->deadline_us < began;
+        if (!expired_first) { /* else the expiry below is the first cause */
+            bench_end(d, DRIVE_BENCH_STOP_LINK_BOUNDARY);
+            enter_stopping(d, 0);
+        }
+    }
+    if (d->lc_settled) {
+        d->conn_gen++;
+        d->boundary_us = d->time_us; /* every STATE sent before this tick is older */
+        d->bset_valid = false;
+    }
+    d->lc_pending = d->lc_settled = false;
+}
+
 static bool bench_echo_ok(const drive *d, uint64_t echo)
 {
     return echo >= d->boundary_us && echo_fresh(d, echo, d->cfg->command_timeout_ms);
@@ -1184,19 +1224,16 @@ static void handle_bench_arm(drive *d, const link_msg *m)
     d->bset_valid = false;
 }
 
-void drive_link_boundary(drive *d)
+void drive_note_link_change(drive *d, uint32_t since_hal_us, bool settled)
 {
     if (!BENCH(d->cfg)) {
         return;
     }
-    d->conn_gen++;
-    d->boundary_us = d->time_us + 1u; /* strictly after every STATE already sent */
-    d->bset_valid = false;
-    if (d->mode == DRIVE_MODE_ARMED) { /* an arming never outlives its connection */
-        bench_end(d, DRIVE_BENCH_STOP_LINK_BOUNDARY);
-        enter_stopping(d, 0);
+    if (!d->lc_pending) {
+        d->lc_since32 = since_hal_us;
     }
-    refresh_flags(d);
+    d->lc_pending = true;
+    d->lc_settled = d->lc_settled || settled;
 }
 
 static uint16_t sat_age_ms(void)

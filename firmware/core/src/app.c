@@ -27,7 +27,8 @@ bool fw_app_init(fw_app *app, const fw_hal *hal, const drive_config *cfg, uint32
 #if defined(FW_CORE_BENCH)
     if (hal->link_conn != 0) {
         bool busy = false;
-        app->conn_seen = hal->link_conn(hal->ctx, &busy);
+        uint32_t since = 0;
+        app->conn_seen = hal->link_conn(hal->ctx, &busy, &since);
     }
 #endif
     return true;
@@ -76,9 +77,9 @@ static void send_state(fw_app *app)
 }
 
 #if defined(FW_CORE_BENCH)
-/* The bench image's connection boundary (contract 8): while a change is in progress no byte is read; once it
-   is done, whatever the ring still holds from the old connection and the half frame are dropped, then the
-   core ends the arming and refuses bench commands that echo an older STATE. false: read nothing this tick. */
+/* The bench image's connection boundary (contract 8.4), before drive_begin: a change in progress is noted for
+   the core (which ends the arming with this tick's time) and no byte is read; once it settles, whatever the ring
+   still holds from the old connection and the half frame are dropped. false: read nothing this tick. */
 static bool link_boundary(fw_app *app)
 {
     const fw_hal *hal = app->hal;
@@ -86,17 +87,21 @@ static bool link_boundary(fw_app *app)
         return true;
     }
     bool busy = false;
-    uint32_t gen = hal->link_conn(hal->ctx, &busy);
+    uint32_t since = 0;
+    uint32_t gen = hal->link_conn(hal->ctx, &busy, &since);
+    bool changed = gen != app->conn_seen;
+    if (busy || changed) {
+        drive_note_link_change(&app->d, since, changed && !busy);
+    }
     if (busy) {
         return false;
     }
-    if (gen != app->conn_seen) {
+    if (changed) {
         app->conn_seen = gen;
         uint8_t junk[LINK_READ_CHUNK];
         while (hal->link_read(hal->ctx, junk, sizeof junk) == sizeof junk) {
         }
         link_rx_init(&app->rx);
-        drive_link_boundary(&app->d);
     }
     return true;
 }
@@ -121,8 +126,8 @@ void fw_app_tick(fw_app *app)
     }
 
 #if defined(FW_CORE_BENCH)
-    /* Before drive_begin: a change settled since the last tick ends the arming before this tick judges the
-       command expiry, so the result's first cause is the connection's (contract 8.4). */
+    /* Before drive_begin, which applies a noted change with this tick's time and before the expiry, comparing
+       the change's start with the command deadline for the first cause (contract 8.4). */
     bool read_link = link_boundary(app);
 #endif
     drive_inputs in;
