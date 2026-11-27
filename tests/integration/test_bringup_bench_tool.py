@@ -287,7 +287,17 @@ def test_the_window_is_judged_before_a_second_non_zero(model):
     res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, window=(-0.5, 0.0001), bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=0.5, observed="none"), b)
     assert res["stop"] == "window", res
-    assert len(nonzero_writes(b)) == 1  # the first accepted sample was already outside: no second non-zero
+    nz = nonzero_writes(b)
+    out = [smp for smp in b.samples if smp.state.mode == Mode.ARMED and smp.state.steering_rad > 0.0001]
+    assert out, "the axis never left the window"
+    t_out = out[0].host_ns
+    # the window is judged on every sample before the next non-zero: once the first sample outside was read, at most
+    # the one already queued in that cycle goes out (impl round 1 P1-2)
+    assert len([w for w in nz if w.start_ns > t_out]) <= 1, nz
+    first = nz[0].seq & 0xFFFF
+    acc = next((smp for smp in b.samples if smp.state.last_rx_seq == first), None)
+    if acc is not None and acc.state.steering_rad > 0.0001:
+        assert len(nz) == 1, nz  # the first accepted sample was already outside: no second non-zero
 
 
 def test_a_measuring_kth_run(model):
