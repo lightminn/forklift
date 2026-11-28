@@ -305,6 +305,7 @@ def test_a_refused_first_non_zero_is_written_once_and_closed_with_a_written_zero
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.confirm_bench_arm
 
         def confirm_then_push(self):
@@ -389,6 +390,7 @@ def test_a_pushed_hold_comes_back(mcu_model):  # noqa: F811
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.hold_run
 
         def push_mid(self, seconds, stop=None):
@@ -536,6 +538,7 @@ def test_a_refused_first_hold_is_written_once_and_closed_with_a_written_zero(mcu
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.confirm_bench_arm
 
         def confirm_then_push(self):

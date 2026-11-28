@@ -4003,6 +4003,38 @@ static void mt_boot_read_failure(void)
     CHECK(mt_arm(113, DRIVE_CH_R, 0, 1, 1500)); /* R's reads are fine */
 }
 
+/* A late first success (after the 20 ms wait) is a loss: that tick's MT ARM of the wheel is refused, the next
+   success re-bases it (Codex A1c-1 r2 P2-1). */
+static void mod_bench_l_fails_gap50(drive_config *c)
+{
+    mod_bench_l_read_fails(c);
+    c->enc_gap_max_us = 50000; /* the boot ends well inside the wait */
+}
+
+static void mt_late_first_success_is_lost(void)
+{
+    boot_with(mod_bench_l_fails_gap50);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_GAP)); /* still waiting for L's first success */
+    while (d.time_us + 2000u < d.first_tick_us + 49000u) {
+        tick();
+    }
+    link_bench_set b = bench_defaults(117, DRIVE_CH_L);
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b)); /* about 49 ms: still failing, no gap yet */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_GAP));
+    /* the first success, read at about 52 ms: a late first success, with the ARM in its tick */
+    in.wheel_fresh[0] = true;
+    wheel_start_off[0] = 3000;
+    link_msg arm = bench_arm_msg(11, 117, echo_now());
+    tick_msgs(&arm, 1);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID); /* lost since that late first success */
+    wheel_start_off[0] = 0;
+    tick();
+    CHECK(mt_arm(118, DRIVE_CH_L, 0, 1, 1500));
+}
+
 /* A result fixed by an SPI answer before this tick's wheel samples is tentative, and a loss of the result's own wheel in
    that next tick is attributed to it; another wheel's is not (plan 4.5 decision 10). */
 static void mt_spi_end_is_tentative_and_takes_its_wheels_loss(void)
@@ -4209,17 +4241,22 @@ static void mt_hold_on_the_board_slew(void)
     in.wheel_fresh[0] = true;
     tick();
     CHECK(out.duty[DRIVE_CH_L] > 0.0f && out.duty[DRIVE_CH_L] <= 0.0021f); /* back up by the slew only */
-    float u = out.duty[DRIVE_CH_L];
-    for (int k = 0; k < 100 && u > 0.0f; k++) {
+    bool entered = false;
+    for (int k = 0; k < 100 && !entered; k++) {
+        if (k % 40 == 0) {
+            hold(); /* renewed: the command does not expire */
+        }
         wstep(0, 1);
         tick();
-        u = out.duty[DRIVE_CH_L];
         link_bench_state s = bench_state_now();
         if (labs((long)s.target - (long)s.cumulative) <= 12) {
-            CHECK(u == 0.0f); /* the deadband's 0 at once, never slewed down */
-            break;
+            entered = true;
+            CHECK(out.duty[DRIVE_CH_L] == 0.0f); /* the deadband's 0 at once, never slewed down */
+            CHECK_EQ_U(s.deadband_entries, 1u);
         }
     }
+    CHECK(entered);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
 }
 
 static void bench_mt_tests(void)
@@ -4237,6 +4274,7 @@ static void bench_mt_tests(void)
     mt_hold();
     mt_hold_frozen_here_has_no_evidence();
     mt_boot_read_failure();
+    mt_late_first_success_is_lost();
     mt_spi_end_is_tentative_and_takes_its_wheels_loss();
     mt_hold_failed_read_gives_no_output();
 }

@@ -585,7 +585,7 @@ static void bench_read_wheels(drive *d, const drive_inputs *in)
                 wheel_enc_rebase(e, hw, t32); /* the first base: no step */
                 d->wheel_based[i] = true;
                 d->wheel_grace[i] = false;
-                d->mt[i].lost = false;
+                d->mt[i].lost = loss != 0; /* a late first success: lost until the next one (Codex A1c-1 r2 P2-1) */
                 restart_wheel_watch(d, i);
                 accepted = loss == 0;
             } else if (d->wheel_grace[i] && t64 > d->first_tick_us + (uint64_t)c->enc_gap_max_us) {

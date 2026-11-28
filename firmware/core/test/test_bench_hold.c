@@ -534,13 +534,28 @@ static void watch_moving_entry_evidence(void)
     CHECK_EQ_U(wtick(0, true, true, false), 0);
     CHECK(!h.progress); /* staying in the band is no evidence */
 
+    /* r 14, the previous sample 13: the old r-based rule took 13 -> 12 as evidence */
     wstart(30, 12);
     drive_on(1);
     CHECK_EQ_U(wtick(30, true, true, false), 0);
-    CHECK_EQ_U(wtick(13, true, true, false), 0); /* r is now 13 */
-    CHECK_EQ_U(wtick(13, true, true, false), 0);
+    CHECK_EQ_U(wtick(14, true, true, false), 0); /* watch 3: r 14 */
+    CHECK_EQ_U(wtick(13, true, true, false), 0); /* not R better than r: r stays 14 */
+    CHECK_EQ_U(h.r, 14u);
     CHECK_EQ_U(wtick(12, true, true, false), 0);
     CHECK(!h.progress); /* 13 -> 12: in, but only one count smaller than the previous sample */
+
+    /* r 0, the previous sample 14: the old r-based rule missed the return 14 -> 0 */
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0);
+    CHECK_EQ_U(wtick(0, true, true, false), 0); /* in: r 0 */
+    run_on = false;
+    CHECK_EQ_U(wtick(14, false, true, false), 0); /* pushed off with no output: not eligible, r stays 0 */
+    drive_on(1);
+    CHECK_EQ_U(wtick(14, true, true, false), 0); /* the new interval's first sample */
+    CHECK_EQ_U(h.r, 0u);
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(h.progress); /* back in from 14 on the same interval: evidence */
 }
 
 int main(void)
