@@ -3217,7 +3217,7 @@ def execute(args, bench: Bench) -> dict:
         if session._hold_run():
             basis = "ok" if again["ok"] else "aborted"  # a hold's result is its verdict 1
         elif (session._distance_run() and br.get("confirmed") and br.get("run_id") == session.run_id
-              and basis in ("no_acceptance", "ok") and not _driving_seen(session, *getattr(session, "run_pairs", ([], [])))):
+              and basis in ("no_acceptance", "ok", "invalid_measurement") and not _driving_seen(session, *getattr(session, "run_pairs", ([], [])))):
             # the board's record first read here (a cleanup retry) and no driving pair: the record alone (impl r4 P2-2)
             basis = "board_record_only"
             if "보드 기록만(구동 표본 없음)" not in again["labels"]:
