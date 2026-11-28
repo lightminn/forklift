@@ -3200,6 +3200,13 @@ def execute(args, bench: Bench) -> dict:
         # verdict 1 made again from where the run really ended: after execute's cleanup retry and every row lost
         # since (Codex B2a-1 impl rounds 1-2 P2-4); the labels the run already earned are kept
         br = session.bench_result() or {}
+        if (session.aborted == "bench_result_unconfirmed" and br.get("confirmed")
+                and not getattr(session, "late_failures", ())):
+            # the board's result first read here (a cleanup retry): its first cause decides now, as in the run
+            # (Codex B2a-1 impl round 8 P2)
+            stop = br.get("stop_reason")
+            ok_end = stop in bench_session.DISTANCE_ENDS if session._distance_run() else stop == "end_zero"
+            session.aborted = None if ok_end else f"bench_stop_{stop}"
         again = bench_verdict1(bench, session, br, distance=session._distance_run())
         again["labels"] = [*v1.get("labels", []), *(x for x in again["labels"] if x not in v1.get("labels", []))]
         result["verdict1"] = again
