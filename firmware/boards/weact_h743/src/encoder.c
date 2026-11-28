@@ -62,3 +62,21 @@ void encoder_read(uint16_t hw[2])
         hw[i] = g_last[i];
     }
 }
+
+#if defined(FW_BENCH_IMAGE)
+/* bench8 (plan 4.5 A1c decision 4): the same reads, with whether wheel i's read succeeded and the HAL clock just
+   before it -- the bench image's core skips a failed read. The other images keep encoder_read above unchanged. */
+void encoder_read_report(uint16_t hw[2], bool ok[2], uint32_t start_us[2])
+{
+    LPTIM_TypeDef *t[2] = {LPTIM1, LPTIM2};
+    for (int i = 0; i < 2; i++) {
+        uint16_t v;
+        start_us[i] = timebase_now_us();
+        ok[i] = lptim_stable_read(read_cnt, t[i], READ_TRIES, &v);
+        if (ok[i]) {
+            g_last[i] = v;
+        }
+        hw[i] = g_last[i];
+    }
+}
+#endif

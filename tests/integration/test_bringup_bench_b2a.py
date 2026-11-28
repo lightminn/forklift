@@ -19,7 +19,7 @@ from test_bringup_tool import mcu_model  # noqa: E402,F401
 from forklift_core.mcu_link.messages import RejectReason  # noqa: E402
 from forklift_core.plant import bench_session  # noqa: E402
 
-PRODUCT = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7"
+PRODUCT = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench8"
 HOLD = dict(hold_kp=None, hold_ki=None, hold_kd=None, hold_deadband=None, hold_min_duty=None, count_sign=1)
 
 
@@ -29,7 +29,6 @@ def record(b):
 
 def bench(model, *extra):  # noqa: F811
     b = model("--bench", "1", "--kth-start-raw", "1000,1000", *extra)
-    b.host.usb_product = PRODUCT
     return b
 
 

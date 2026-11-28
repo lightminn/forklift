@@ -19,7 +19,12 @@ static uint32_t hal_now(void *ctx)
 static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
+#if defined(FW_BENCH_IMAGE)
+    encoder_read_report(in->wheel_hw, in->wheel_fresh, in->wheel_start_us); /* bench8: the core skips a failed read */
+    in->wheel_report = true;
+#else
     encoder_read(in->wheel_hw);
+#endif
     kth_spi_snapshot(in->now_us, in->abs_frame, in->abs_fresh, in->abs_time_us); /* now_us set by the app */
 #if defined(FW_BENCH_IMAGE)
     kth_spi_starts(in->abs_start_us);

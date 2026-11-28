@@ -12,7 +12,7 @@ from forklift_core.plant.mcu_host import McuLinkHost
 
 from test_mcu_host_commission import CB, CFG, MS, Rig, state
 
-BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench7"
+BENCH5 = "forklift-mcu commission OPEN v0-1-gabcdefabcdef rec=1f4207f4 lim=lr1 bench8"
 ASK = bl.BenchAsk(0, (), None, None)
 
 

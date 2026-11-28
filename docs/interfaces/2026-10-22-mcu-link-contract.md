@@ -203,6 +203,7 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 
 - **벤치 확장(8 절, 2026-11-27, bench console plan A1a)**: 운영 `version` 3 은 그대로이고, 벤치 이미지 전용 메시지 셋(0x06·0x08·0x82)을 더했다. 그 세대는 제품 토큰 `bench5` 로 정한다. 다른 이미지는 이 type 을 모른다.
 - **벤치 확장 `bench6`(8 절, 2026-11-28, bench console plan 4.2 A1b-1)**: `source=kth`(M·H)·`stop_counts` 를 받고, `bench5` 가 비워 두던 `BENCH_STATE` 의 카운트·거리·증거 필드와 정지 사유 8–12 의 뜻을 채웠다. 예약 바이트는 `run_flags` 가 됐다. 메시지 길이와 배치는 같다.
+- **벤치 확장 `bench8`(8 절, 2026-11-28, bench console plan 4.5 A1c)**: 바이트 배치는 `bench7` 그대로이고 뜻만 늘었다. `source` 2 `mt`(L·R 바퀴의 증분 카운트, 상대)를 `BENCH_SET`·`BENCH_HOLD` 에서 받고, MT 실행의 `BENCH_STATE.raw_angle` 은 마지막으로 받아들인 MT 표본의 나이(ms)다. 벤치 이미지에서 바퀴 `gap`·`jump` 는 그 바퀴를 MT 로 측정하는 실행에서만 고장이고 그 밖에는 보고만 한다. `bench7` 호스트·이미지는 서로 거부한다(세대 토큰 정확 일치).
 - **벤치 확장 `bench7`(8 절, 2026-11-28, bench console plan 4.3 A1b-2)**: `BENCH_SET.mode` 2 `hold` 와 `BENCH_HOLD`(0x07, 48 바이트)를 더했다. `BENCH_STATE` 끝에 `deadband_entries`(u16)·`result_bypass`(u8)를 붙여 48 → 51 바이트가 됐고, `target` 을 채우며 `run_flags` bit5·bit6 에 결과 실행의 종류를 싣는다. `bench6` 호스트·이미지는 서로 거부한다.
 
 필드를 바꾸면 `version` 을 올린다. 한 버전 안에서 필드 의미를 바꾸지 않는다.
@@ -222,11 +223,11 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   - 승강 원점 비트는 승강 방식 결정(계획 3.5) 뒤 version 3 으로 미룬다.
   - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.2·3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다(래치 유지, 보류 만료 시각 고정, 보류는 구동 재개 금지일 뿐 제동·정지가 아님 — Codex 동의). 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
 
-## 8. 벤치 확장 (wire 세대 `bench7`)
+## 8. 벤치 확장 (wire 세대 `bench8`)
 
-벤치 이미지 전용 메시지다(계획 `docs/plans/2026-11-27-bench-console.md` 1 절). 운영 `version` 3 의 메시지·필드·고정 벡터(3–6 절)는 바꾸지 않는다. 프레임(1 절)과 `version` 3 은 같다. 벤치 확장의 세대는 USB 제품 문자열 끝 토큰 `bench7` 로 정한다. 이전 세대 `bench5`(A1a)·`bench6`(A1b-1, hold 없음)는 굽힌 적이 없고, `bench7` 호스트는 거부한다. 세대 토큰은 payload 에 없다. `bench7` 은 `BENCH_STATE` 길이를 바꿨으므로 이전 세대와 바이트가 다르다.
+벤치 이미지 전용 메시지다(계획 `docs/plans/2026-11-27-bench-console.md` 1 절). 운영 `version` 3 의 메시지·필드·고정 벡터(3–6 절)는 바꾸지 않는다. 프레임(1 절)과 `version` 3 은 같다. 벤치 확장의 세대는 USB 제품 문자열 끝 토큰 `bench8` 로 정한다. 이전 세대 `bench5`(A1a)·`bench6`(A1b-1, hold 없음)·`bench7`(A1b-2, MT 원천 없음)는 `bench8` 호스트가 거부한다. 세대 토큰은 payload 에 없다. `bench7` 은 `BENCH_STATE` 길이를 바꿨으므로 그 이전 세대와 바이트가 다르다. `bench8` 은 바이트 배치가 `bench7` 과 같고 뜻(MT 원천, 아래 8.8)이 늘었다 — 기능 판별을 위해 세대를 올렸다(`bench7` 보드는 `source` 2 를 `bad_value` 로 거부한다). MCU 모형(`mcu_model --bench 1`)은 자기 제품 문자열을 첫 stdout 줄(`product: …`)로 말하고, 호스트는 그것을 2 s 마감 안에 읽어 게이트에 넣는다.
 
-- **벤치 이미지**: `FW_BUILD=commission`, `FW_MOTOR_OUTPUT=1`, `FW_LINK=usb`, `FW_BENCH=1` 이고 fw-single 이 아니다. 제품 문자열은 `… lim=lr1 bench7` 로 끝난다. 다른 조합은 configure 가 거부한다.
+- **벤치 이미지**: `FW_BUILD=commission`, `FW_MOTOR_OUTPUT=1`, `FW_LINK=usb`, `FW_BENCH=1` 이고 fw-single 이 아니다. 제품 문자열은 `… lim=lr1 bench8` 로 끝난다. 다른 조합은 configure 가 거부한다.
 - **다른 이미지**: 0x06·0x07·0x08·0x82 를 모르는 `type` 으로 버린다(`rx_errors`). 코어를 `FW_CORE_BENCH` 없이 컴파일하기 때문이다. 받아 들이지도, 보내지도 않는다.
 - **벤치 이미지는 운영 `ARM` 을 `wrong_build` 로 거부한다.** 무장은 `BENCH_ARM` 으로만 한다.
 
@@ -246,16 +247,16 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 | `boot_id` | u32 | 지금 부팅 ID |
 | `echo_mcu_time_us` | u64 | 받은 `STATE` 의 시각. `command_timeout_ms` 안이고, 마지막 연결 변경(8.4) 이후여야 한다 |
 | `run_id` | u32 | 호스트가 실행마다 새로 뽑는 값, 0 아님 |
-| `mode` | u8 | 1 `duty`(시간 상한 듀티 구동, 거리 정지 가능), 2 `hold`(위치 유지, `source=kth`·축 M·H·`stop_counts` 0 일 때만, 8.7) |
+| `mode` | u8 | 1 `duty`(시간 상한 듀티 구동, 거리 정지 가능), 2 `hold`(위치 유지, `source` `kth`·`mt` 이고 `stop_counts` 0 일 때만, 8.7) |
 | `axis` | u8 | 0 L, 1 R, 2 M, 3 H — 이 실행에서 0 이 아닌 출력을 낼 수 있는 유일한 축 |
-| `source` | u8 | 0 없음, 1 `kth`(축 M·H 만: 그 축의 KTH 이동량 카운트, 8.3). 2 `mt` 는 다음 세대(A1c) |
+| `source` | u8 | 0 없음, 1 `kth`(축 M·H 만: 그 축의 KTH 이동량 카운트, 8.3), 2 `mt`(bench8, 축 L·R 만: 그 바퀴의 증분 카운트, 8.8) |
 | `count_sign` | i8 | ±1, 듀티 부호와 카운트 증가 방향의 관계. 거리 실행의 목표 부호는 `count_sign` × 듀티 부호여야 한다 |
 | `bypass` | u32 | bit0 `steer_range`(M 범위 검사 끔, KTH 유효 검사는 유지), bit1 `lift_range`(H). 나머지 비트는 0. 멈추는 쪽(과전류·전류센서·드라이버 결함·STOP/DISARM·명령 만료·IWDG·사이클 초과)은 비트가 없다 |
 | `duty_max_e4[4]` | u16 ×4 | 축별 듀티 상한, 1…10000 |
 | `time_ms[4]` | u32 ×4 | 축별 연속 출력 시간 상한, 1…2147483 |
-| `stop_counts` | i32 | 거리 정지: 측정 축 카운트의 부호 있는 상대값, 0 = 없음. `source=kth` 일 때만, −2³¹ 은 받지 않음 |
+| `stop_counts` | i32 | 거리 정지: 측정 축 카운트의 부호 있는 상대값, 0 = 없음. `source` `kth`·`mt` 일 때만, −2³¹ 은 받지 않음 |
 
-거부 이유(처음 걸린 것): 벤치 이미지 아님 → `wrong_build`, `DISARMED` 아님·출력 구간 열림 → `not_disarmed`, `boot_id` → `boot_mismatch`, echo → `stale_echo`, 값 → `bad_value`(`mode` 1·2 밖, `kth` 아닌 `hold`·거리 있는 `hold`, `source` 2, L·R 의 `kth`, `kth` 없는 `stop_counts`, −2³¹ 포함). 받아들이면 그 설정을 대기시키고 `last_rx_seq` 를 올린다. 대기 설정은 1 s 뒤 만료되고, `DISARM`·결함·연결 변경에서 버려진다.
+거부 이유(처음 걸린 것): 벤치 이미지 아님 → `wrong_build`, `DISARMED` 아님·출력 구간 열림 → `not_disarmed`, `boot_id` → `boot_mismatch`, echo → `stale_echo`, 값 → `bad_value`(`mode` 1·2 밖, 원천 없는 `hold`·거리 있는 `hold`, L·R 의 `kth`, M·H 의 `mt`, 원천 없는 `stop_counts`, −2³¹ 포함). 받아들이면 그 설정을 대기시키고 `last_rx_seq` 를 올린다. 대기 설정은 1 s 뒤 만료되고, `DISARM`·결함·연결 변경에서 버려진다.
 
 ### 8.2 `BENCH_ARM`
 
@@ -312,9 +313,9 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 | `run_id` | u32 | 마지막으로 소비한 실행(없으면 0) |
 | `result_run_id` | u32 | 결과가 있는 실행(없으면 0) |
 | `axis`, `source` | u8, u8 | 마지막 실행의 축·원천 |
-| `count_state` | u8 | 측정 축(`source=kth`) 카운트: 0 `none_yet`, 1 `valid`, 2 `lost`. 원천 없음이면 0 |
-| `kth_lost` | u8 | 지금 손실 중인 축: bit0 M, bit1 H |
-| `raw_angle` | u16 | 측정 축에서 마지막으로 센 원시각 |
+| `count_state` | u8 | 측정 축 카운트: 0 `none_yet`, 1 `valid`, 2 `lost`(`mt` 는 그 바퀴가 손실 중·첫 성공 전). 원천 없음이면 0 |
+| `kth_lost` | u8 | 지금 손실 중인 KTH 축: bit0 M, bit1 H(원천과 상관없이; MT 손실은 싣지 않음) |
+| `raw_angle` | u16 | `kth`: 측정 축에서 마지막으로 센 원시각. `mt`(bench8): 마지막으로 받아들인 MT 표본의 나이 ms — 0 은 이 짝의 틱에 받아들인 표본만(읽기 표식으로 정함), 이전 틱 표본은 최소 1, 0xFFFE 포화, 0xFFFF 없음 |
 | `cumulative`, `target`, `distance_ref`, `cut_position` | i32 ×4 | 측정 축 누적값(모듈러, 차는 32 비트 모듈러로 읽음), hold 목표(첫 `BENCH_HOLD` 가 고정, 다음 ARM 까지; hold 아니면 0), 거리 기준(구동 중이면 그 실행, 아니면 결과), 결과의 끝 위치 |
 | `stop_reason` | u8 | 8.3 의 정지 사유(0 없음, 1–12) |
 | `distance_confirm` | u8 | 0 없음·대기, 1 도달, 2 보류(8.3 잠정 확인) |
@@ -324,7 +325,7 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 | `mcu_bypass` | u8 | 지금 무장에서 쓰이는 우회 비트(8.1) |
 | `drive` | u8 | bit0–1 실행 상태(0 없음, 1 준비, 2 구동, 3 끝), bit4–5 모드 |
 | `conn_gen` | u8 | 연결 변경 수(mod 256) |
-| `run_flags` | u8 | bit0 이 실행의 측정이 끊김(구동 시작 때 `valid` 아님 또는 ARM 뒤 손실, 다음 ARM 까지 실시간), bit1 결과의 bit0(끝에서 고정), bit2 잠정 확인이 손실로 끝남, bit3 끝에서 마지막으로 센 프레임이 0x0000, bit4 구동 시작 틱에 새 비영 프레임이 없었음(측정 전용), bit5 결과 실행이 hold, bit6 결과 실행이 거리 실행(bit5·6 은 bench7, 끝에서 고정). 나머지 0 |
+| `run_flags` | u8 | bit0 이 실행의 측정이 끊김(구동 시작 때 `valid` 아님 또는 ARM 뒤 손실, 다음 ARM 까지 실시간), bit1 결과의 bit0(끝에서 고정), bit2 잠정 확인이 손실로 끝남, bit3 끝에서 마지막으로 센 프레임이 0x0000(`mt`: 끝 위치가 그 틱에 받아들인 표본이 아님 — 읽기 실패이거나 결과 고정이 그 틱 바퀴 처리 전), bit4 구동 시작 틱에 새 비영 프레임이 없었음(`mt`: 그 틱 읽기 실패; 측정 전용), bit5 결과 실행이 hold, bit6 결과 실행이 거리 실행(bit5·6 은 bench7, 끝에서 고정). 나머지 0 |
 | `result_axis`, `result_source` | u8, u8 | 결과의 축·원천 |
 | `deadband_entries` | u16 | bench7: hold 실행에서 신뢰 표본이 데드밴드 밖 → 안으로 들어온 횟수(1 kHz, mod 65536 으로 돎, ARM 때 0, 다음 ARM 까지) |
 | `result_bypass` | u8 | bench7: 결과 실행의 우회 비트(끝 전이에서 고정). 결과가 없으면 0 |
@@ -350,6 +351,13 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
 - `bench_state_0303`(bench7) — seq 0x0303, 필드 순서대로 `0x0302, 0x00C0FFEE, 0x00C0FFEE, 3, 1, 1, 0, 0x0FFF, −12340, −12345, 0, −12341, 1, 0, 0, 0, 7, 5, 0, 0x23, 9, 0x20, 3, 1, 0xFFFE, 2`:
   `0a038203030203eeffc004eeffc0040301010bff0fcccfffffc7cfffff01010106cbcfffff010101010102070205010b2309200301feff02f34400`
 
+- `bench_set_0011`(bench8) — seq 0x0011, boot 0xDEADBEEF, echo 0x0000000100ABCDEF, run 0x00B8B8B8, mode 1, axis 0, source 2, count_sign −1, bypass 0, duty (1500, 10000, 1500, 1500), time (2000, 2147483, 2000, 2000), stop −4096:
+  `0403061108efbeaddeefcdab0201010104b8b8b802010302ff0101010bdc051027dc05dc05d00701049bc42003d0070103d007010106f0ffff806c00`
+- `bench_hold_0012`(bench8) — seq 0x0012, boot 0xDEADBEEF, arm_gen 0x0203, echo 0x0000000100ABCDEF, valid 100, run 0x00B8B8B9, axis 1, source 2, target_kind 3 (`rel`), target 200, cpr 8192, kp 0.5, ki 0, kd 0, deadband 12, duty_max 1500, min_duty 1200, sign 1:
+  `040307120aefbeadde0302efcdab02010101026404b9b8b805010203c801010102200101023f01010101010101020c08dc05b004016bdc00`
+- `bench_state_0404`(bench8) — seq 0x0404, 필드 순서대로 `0x0403, 0x00B8B8B8, 0x00B8B8B8, 0, 2, 1, 2, 3, 70000, 0, 74096, 70000, 8, 0, 1, 0, 4, 0, 0, 0x13, 11, 0x40, 0, 2, 0, 0`(H 손실 중 L·MT 결과, MT 표본 나이 3 ms):
+  `0a038204040304b8b8b804b8b8b801050201020304701101010101010470210104701101020802010101020401010104130b400202010103af5200`
+
 ### 8.7 `BENCH_HOLD` (bench7)
 
 hold 실행의 명령이다(계획 4.3 결정 2–8, 근거와 반례는 계획에). 첫 수락이 목표와 설정을 고정하고, 뒤따르는 것은 같은 설정일 때만 마감을 늘린다.
@@ -371,3 +379,12 @@ hold 실행의 명령이다(계획 4.3 결정 2–8, 근거와 반례는 계획�
 - **제어**: 오차 = 목표 − 마지막으로 센 비영 프레임의 누적값. 마지막으로 센 프레임이 0x0000 이거나 카운트가 `valid` 가 아니면 출력 0. 데드밴드 안 0(적분은 쌓지 않고 보존). 밖에서는 PI − kd × 속도(신뢰 표본 두 개의 취득 시각 차로 계산, 10 ms 1 차 저역), 최소 듀티는 출력이 오차 방향일 때만 올리고, 마지막에 상한. 출력 = `sign` × 그 값.
 - **진행 감시**: 시간은 구간(HAL 읽기 사이)마다 `applied_any` 이거나 오차(0x0000 이면 잠정 누적)가 데드밴드 밖이면 더한다. 기준 r 하나: 신뢰 표본이 데드밴드 안이면 타이머 0·r = \|e\|, 진행 자격이 없으면 r = min(r, \|e\|), 자격이 있으면 \|e\| ≤ r − 2 에서 타이머 0, \|e\| ≥ r + 4 에서 r 을 다시 잡는다. 진행 자격은 HAL 이 쓴 같은 방향 비교값 구간이 이어지고(목표 쪽으로 미는 방향), 이 표본의 묶음 시작이 그 구간 첫 쓰기 + 200 µs 이후이며, 바로 앞 신뢰 표본도 그 구간 안(첫 쓰기 이후)일 때다. 300 ms 에 10 `no_progress`(그 창에 신뢰 표본이 없으면 11). 구동 중 0x0000 만 4 ms 넘게 세면 11. 손실은 12. 역방향 128 정지는 hold 에 없다.
 - **끝**: 듀티 실행과 같다(8.3). 끝난 뒤 `stopping`·`not_armed` 로 거부한 HOLD 는 `run_id`·축·원천이 결과 실행과 같을 때만 `blocked` 에 센다.
+
+### 8.8 MT 원천 (bench8, 계획 4.5)
+
+- 짝: `mt` 는 축 L·R 만, `kth` 는 M·H 만(`BENCH_SET`·`BENCH_HOLD`). MT 카운트는 그 바퀴의 `STATE.wheel_count_left/right` 와 같은 값(엔코더 부호 적용 뒤, 모듈러 32 비트)이고 상대 원천이다 — `BENCH_HOLD` 의 목표는 `here`·`rel` 만, `cpr` 은 호스트가 싣는 모터축 값(1–65535, KTH 는 4096 만).
+- 표본: 보드 HAL 은 바퀴마다 LPTIM 안정 읽기의 성공과 읽기 직전 시각을 넘기고(벤치 이미지만), 코어는 실패 틱을 표본으로 쓰지 않는다(바퀴 누적기도 갱신하지 않아 기존 `gap`·`jump` 가 마지막 성공 표본 기준이 됨). 실패 틱의 MT hold 출력은 0 이다.
+- 손실: 바퀴 `gap`·`jump` 는 그 바퀴를 MT 로 측정하는 실행(ARMED·STOPPING)에서만 고장이고, 그 밖에는 `fault_flags` 에 보고만 하며 다음 ARM 이 지운다. 그 바퀴가 손실 중(성공 표본으로 재기준 전)이면 그 바퀴의 MT `BENCH_ARM` 은 `sensor_invalid`. 손실이 고장이 된 실행의 결과는 `run_flags` bit1, 결과 고정이 이번 틱 바퀴 처리 전이면(SPI 응답 오류 등) bit3 과, 같은 틱 그 결과 바퀴의 손실을 bit1 로 늦게 붙인다.
+- 거리: 첫 비영 명령은 그 틱에 받아들인 표본으로만 기준을 잡는다(없으면 `sensor_invalid`). 진행 감시는 HAL 이 보고한 적용 출력 구간에 귀속하고 구간마다 기준점을 새로 잡는다. 잠정 확인(`distance_provisional`)은 없다.
+- 증거: MT 의 증거 시각은 자격 있는 진행(거리: 기대 방향 R=2, hold: 오차 R=2 개선 또는 움직임으로 데드밴드 진입)의 표본 시각이다. 같은 틱 표본의 나이는 0.
+- 극성: 그 바퀴의 MT 실행에서는 시운전 빌드의 극성 판단도 `count_sign × 듀티` 를 기대 방향으로 쓴다. 읽기 실패 틱은 고착·극성 판단을 멈추고(출력 문턱 아래면 에피소드는 끝남), 걸음을 버린 재기준은 감시도 새로 시작한다.

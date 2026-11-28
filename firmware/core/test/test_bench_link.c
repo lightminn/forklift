@@ -43,6 +43,86 @@ static const uint8_t BENCH_STATE_0303[] = {
     0x01, 0x01, 0x0b, 0xff, 0x0f, 0xcc, 0xcf, 0xff, 0xff, 0xc7, 0xcf, 0xff, 0xff, 0x01, 0x01, 0x01,
     0x06, 0xcb, 0xcf, 0xff, 0xff, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x07, 0x02, 0x05, 0x01, 0x0b,
     0x23, 0x09, 0x20, 0x03, 0x01, 0xfe, 0xff, 0x02, 0xf3, 0x44, 0x00};
+/* bench8 (plan 4.5 A1c): an L MT distance SET, an R MT hold, the L run's result (MT sample age 3 ms, H lost) */
+static const uint8_t BENCH_SET_0011[] = {
+    0x04, 0x03, 0x06, 0x11, 0x08, 0xef, 0xbe, 0xad, 0xde, 0xef, 0xcd, 0xab, 0x02, 0x01, 0x01, 0x01,
+    0x04, 0xb8, 0xb8, 0xb8, 0x02, 0x01, 0x03, 0x02, 0xff, 0x01, 0x01, 0x01, 0x0b, 0xdc, 0x05, 0x10,
+    0x27, 0xdc, 0x05, 0xdc, 0x05, 0xd0, 0x07, 0x01, 0x04, 0x9b, 0xc4, 0x20, 0x03, 0xd0, 0x07, 0x01,
+    0x03, 0xd0, 0x07, 0x01, 0x01, 0x06, 0xf0, 0xff, 0xff, 0x80, 0x6c, 0x00};
+static const uint8_t BENCH_HOLD_0012[] = {
+    0x04, 0x03, 0x07, 0x12, 0x0a, 0xef, 0xbe, 0xad, 0xde, 0x03, 0x02, 0xef, 0xcd, 0xab, 0x02, 0x01,
+    0x01, 0x01, 0x02, 0x64, 0x04, 0xb9, 0xb8, 0xb8, 0x05, 0x01, 0x02, 0x03, 0xc8, 0x01, 0x01, 0x01,
+    0x02, 0x20, 0x01, 0x01, 0x02, 0x3f, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x0c, 0x08,
+    0xdc, 0x05, 0xb0, 0x04, 0x01, 0x6b, 0xdc, 0x00};
+static const uint8_t BENCH_STATE_0404[] = {
+    0x0a, 0x03, 0x82, 0x04, 0x04, 0x03, 0x04, 0xb8, 0xb8, 0xb8, 0x04, 0xb8, 0xb8, 0xb8, 0x01, 0x05,
+    0x02, 0x01, 0x02, 0x03, 0x04, 0x70, 0x11, 0x01, 0x01, 0x01, 0x01, 0x01, 0x04, 0x70, 0x21, 0x01,
+    0x04, 0x70, 0x11, 0x01, 0x02, 0x08, 0x02, 0x01, 0x01, 0x01, 0x02, 0x04, 0x01, 0x01, 0x01, 0x04,
+    0x13, 0x0b, 0x40, 0x02, 0x02, 0x01, 0x01, 0x03, 0xaf, 0x52, 0x00};
+
+static link_msg bench8_set(void)
+{
+    link_msg m = {.type = LINK_BENCH_SET, .seq = 0x0011};
+    m.u.bench_set = (link_bench_set){.boot_id = 0xDEADBEEFu,
+                                      .echo_mcu_time_us = 0x0000000100ABCDEFull,
+                                      .run_id = 0x00B8B8B8u,
+                                      .mode = 1,
+                                      .axis = 0,
+                                      .source = 2,
+                                      .count_sign = -1,
+                                      .bypass = 0,
+                                      .duty_max_e4 = {1500, 10000, 1500, 1500},
+                                      .time_ms = {2000, 2147483, 2000, 2000},
+                                      .stop_counts = -4096};
+    return m;
+}
+
+static link_msg bench8_hold(void)
+{
+    link_msg m = {.type = LINK_BENCH_HOLD, .seq = 0x0012};
+    m.u.bench_hold = (link_bench_hold){.boot_id = 0xDEADBEEFu,
+                                        .arm_gen = 0x0203,
+                                        .echo_mcu_time_us = 0x0000000100ABCDEFull,
+                                        .valid_after_echo_ms = 100,
+                                        .run_id = 0x00B8B8B9u,
+                                        .axis = 1,
+                                        .source = 2,
+                                        .target_kind = 3,
+                                        .target_value = 200,
+                                        .cpr = 8192,
+                                        .kp = 0.5f,
+                                        .deadband_counts = 12,
+                                        .duty_max_e4 = 1500,
+                                        .min_duty_e4 = 1200,
+                                        .sign = 1};
+    return m;
+}
+
+static link_msg bench8_state(void)
+{
+    link_msg m = {.type = LINK_BENCH_STATE, .seq = 0x0404};
+    m.u.bench_state = (link_bench_state){.pair_seq = 0x0403,
+                                          .run_id = 0x00B8B8B8u,
+                                          .result_run_id = 0x00B8B8B8u,
+                                          .axis = 0,
+                                          .source = 2,
+                                          .count_state = 1,
+                                          .kth_lost = 2,
+                                          .raw_angle = 3,
+                                          .cumulative = 70000,
+                                          .distance_ref = 74096,
+                                          .cut_position = 70000,
+                                          .stop_reason = 8,
+                                          .blocked = 1,
+                                          .evidence_age_ms = 4,
+                                          .end_evidence_age_ms = 0,
+                                          .drive = 0x13,
+                                          .conn_gen = 11,
+                                          .run_flags = 0x40,
+                                          .result_axis = 0,
+                                          .result_source = 2};
+    return m;
+}
 
 static link_msg bench_hold_0010(void)
 {
@@ -216,6 +296,10 @@ static void golden_vectors(void)
     link_msg h7 = bench_hold_0010(), st7 = bench_state_0303();
     CHECK(encodes_to(&h7, BENCH_HOLD_0010, sizeof BENCH_HOLD_0010));
     CHECK(encodes_to(&st7, BENCH_STATE_0303, sizeof BENCH_STATE_0303));
+    link_msg s8 = bench8_set(), h8 = bench8_hold(), st8 = bench8_state();
+    CHECK(encodes_to(&s8, BENCH_SET_0011, sizeof BENCH_SET_0011));
+    CHECK(encodes_to(&h8, BENCH_HOLD_0012, sizeof BENCH_HOLD_0012));
+    CHECK(encodes_to(&st8, BENCH_STATE_0404, sizeof BENCH_STATE_0404));
 
     link_rx rx;
     link_rx_init(&rx);
@@ -261,6 +345,17 @@ static void golden_vectors(void)
     CHECK_EQ_U(m.u.bench_state.deadband_entries, 0xFFFE);
     CHECK_EQ_U(m.u.bench_state.result_bypass, 2);
     CHECK_EQ_U(m.u.bench_state.run_flags, 0x20);
+
+    CHECK_EQ_I(feed_all(&rx, BENCH_SET_0011, sizeof BENCH_SET_0011, &m), 1);
+    CHECK_EQ_U(m.u.bench_set.source, 2);
+    CHECK_EQ_I(m.u.bench_set.stop_counts, -4096);
+    CHECK_EQ_I(feed_all(&rx, BENCH_HOLD_0012, sizeof BENCH_HOLD_0012, &m), 1);
+    CHECK_EQ_U(m.u.bench_hold.cpr, 8192);
+    CHECK_EQ_U(m.u.bench_hold.axis, 1);
+    CHECK_EQ_I(feed_all(&rx, BENCH_STATE_0404, sizeof BENCH_STATE_0404, &m), 1);
+    CHECK_EQ_U(m.u.bench_state.raw_angle, 3);
+    CHECK_EQ_U(m.u.bench_state.kth_lost, 2);
+    CHECK_EQ_U(m.u.bench_state.result_source, 2);
     CHECK_EQ_U(rx.errors, 0);
 }
 

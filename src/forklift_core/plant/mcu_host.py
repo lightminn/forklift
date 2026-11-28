@@ -573,7 +573,7 @@ class McuLinkHost:
     # ---------------------------------------------------------------- operator requests
     def bench_refusal(self, s: McuState | None = None) -> str | None:
         """Why this host must not send a bench command (plan A1a 1, contract 8): only a commission-mode (bring-up)
-        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench7``), whose
+        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench8``), whose
         STATE says a commissioning build with open outputs and no HIL plant."""
         s = self._state if s is None else s
         if not self.commission_mode:

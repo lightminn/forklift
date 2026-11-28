@@ -520,10 +520,49 @@ static void watch_entries_wrap(void)
     CHECK_EQ_U(h.entries, 0);
 }
 
+/* A1c decision 8 (Codex A1c-1 r1 P2-3): a moving entry is judged against the previous trusted sample's error, never
+   the watch's r -- an exact arrival 14 -> 0 is evidence, a one-count slip 13 -> 12 into the band is not */
+static void watch_moving_entry_evidence(void)
+{
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0); /* the interval's first sample: no previous one in it */
+    CHECK_EQ_U(wtick(14, true, true, false), 0);
+    CHECK(h.progress); /* watch 3: the error fell by R or more */
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(h.progress); /* the exact arrival: in from out, moved the output's way, 14 smaller */
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(!h.progress); /* staying in the band is no evidence */
+
+    /* r 14, the previous sample 13: the old r-based rule took 13 -> 12 as evidence */
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0);
+    CHECK_EQ_U(wtick(14, true, true, false), 0); /* watch 3: r 14 */
+    CHECK_EQ_U(wtick(13, true, true, false), 0); /* not R better than r: r stays 14 */
+    CHECK_EQ_U(h.r, 14u);
+    CHECK_EQ_U(wtick(12, true, true, false), 0);
+    CHECK(!h.progress); /* 13 -> 12: in, but only one count smaller than the previous sample */
+
+    /* r 0, the previous sample 14: the old r-based rule missed the return 14 -> 0 */
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0);
+    CHECK_EQ_U(wtick(0, true, true, false), 0); /* in: r 0 */
+    run_on = false;
+    CHECK_EQ_U(wtick(14, false, true, false), 0); /* pushed off with no output: not eligible, r stays 0 */
+    drive_on(1);
+    CHECK_EQ_U(wtick(14, true, true, false), 0); /* the new interval's first sample */
+    CHECK_EQ_U(h.r, 0u);
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(h.progress); /* back in from 14 on the same interval: evidence */
+}
+
 int main(void)
 {
     targets();
     value_checks();
+    watch_moving_entry_evidence();
     control_order();
     min_duty_only_toward_the_error();
     control_non_finite_resets();

@@ -182,7 +182,9 @@ def unexpected_faults(fault_flags, axis: int, bypass=()) -> tuple:
     bypass is on. The firmware keeps those status bits in STATE whatever the run (a motor-only M is out of range, an
     unfitted H's sensor invalid) while its drive protection follows the run's axis and bypass."""
     flags = FaultFlag(int(fault_flags))
-    expected = FaultFlag.COMMAND_TIMEOUT
+    # bench8 (plan 4.5 A1c decision 4): the wheel gap and jump bits are records only -- ENCODER_GAP is shared by both
+    # wheels, so the bit cannot say whose loss it was; a loss that ended a run as a fault shows as the MCU's FAULT mode
+    expected = FaultFlag.COMMAND_TIMEOUT | FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R
     for ax, bits in _AXIS_STATUS.items():
         if ax != axis:
             expected |= bits

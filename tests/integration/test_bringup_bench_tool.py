@@ -18,7 +18,7 @@ from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 from forklift_core.mcu_link.messages import Mode  # noqa: E402
 
-BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7"
+BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench8"
 
 
 def rows(b):
@@ -27,7 +27,6 @@ def rows(b):
 
 def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, observed="none"), b)
     assert res["result"] == "ok" and res["cleanup_confirmed"], res
@@ -52,7 +51,6 @@ def test_a_wheel_run_on_the_defaults_ends_with_one_zero_and_the_boards_own_stop(
     """Every run on the bench image sends its BENCH_SET (the defaults here), and after driving one zero ends it: the
     MCU stops it itself, so no zero after that one is refused as stopping."""
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
     assert res["result"] == "ok" and res["cleanup_confirmed"], res
     assert res["bench_set"]["overrides"] is False and res["bench_set"]["bypass"] == []
@@ -74,6 +72,7 @@ def test_bench_values_on_another_image_are_refused_before_anything(model):
 @pytest.mark.parametrize("product", [
     "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench4",
     "forklift-mcu commission OPEN diag-fw-bench-2 rec=1f4207f4 lim=lr1 bench3",
+    "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7",  # A1b-2's board under a bench8 host
 ])
 def test_another_bench_generation_is_refused_for_every_run(model, product):
     b = model("--bench", "1")
@@ -95,7 +94,6 @@ def test_another_bench_generation_is_refused_for_every_run(model, product):
 ])
 def test_bench_argument_refusals(model, kw, why):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     base = dict(axis="M", duty=0.12, seconds=1.0, observed="none")
     res = bringup.execute(args(**{**base, **kw}), b)
     assert res["result"] == "refused" and why in res["why"], res
@@ -104,7 +102,6 @@ def test_bench_argument_refusals(model, kw, why):
 
 def test_without_the_range_bypass_the_steering_still_needs_its_window(model):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.12, seconds=1.0, bench_duty_max=0.25, observed="none"), b)
     assert res["result"] == "refused" and "--window" in res["why"]
 
@@ -112,7 +109,6 @@ def test_without_the_range_bypass_the_steering_still_needs_its_window(model):
 def test_a_plain_arm_is_never_sent_to_the_bench_image(model):
     """The host itself refuses a plain ARM on the bench image (the board would answer wrong_build)."""
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     b.run_until(lambda: b.state is not None and b.state.mode == Mode.DISARMED, 3.0)
     import time
 
@@ -122,7 +118,6 @@ def test_a_plain_arm_is_never_sent_to_the_bench_image(model):
 
 def test_steering_above_0_3_runs_with_the_vcc_watch_confirmed(model):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.35, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.5,
                                vcc_watched=True, observed="none"), b)
     assert res["result"] == "ok", res
@@ -132,7 +127,6 @@ def test_the_next_run_recovers_the_last_runs_record_before_its_arm(model):
     """A run's record stays on the board until the next run is consumed: the next run writes it down first (a CLI
     that ended before recording it, same boot)."""
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     first = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
     assert first["result"] == "ok", first
     second = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
@@ -144,7 +138,6 @@ def test_the_next_run_recovers_the_last_runs_record_before_its_arm(model):
 def test_a_run_the_board_ended_by_expiry_is_not_ok(model, monkeypatch):
     """The end zero never sent: the board ends the run by the command expiry, and the board's first cause decides."""
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
 
     def late_end(self):
         self.b.run_until(lambda: self.b.state.mode != Mode.ARMED, 1.0)  # no zero: the commands expire
@@ -171,7 +164,6 @@ def test_a_record_that_cannot_be_written_stops_the_next_arm(model, monkeypatch):
     """The next BENCH_ARM clears the board's record of the last run: if that record cannot be written, nothing is
     armed."""
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     first = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
     assert first["result"] == "ok", first
     real_emit = b.emit
@@ -195,7 +187,6 @@ def test_a_steering_distance_run_ends_at_its_distance(model):
     """--stop-kth-turns: the board cuts the output at the distance and stops the run itself; the CLI reads the latched
     result (never an authorization revoked), records the distance verdict and the rest position at 100 Hz."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=3.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=0.02, observed="none"), b)
     taken = res["bench_set"]
@@ -211,7 +202,6 @@ def test_a_steering_distance_run_ends_at_its_distance(model):
 
 def test_a_wrong_count_sign_stops_without_progress(model):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=3.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=0.5, count_sign=-1, observed="none"), b)
     assert res["distance"]["result"] == "stopped:no_progress", res
@@ -221,7 +211,6 @@ def test_a_wrong_count_sign_stops_without_progress(model):
 def test_a_count_stuck_from_the_start_refuses_the_distance_arm(model):
     """The KTH frame 0x0000 from the start: no trusted sample, so the board refuses the distance run's ARM."""
     b = model("--bench", "1", "--kth-zero-at-ms", "M:0")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=1.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                stop_kth_turns=0.02, observed="none"), b)
     assert res["result"] == "refused", res
@@ -235,7 +224,6 @@ def test_a_count_stuck_from_the_start_refuses_the_distance_arm(model):
 ])
 def test_bad_distances_are_refused_before_anything(model, axis, turns, why):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis=axis, duty=0.1, seconds=1.0, stop_kth_turns=turns, observed="none"), b)
     assert res["result"] == "refused" and why in res["why"], res
     assert not {"BENCH_SET", "BENCH_ARM"} & set(kinds_written(b))
@@ -247,7 +235,6 @@ def nonzero_writes(b):
 
 def test_a_high_duty_distance_is_shown_never_refused(model, capsys):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.45, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.5,
                                bench_time_max=5.0, stop_kth_turns=0.02, vcc_watched=True, observed="none"), b)
     assert res["result"] != "refused", res
@@ -260,7 +247,6 @@ def test_a_distance_run_ended_before_its_target_failed(model):
     """The tool's time ran out before the distance (its one zero ended the run): the run failed (plan 4.2 decision 8),
     never 'ok'."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=0.5, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=5.0, observed="none"), b)
     assert res["distance"]["result"] == "missed" and res["distance"]["ended_by"] == "end_zero", res
@@ -269,7 +255,6 @@ def test_a_distance_run_ended_before_its_target_failed(model):
 
 def test_a_one_count_run_has_no_driving_sample(model):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
     assert res["distance"]["result"] == "reached", res
@@ -283,7 +268,6 @@ def test_a_one_count_run_has_no_driving_sample(model):
 def test_the_window_is_judged_before_a_second_non_zero(model):
     """The first accepted sample already outside the window: no second non-zero goes out (impl round 1 P1-2)."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=2.0, window=(-0.5, 0.0001), bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=0.5, observed="none"), b)
     assert res["stop"] == "window", res
@@ -302,7 +286,6 @@ def test_the_window_is_judged_before_a_second_non_zero(model):
 
 def test_a_measuring_kth_run(model):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=0.8, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, kth_measure=True, observed="none"), b)
     assert res["bench_set"]["source"] == 1 and res["bench_set"]["stop_counts"] == 0, res
@@ -322,7 +305,7 @@ def test_a_refused_first_non_zero_is_written_once_and_closed_with_a_written_zero
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
-        b.host.usb_product = BENCH5
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.confirm_bench_arm
 
         def confirm_then_push(self):
@@ -345,7 +328,6 @@ def test_a_short_distance_run_waits_for_the_boards_result(model):
     """--seconds 0.1 with a one-count target: the board may stop before the duty loop's own end; the CLI waits for the
     result pair instead of trying an end zero into the stop (Codex A1b-1b round 3 P2-2)."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(args(axis="M", duty=0.2, seconds=0.1, bench_bypass="steer_range", bench_duty_max=0.25,
                                bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
     assert res.get("aborted") != "bench_end_zero_not_queued", res
@@ -366,7 +348,6 @@ def test_a_here_hold_settles_and_ends_by_its_zero(model):
     """A here hold: the readiness zero on M (the board refuses L(0) in a hold run), BENCH_HOLDs for the run, the end
     zero, verdict 2 met, the result named a hold with its own bypass and target (plan 4.3 decisions 9-10)."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(hargs(hold="here", seconds=1.6), b)
     assert res["result"] == "ok" and res["cleanup_confirmed"], res
     h = res["hold"]
@@ -388,7 +369,6 @@ def test_a_here_hold_settles_and_ends_by_its_zero(model):
 
 def test_a_rel_hold_moves_to_its_target(model):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(hargs(hold="rel:60", seconds=2.5), b)
     assert res["result"] == "ok", res
     v = res["hold"]["verdict"]
@@ -410,7 +390,7 @@ def test_a_pushed_hold_comes_back(mcu_model):  # noqa: F811
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
-        b.host.usb_product = BENCH5
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.hold_run
 
         def push_mid(self, seconds, stop=None):
@@ -434,7 +414,6 @@ def test_a_hold_on_a_stuck_count_stops_and_fails(model):
     """here at raw 16, then the count reads 0x0000 only: the output is withheld outside the deadband and the board
     stops the run as kth_zero_suspect within 0.3 s; verdict 2 failed (plan 4.3 decisions 5, 7)."""
     b = model("--bench", "1", "--kth-start-raw", "16,16", "--kth-zero-at-ms", "M:1500")
-    b.host.usb_product = BENCH5
     res = bringup.execute(hargs(hold="here", seconds=5.0), b)
     assert res["bench_result"]["stop_reason"] == "kth_zero_suspect", res
     assert res["hold"]["verdict"]["result"] == "failed"
@@ -453,7 +432,6 @@ def test_a_hold_on_a_stuck_count_stops_and_fails(model):
 ])
 def test_hold_refusals_before_anything(model, kw, why):
     b = model("--bench", "1")
-    b.host.usb_product = BENCH5
     res = bringup.execute(hargs(**{**dict(hold="here", seconds=2.0), **kw}), b)
     assert res["result"] == "refused" and why in res["why"], res
     assert not {"BENCH_SET", "BENCH_ARM", "BENCH_HOLD"} & set(kinds_written(b))
@@ -560,7 +538,7 @@ def test_a_refused_first_hold_is_written_once_and_closed_with_a_written_zero(mcu
               commission=True)
     try:
         b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
-        b.host.usb_product = BENCH5
+        b.host.usb_product = m.product  # the model's own (plan 4.5 A1c 2)
         orig = bringup.CommissionSession.confirm_bench_arm
 
         def confirm_then_push(self):
@@ -582,7 +560,6 @@ def test_the_holds_stop_before_the_end_zero(model):
     """The end timeline (plan 4.3 decision 10): the BENCH_HOLDs end before the end zero, which the board takes as
     end_zero; no HOLD is written after it."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     res = bringup.execute(hargs(hold="here", seconds=1.4), b)
     assert res["bench_result"]["stop_reason"] == "end_zero", res
     end = next(w for w in b.writes if w.kind == "COMMISSION" and w.phase == "post_zero")
@@ -642,7 +619,6 @@ def test_one_product_read_picks_the_link_and_tells_the_host():
 
 def test_a_hold_whose_settings_cannot_be_written_sends_no_hold(model, monkeypatch):
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     orig = bringup.Bench.emit
 
     def emit(self, row):
@@ -663,7 +639,6 @@ def test_a_window_stop_closes_the_hold_gate(model):
     import time
 
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     b.gate_holder = {"host": b.host, "cancelled": False, "hold_until_ns": None}
     res = bringup.execute(hargs(hold="rel:200", seconds=3.0, bench_bypass=None, window=(-0.1, 0.05)), b)
     assert res["stop"] == "window", res
@@ -685,7 +660,6 @@ def test_the_boards_own_end_confirms_the_cleanup_when_the_disarm_echo_is_lost(mo
     """This run's ENDED then DISARMED pair of the arming that named it: the cleanup is confirmed without the DISARM's
     echo (plan 3 verdict 1; Codex A1b-2b rounds 2-3)."""
     b = model("--bench", "1", "--kth-start-raw", "1000,1000")
-    b.host.usb_product = BENCH5
     orig = bringup.CommissionSession.cleanup
 
     def cleanup_echo_lost(self):

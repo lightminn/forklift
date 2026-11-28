@@ -71,6 +71,7 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_MODE_HOLD 2u /* bench7 (plan 4.3 A1b-2): source kth, axis M or H, no stop_counts */
 #define DRIVE_BENCH_SOURCE_NONE 0u
 #define DRIVE_BENCH_SOURCE_KTH 1u /* bench6: the run axis's KTH travel count (M, H) */
+#define DRIVE_BENCH_SOURCE_MT 2u  /* bench8 (plan 4.5 A1c): the run wheel's incremental count (L, R), relative */
 /* BENCH_STATE.count_state */
 #define DRIVE_BENCH_COUNT_NONE_YET 0u
 #define DRIVE_BENCH_COUNT_VALID 1u
@@ -221,6 +222,11 @@ typedef struct {
     int8_t run_sign[DRIVE_CH_COUNT];       /* physical */
     uint32_t abs_start_us[2];              /* each fresh frame's bundle start: a lower bound of its acquisition */
     bool abs_start_known[2];
+    /* bench8 (plan 4.5 A1c decision 4): the wheel reads' report. Without it (wheel_report false) every read counts
+       as a success taken at now_us. */
+    bool wheel_report;
+    bool wheel_fresh[2];       /* the stable read succeeded (else wheel_hw is the previous value) */
+    uint32_t wheel_start_us[2]; /* HAL clock just before that wheel's read: its sample time */
 #endif
 } drive_inputs;
 
@@ -326,6 +332,22 @@ typedef struct drive {
     int8_t fb_run_sign[DRIVE_CH_COUNT];
     bool lc_pending, lc_settled; /* a link change noted for the next drive_begin */
     uint32_t lc_since32;         /* HAL clock when it began */
+    /* bench8 (plan 4.5 A1c): the MT views of the wheels (bench_kth fields: have, lost, losses, cum, trust_cum,
+       trust_t; last_zero is never set), this tick's accepted sample bits and sample times, the wheels' loss state */
+    bench_kth mt[2];
+    uint8_t mt_bits[2];
+    uint64_t mt_lo[2];
+    bool mt_lo_known[2];
+    bool wheel_based[2]; /* the wheel's accumulator has a base taken on a successful read */
+    bool wheel_grace[2]; /* the late first sample's step may still be dropped without a loss (decision 4 (a)) */
+    uint64_t first_tick_us;
+    bool first_tick_seen;
+    bool wheels_done;    /* this tick's wheel samples are processed (cleared at drive_finish) */
+    bool res_pre_wheel;  /* the result was fixed this tick before the wheel samples (late attribution, decision 10) */
+    bool w_base_set;     /* an MT distance run's watch base is set on this output interval (decision 7) */
+    uint64_t w_base_since;
+    bool mt_fresh[2];    /* this tick's read of the wheel succeeded */
+    uint64_t tick_dt_us; /* this tick's length (the encoder watch's pause, decision 4) */
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

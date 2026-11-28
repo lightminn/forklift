@@ -10,7 +10,12 @@
 #include "fw/drive.h"
 
 #define TWO_PI_F 6.28318530717958647692f
-#define RAD_PER_COUNT (TWO_PI_F / (float)BENCH_HOLD_CPR)
+
+/* rad of the source's shaft per count: the KTH sensor shaft at 4096, the MT motor shaft at its own CPR (A1c 5) */
+static float rad_per_count(const bench_hold *h)
+{
+    return TWO_PI_F / (float)h->cfg.cpr;
+}
 
 bool bench_hold_values_ok(const link_bench_hold *c, uint16_t axis_duty_max_e4)
 {
@@ -24,8 +29,15 @@ bool bench_hold_values_ok(const link_bench_hold *c, uint16_t axis_duty_max_e4)
     if (c->duty_max_e4 < 1u || c->duty_max_e4 > axis_duty_max_e4 || c->min_duty_e4 > c->duty_max_e4) {
         return false;
     }
-    if (c->valid_after_echo_ms == 0 || c->cpr != BENCH_HOLD_CPR || c->deadband_counts > 512u ||
-        c->target_kind > BENCH_HOLD_TARGET_REL) {
+    if (c->valid_after_echo_ms == 0 || c->deadband_counts > 512u || c->target_kind > BENCH_HOLD_TARGET_REL) {
+        return false;
+    }
+    if (c->source == DRIVE_BENCH_SOURCE_MT) {
+        /* the MT count is relative: no zero, no absolute target; its CPR is the host's motor shaft value */
+        if (c->cpr == 0u || c->target_kind == BENCH_HOLD_TARGET_ZERO || c->target_kind == BENCH_HOLD_TARGET_ABS) {
+            return false;
+        }
+    } else if (c->cpr != BENCH_HOLD_CPR) {
         return false;
     }
     if (c->target_kind == BENCH_HOLD_TARGET_ABS && (c->target_value < 0 || c->target_value > 4095)) {
@@ -80,6 +92,8 @@ void bench_hold_start(bench_hold *h, const link_bench_hold *c, uint16_t raw, uin
     h->rate_t = trust_t;
     h->r = abs_err(h, cum);
     h->in_band = h->r <= c->deadband_counts;
+    h->prev_in = h->in_band;
+    h->prev_cum = cum;
     h->prev_lo_known = lo_known;
     h->prev_lo = lo;
     h->prev_run_valid = false; /* no output before the run's first HOLD */
@@ -105,7 +119,7 @@ float bench_hold_control(bench_hold *h, bool usable, bool trusted_new, uint32_t 
         /* the rate on the samples' own acquisition times, never the consuming ticks' (independent review P1-4) */
         if (h->rate_have && trust_t > h->rate_t) {
             float dt = (float)(trust_t - h->rate_t);
-            float raw = (float)bench_kth_diff(trust_cum, h->rate_cum) * RAD_PER_COUNT / (dt * 1e-6f);
+            float raw = (float)bench_kth_diff(trust_cum, h->rate_cum) * rad_per_count(h) / (dt * 1e-6f);
             float alpha = dt / (BENCH_HOLD_TAU_US + dt);
             h->rate += alpha * (raw - h->rate);
         }
@@ -120,7 +134,7 @@ float bench_hold_control(bench_hold *h, bool usable, bool trusted_new, uint32_t 
         return 0.0f; /* inside the deadband: no minimum duty, no D, the integral kept as it is */
     }
     float cap = (float)c->duty_max_e4 / 10000.0f;
-    float er = (float)e * RAD_PER_COUNT;
+    float er = (float)e * rad_per_count(h);
     float integ = h->integ + c->ki * er * dt_s;
     if (!isfinite(integ) || !isfinite(h->rate)) {
         h->integ = 0.0f; /* checked before the clamp turns an infinity into the cap (Codex A1b-2a round 1) */
@@ -185,15 +199,26 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
         h->zr_us = 0;
         h->fb_zr_us = 0;
     }
+    h->progress = false;
     if (t->trusted_new) {
         uint32_t a = abs_err(h, t->trust_cum);
         int32_t e = bench_kth_diff(h->target, t->trust_cum);
         bool in = a <= db;
         h->trusted_seen = true;
-        bool eligible = t->run_valid && t->lo_known && h->prev_lo_known && h->prev_run_valid &&
-                        h->prev_run_since == t->run_since && h->prev_lo >= t->run_since &&
-                        t->lo >= t->run_since + BENCH_HOLD_ELIGIBLE_US && e != 0 &&
-                        (e > 0 ? 1 : -1) == t->run_dir;
+        bool timing = t->run_valid && t->lo_known && h->prev_lo_known && h->prev_run_valid &&
+                      h->prev_run_since == t->run_since && h->prev_lo >= t->run_since &&
+                      t->lo >= t->run_since + BENCH_HOLD_ELIGIBLE_US;
+        bool eligible = timing && e != 0 && (e > 0 ? 1 : -1) == t->run_dir;
+        /* A1c decision 8: a moving entry -- the previous trusted sample out, this one in, moved the output's way, the
+           error R or more smaller than that previous sample's (never the watch's r), on the same output interval; the
+           error's own sign is not needed (an exact arrival has none) -- Codex A1c-1 r1 P2-3 */
+        int32_t moved = bench_kth_diff(t->trust_cum, h->prev_cum);
+        uint32_t prev_a = abs_err(h, h->prev_cum);
+        bool moving_entry = in && !h->prev_in && timing && moved != 0 && (moved > 0 ? 1 : -1) == t->run_dir &&
+                            (int64_t)a <= (int64_t)prev_a - BENCH_HOLD_R;
+        if (moving_entry) {
+            h->progress = true;
+        }
         if (in) {
             h->timer_us = h->fb_timer_us = 0; /* 1: the target reached, eligible or not */
             h->r = a;
@@ -206,9 +231,12 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
             h->timer_us = h->fb_timer_us = 0; /* 3 */
             h->r = a;
             h->trusted_seen = false;
+            h->progress = true;
         } else if ((int64_t)a >= (int64_t)h->r + 2 * BENCH_HOLD_R) {
             h->r = a; /* 4: moved away; the return will count */
         }
+        h->prev_in = in;
+        h->prev_cum = t->trust_cum;
         h->prev_lo_known = t->lo_known;
         h->prev_lo = t->lo;
         h->prev_run_valid = t->run_valid;
@@ -218,7 +246,7 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
         return DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
     }
     if (h->timer_us >= BENCH_HOLD_WATCH_US) {
-        return h->trusted_seen ? DRIVE_BENCH_STOP_NO_PROGRESS : DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
+        return h->trusted_seen || t->mt ? DRIVE_BENCH_STOP_NO_PROGRESS : DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT;
     }
     return 0;
 }

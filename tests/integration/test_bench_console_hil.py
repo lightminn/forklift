@@ -27,7 +27,7 @@ import bench_console  # noqa: E402
 from real_mcu_link import BenchTtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
-BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7"
+BENCH5 = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench8"  # what the bench8 model says
 
 
 class PtyDevice:
@@ -65,11 +65,19 @@ class Model:
         tty.setraw(self.slave)
         os.set_blocking(self.master, False)
         argv = [str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1", "--bench", "1"]
-        self.proc = subprocess.Popen(argv + list(extra))
+        self.proc = subprocess.Popen(argv + list(extra), stdout=subprocess.PIPE)
+        # the model's own product (bench console plan 4.5 A1c decision 2): the rigs run only against a bench8 model
+        from forklift_core.plant import bench_limits
+
+        self.product = bench_limits.read_model_product(self.proc.stdout.fileno())
+        if not bench_limits.bench_image(self.product):
+            self.close()  # no child or pty outlives a refused model (Codex A1c-1 r1 P2-5)
+            raise AssertionError(f"the model is not this tool's bench image: {self.product!r}")
 
     def close(self):
         self.proc.send_signal(signal.SIGTERM)
         self.proc.wait(timeout=5)
+        self.proc.stdout.close()
         os.close(self.master)
         os.close(self.slave)
 
@@ -129,10 +137,10 @@ class Browser:
 def rig(mcu_model, tmp_path):  # noqa: F811
     made = []
 
-    def make(*extra, product=BENCH5):
+    def make(*extra, product=None):
         m = Model(mcu_model, *extra)
         made.append(m)
-        dev = PtyDevice(m.master, product)
+        dev = PtyDevice(m.master, m.product if product is None else product)  # the model's own, unless a test overrides
         c = bench_console.BenchConsole(dev, runs_root=tmp_path / "runs")
         dev.attach(c)
         b = Browser(c)

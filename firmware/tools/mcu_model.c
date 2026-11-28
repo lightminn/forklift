@@ -25,13 +25,16 @@
    commissioning model with one axis per arming; the product string ends " lim=lr1 sa1".
   --bench 1: the bench image (bench console plan A1, mcu-link contract 8): an open commissioning model that takes
   BENCH_SET/BENCH_ARM (one run per arming) and sends a BENCH_STATE with every STATE; the board's product string ends
-  " lim=lr1 bench7". The model has no connection changes (no link_conn). The model links the bench core even without
+  " lim=lr1 bench8", and says that whole product on its first stdout line ("product: ...", plan 4.5 A1c decision
+  2) so a host never gives an old model binary a product it cannot speak. The model has no connection changes (no link_conn). The model links the bench core even without
   --bench, so there a bench frame (0x06-0x08) reaches the core as wrong_build where a non-bench board drops it as an
   unknown type (rx_errors); the bench types' unknown-ness is held by test_link_nobench, not by this model.
   --kth-start-raw M,H: the KTH raw angles (0..4095) of M and H at their joint zero (each axis's zero offset), so a
   distance run can start on a non-zero frame (bench console plan 4.2 A1b-1b). --kth-zero-at-ms AXIS:MS (AXIS M or
   H): from MS on, that axis's reported KTH frame is 0x0000 (a MISO stuck low) while the plant goes on moving; the
   real position is in --axis-log.
+  --encoder-read-fail W:MS:N (bench image): wheel W's stable reads fail for N ticks from MS on -- the core sees
+  the board's read report with that wheel not fresh and the last good value (bench console plan 4.5 A1c decision 4).
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-frozen W: wheel W's counts never move (a wheel with no encoder
    fitted, design 2026-11-25-bench-commission-limits 4). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
@@ -92,6 +95,8 @@ typedef struct {
     long kth_zero_at_ms;
     bool bench; /* --bench: the bench image's output rule and report; other builds keep the plant on the duty */
     bench_pwm_model pwm; /* bench7: the board's output rule and report (plan 4.3 A1b-2 decision 6) */
+    int read_fail_wheel;  /* bench8 --encoder-read-fail W:MS:N: wheel W's reads fail for N ticks from MS (-1 none) */
+    long read_fail_at_ms, read_fail_ticks;
     drive_outputs applied; /* what that rule wrote: the plant moves on it */
 } board;
 
@@ -163,6 +168,25 @@ static void hal_read(void *ctx, drive_inputs *in)
         in->abs_start_us[0] = in->abs_start_us[1] = in->now_us;
         in->abs_start_known[0] = in->abs_start_known[1] = true;
         bench_pwm_read(&B.pwm.t, true, hal_now(ctx), in);
+        /* bench8 (plan 4.5 A1c decision 4): the wheel reads' report, as the board's; a failed read keeps the last
+           successful value, as the board's HAL does */
+        static uint16_t last_ok[2];
+        static bool have_ok[2];
+        in->wheel_report = true;
+        for (int i = 0; i < 2; i++) {
+            bool fail = B.read_fail_wheel == i && t >= B.read_fail_at_ms && B.read_fail_ticks > 0;
+            in->wheel_fresh[i] = !fail || !have_ok[i];
+            in->wheel_start_us[i] = in->now_us;
+            if (in->wheel_fresh[i]) {
+                last_ok[i] = in->wheel_hw[i];
+                have_ok[i] = true;
+            } else {
+                in->wheel_hw[i] = last_ok[i];
+            }
+            if (fail && !in->wheel_fresh[i]) {
+                B.read_fail_ticks--; /* only a failure really given (the first read has nothing to repeat) */
+            }
+        }
     }
 }
 
@@ -516,6 +540,19 @@ int main(int argc, char **argv)
     if (cfg.bench_build) {
         cfg.command_timeout_ms = 150; /* as the board (board_config.c): the echo bounds of SET/ARM match it */
     }
+    B.read_fail_wheel = -1;
+    const char *read_fail = arg_str(argc, argv, "--encoder-read-fail");
+    if (read_fail != NULL) {
+        int w = -1;
+        long at = -1, n = -1;
+        if (sscanf(read_fail, "%d:%ld:%ld", &w, &at, &n) != 3 || w < 0 || w > 1 || at < 0 || n < 1) {
+            fprintf(stderr, "--encoder-read-fail W:MS:N: wheel 0 or 1, MS >= 0, N >= 1 ticks\n");
+            return 2;
+        }
+        B.read_fail_wheel = w;
+        B.read_fail_at_ms = at;
+        B.read_fail_ticks = n;
+    }
     const char *kth_start = arg_str(argc, argv, "--kth-start-raw");
     if (kth_start) {
         unsigned m_raw = 0, h_raw = 0;
@@ -549,6 +586,11 @@ int main(int argc, char **argv)
     if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id, DRIVE_RESET_POWER)) {
         fprintf(stderr, "fw_app_init refused the configuration\n");
         return 2;
+    }
+    if (B.bench) {
+        /* bench8 (plan 4.5 A1c decision 2): the model's own product, on its first stdout line, flushed at once */
+        printf("product: forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench8\n");
+        fflush(stdout);
     }
     uint64_t next = B.now_ns;
     while (!stop_requested && (duration_ms < 0 || elapsed_ms() < duration_ms)) {

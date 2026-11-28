@@ -166,7 +166,7 @@ def confirmation_phrase(ask: RunAsk) -> str:
 # The bench image ends its USB product string with exactly these tokens (gen_build_info.cmake); the generation names the
 # wire contract it speaks (bench6: BENCH_SET / BENCH_ARM / BENCH_STATE). Any other generation is not this one: it is
 # refused for every run and stays out of gates (judgement.diagnostic_image).
-BENCH_SUFFIX = ("lim=lr1", "bench7")
+BENCH_SUFFIX = ("lim=lr1", "bench8")  # bench8: the MT source (bench console plan 4.5 A1c), no bench7 fallback
 # The checks a BENCH_SET may turn off for one run (firmware drive.h DRIVE_BENCH_*). The stopping side -- overcurrent,
 # current sense, driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun -- has no name and never will.
 BENCH_BYPASS_BITS = {"steer_range": 1 << 0, "lift_range": 1 << 1}
@@ -181,6 +181,38 @@ def bench_image(product: str | None) -> bool:
     """Whether a USB product string is this tool's bench image: the open commissioning prefix and the exact suffix."""
     return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX)
             and tuple(product.split()[-len(BENCH_SUFFIX):]) == BENCH_SUFFIX)
+
+
+# The MCU model's bench image says its own product on its first stdout line (plan 4.5 A1c decision 2), so an old model
+# binary is never given a product it cannot speak: the host reads it within a deadline and refuses otherwise.
+MODEL_PRODUCT_LINE = "product: "
+MODEL_PRODUCT_DEADLINE_S = 2.0
+
+
+def read_model_product(fd: int, deadline_s: float = MODEL_PRODUCT_DEADLINE_S) -> str | None:
+    """The product the model says on its first stdout line, read from ``fd`` (non-blocking reads under a deadline),
+    or None when none came in time (an old model says nothing and keeps running) or the line is not one."""
+    import os
+    import select
+    import time
+
+    end = time.monotonic() + deadline_s
+    buf = b""
+    while b"\n" not in buf:
+        left = end - time.monotonic()
+        if left <= 0:
+            return None
+        ready, _w, _x = select.select([fd], [], [], left)
+        if not ready:
+            return None
+        chunk = os.read(fd, 256)
+        if not chunk:
+            return None  # the model ended
+        buf += chunk
+        if len(buf) > 512:
+            return None
+    line = buf.split(b"\n", 1)[0].decode("utf-8", "replace")
+    return line[len(MODEL_PRODUCT_LINE):] if line.startswith(MODEL_PRODUCT_LINE) else None
 
 
 def any_bench_image(product: str | None) -> bool:
