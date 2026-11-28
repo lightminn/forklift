@@ -4,7 +4,7 @@
 // STOP is the shared one (pressStop): the bench screen adds only its own requests.
 
 import { AXES, BYPASS, DEFAULT_SOURCE, HOLD_TARGETS, advice, bypassChips, clearView, clearedOnChange, fieldState,
-  largePhrase, rangeMarkBefore, resultView, runKind, targetsInWindow } from "./bench.js";
+  largePhrase, rangeMarkBefore, restWords, resultView, runKind, targetsInWindow } from "./bench.js";
 import { BENCH_TEXT as T, benchDetailText } from "./profile.js";
 
 const VIEW = "bench";
@@ -358,11 +358,7 @@ function renderResult(m) {
     row(T.verdictHold, holdText),
     row(v.measure || v.kind === "measure" ? T.verdictMeasure : T.verdictDistance, distText),
     v.rest ? row(T.rest, `${v.rest.cumulative !== null ? `누계 ${v.rest.cumulative} 카운트 · ` : ""}`
-      + `${v.rest.result === "settled_at_100hz" ? T.restSettled
-        : v.rest.result === null && v.rest.note === "reopened" ? T.restNote.reopened
-          : `확인 못 함${v.rest.why ? `(${T.restWhy[v.rest.why] ?? v.rest.why})` : ""}`}`
-      + `${v.rest.note && !(v.rest.result === null && v.rest.note === "reopened")
-        ? ` · ${T.restNote[v.rest.note] ?? v.rest.note}` : ""}`) : null,
+      + `${restWords(v.rest, T)}`) : null,
     v.holdNotes.length ? row("메모", v.holdNotes.join(" · ")) : null,
     v.resultBypass.length ? row(T.runBypass, v.resultBypass.map((n) => T.bypass[n] ?? n).join(", ")) : null,
     v.previous ? row(T.previousRun, `${v.previous.kind ?? "—"} · ${v.previous.stopReason ?? "—"}`

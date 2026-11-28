@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSession } from "../js/protocol.js";
-import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, targetsInWindow, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
+import { BENCH_TEXT } from "../js/profile.js";
+import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, restWords, targetsInWindow, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
   resultView, runFields, wheelDelta } from "../js/bench.js";
 
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
@@ -540,8 +541,14 @@ test("a board gap's sample is null in every field and the legend names each run'
   const s = g.series("M");
   assert.deepEqual(s.map((x) => x.target), [60, null, 60, null, 120]);
   assert.deepEqual(s.map((x) => x.holdError), [3, null, 2, null, -8]);
-  assert.deepEqual(targetsInWindow(s), [60, 120]);  // the earlier run's line keeps its own number
-  assert.deepEqual(targetsInWindow(s.slice(0, 4)), [60]);  // an unconfirmed target adds nothing
+  // every target sample here is alone between a gap or an unconfirmed target: no dashed segment, no legend number
+  assert.deepEqual(targetsInWindow(s), []);
+  g.push(50, st(-4, 120));
+  g.push(60, { board: null });
+  g.push(70, st(1, 130));  // alone again: drawn as nothing, named as nothing
+  assert.deepEqual(targetsInWindow(g.series("M")), [120]);
+  const two = [60, 60, null, 120, 120].map((target) => ({ target }));
+  assert.deepEqual(targetsInWindow(two), [60, 120]);  // the earlier run's line keeps its own number
 });
 
 
@@ -603,6 +610,19 @@ test("the result view: a withheld measure, a missing distance result, the previo
   // a reopening during the rest position: the back end sends rest null and the note at the top level (r3 P2-3)
   assert.deepEqual(resultView({ rest: null, rest_note: "reopened", verdict: { run_cleanup: { ok: true } } }).rest,
     { result: null, cumulative: null, why: null, note: "reopened" });
+  // the back end's real notes: its cancel reasons (a reopening's is link_reopened; a STOP noted first stays the note)
+  assert.equal(resultView({ rest: null, rest_note: "link_reopened", verdict: { run_cleanup: { ok: true } } }).rest.note,
+    "link_reopened");
+  assert.deepEqual(resultView({ rest: null, rest_note: "stop", verdict: { run_cleanup: { ok: true } } }).rest,
+    { result: null, cumulative: null, why: null, note: "stop" });
+  // the words: a reopening is always said, the reason noted first after it, raw note keys never shown
+  const words = (res) => restWords(resultView({ ...res, verdict: { run_cleanup: { ok: true } } }).rest, BENCH_TEXT);
+  assert.equal(words({ rest: null, rest_note: "link_reopened" }), BENCH_TEXT.restReopened);
+  assert.equal(words({ rest: null, rest_note: "stop" }), `${BENCH_TEXT.restReopened} · ${BENCH_TEXT.restNote.stop}`);
+  assert.ok(!words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" }).includes("link_lost"));
+  assert.ok(words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" })
+    .includes(BENCH_TEXT.restNote.link_lost));
+  assert.equal(words({ rest: { result: "settled_at_100hz", cumulative: 9 } }), BENCH_TEXT.restSettled);
   assert.equal(resultView({ rest: { result: "settled_at_100hz", cumulative: 9 }, rest_note: "stop",
     verdict: { run_cleanup: { ok: true } } }).rest.note, "stop");
   assert.equal(resultView({ verdict: { run_cleanup: { ok: true } } }).rest, null);

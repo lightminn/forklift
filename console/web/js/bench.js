@@ -267,13 +267,27 @@ export function clearView(c) {
 }
 
 // The last GRAPH_WINDOW_MS of bench_state samples (the screen stream; verdicts come from the board's own STATEs).
-// The distinct targets a graph window draws, in the order they appear (a gap or an unconfirmed target skipped): the
-// legend names each, so a later run's target never relabels an earlier run's dashed line (B2b r3 P2-2)
+// the rest row: the back end sends rest null only when a reopening ended the observation (whatever was noted first,
+// a STOP for one), so that reason is always said; any other note is added after it (B2b r3 P2-3, r4 P2-1)
+export function restWords(r, T) {
+  const reopenNote = r.note === "reopened" || r.note === "link_reopened";
+  const head = r.result === "settled_at_100hz" ? T.restSettled
+    : r.result === null ? T.restReopened
+      : `확인 못 함${r.why ? `(${T.restWhy[r.why] ?? r.why})` : ""}`;
+  const note = r.note && !(r.result === null && reopenNote)
+    ? ` · ${T.restNote[r.note] ?? (String(r.note).startsWith("record_error") ? "관측 중 기록 오류" : r.note)}` : "";
+  return head + note;
+}
+
+// The distinct targets a graph window actually draws, in the order they appear: only where two neighbouring samples
+// both carry a target is a dashed segment drawn (a lone sample between gaps draws nothing), and the legend names each
+// drawn target, so a later run's target never relabels an earlier run's line (B2b r3 P2-2, r4 P2-2)
 export function targetsInWindow(series) {
+  const ok = (s) => s.target != null && Number.isFinite(s.target);
   const out = [];
-  for (const s of series) {
-    if (s.target == null || !Number.isFinite(s.target)) continue;
-    if (out.at(-1) !== s.target) out.push(s.target);
+  for (let i = 1; i < series.length; i++) {
+    if (!ok(series[i - 1]) || !ok(series[i])) continue;
+    for (const t of [series[i - 1].target, series[i].target]) if (out.at(-1) !== t) out.push(t);
   }
   return out;
 }
