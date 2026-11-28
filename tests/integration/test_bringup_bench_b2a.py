@@ -174,7 +174,7 @@ def test_a_refused_readiness_zero_sends_no_first_frame(model, monkeypatch):  # n
     assert last["accepted"] is False and last["seq"] is not None
 
 
-def test_the_final_row_is_written_whole_or_cut_back(tmp_path, monkeypatch):
+def test_the_final_row_is_written_whole_and_never_cut_back(tmp_path, monkeypatch):
     path = tmp_path / "run.jsonl"
     with open(path, "a", encoding="utf-8") as out:
         b = bringup.Bench(None, out, commission=True)
@@ -184,31 +184,58 @@ def test_the_final_row_is_written_whole_or_cut_back(tmp_path, monkeypatch):
 
     path2 = tmp_path / "run2.jsonl"
 
-    def fsync_fails(fd):
+    def other_writer_then_fail(fd):
+        with open(path2, "a", encoding="utf-8") as other:
+            other.write(json.dumps({"t": "other"}) + "\n")
         raise OSError("disk")
 
     with open(path2, "a", encoding="utf-8") as out:
         b = bringup.Bench(None, out, commission=True)
         b.emit({"t": "a"})
-        monkeypatch.setattr(bringup.os, "fsync", fsync_fails)
-        assert b.final_row({"t": "result", "n": 1}) is False
-    # the row was cut back: the file keeps the earlier rows only, and the close wrote nothing more
-    assert [json.loads(x)["t"] for x in path2.read_text().splitlines()] == ["a"]
-
-
-def test_a_failed_final_row_never_cuts_another_writers_row(tmp_path, monkeypatch):
-    path = tmp_path / "shared.jsonl"
-
-    def other_writer_then_fail(fd):
-        with open(path, "a", encoding="utf-8") as other:
-            other.write(json.dumps({"t": "other"}) + "\n")
-        raise OSError("disk")
-
-    with open(path, "a", encoding="utf-8") as out:
-        b = bringup.Bench(None, out, commission=True)
         monkeypatch.setattr(bringup.os, "fsync", other_writer_then_fail)
-        assert b.final_row({"t": "result"}) is False
-    assert [json.loads(x)["t"] for x in path.read_text().splitlines()][-1] == "other"
+        assert b.final_row({"t": "result", "n": 1}) is False
+    # not on disk for sure, so not complete -- but nothing is cut: the other writer's row stays
+    assert [json.loads(x)["t"] for x in path2.read_text().splitlines()] == ["a", "result", "other"]
+
+
+def test_verdict1_is_made_again_where_execute_ends(model, monkeypatch):  # noqa: F811
+    """Verdict 1 is made again at execute's end -- after its cleanup retry and every row lost since -- and the result
+    follows it; the run's recorders stay on until then (Codex B2a-1 impl round 2 P2-2, P2-4)."""
+    made, hooked = [], []
+    real = bringup.bench_verdict1
+
+    def counting(*a, **kw):
+        v = real(*a, **kw)
+        made.append(v)
+        hooked.append(a[0].host.on_pair is not None and a[0].host.on_accepted is not None)
+        return v
+
+    monkeypatch.setattr(bringup, "bench_verdict1", counting)
+    b = bench(model)
+    res = bringup.execute(args(axis="M", duty=0.15, bench_bypass="steer_range", observed="none", hold="here",
+                               seconds=1.4, **HOLD), b)
+    assert len(made) == 2 and res["verdict1"] is made[-1] and res["hold"]["verdict1"] is made[-1]
+    assert res["verdict1"]["ok"] == (res["result"] == "ok"), res
+    # the recorders were still on when verdict 1 was made again (a cleanup retry's pairs are recorded), off after
+    assert hooked == [True, True] and b.host.on_pair is None and b.host.on_accepted is None
+
+
+def test_a_verdict1_failed_at_the_end_never_leaves_the_result_ok(model, monkeypatch):  # noqa: F811
+    real = bringup.bench_verdict1
+    calls = {"n": 0}
+
+    def second_fails(*a, **kw):
+        v = real(*a, **kw)
+        calls["n"] += 1
+        if calls["n"] == 2:
+            v = {**v, "ok": False, "why": [*v["why"], "record_errors:1"]}
+        return v
+
+    monkeypatch.setattr(bringup, "bench_verdict1", second_fails)
+    b = bench(model)
+    res = bringup.execute(args(axis="M", duty=0.15, bench_bypass="steer_range", observed="none", hold="here",
+                               seconds=1.4, **HOLD), b)
+    assert not res["verdict1"]["ok"] and res["result"] == "aborted", res
 
 
 def test_an_in_memory_record_takes_the_final_row_as_any_row():

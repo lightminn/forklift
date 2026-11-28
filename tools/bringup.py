@@ -269,9 +269,9 @@ class Bench:
 
     def final_row(self, row: dict) -> bool:
         """The run's final result row (plan 4.4 B2): the earlier rows flushed, then this one in a single unbuffered
-        write and an fsync. On any failure the file is cut back to where the row began, so no torn or later-completed
-        row is left (a buffered row whose flush failed would be written by the file's close). True only when the row is
-        on disk: the caller reports it as ``record_complete``, apart from the verdict, which the rows before it decide."""
+        write and an fsync -- never through the buffer, whose failed flush the file's close would complete later. True
+        only when the row is on disk: the caller reports it as ``record_complete``, apart from the verdict, which the
+        rows before it decide. Nothing is cut back on a failure (see below)."""
         try:
             self.out.flush()
         except (OSError, ValueError):
@@ -284,22 +284,14 @@ class Bench:
             self.emit(row)
             return self.record_errors == errors0
         data = (json.dumps(row, default=str) + "\n").encode("utf-8")
-        n = 0
         try:
-            n = os.write(fd, data)
-            if n != len(data):
-                raise OSError("short write")
+            if os.write(fd, data) != len(data):
+                return False  # a torn final row: a replay reads it as an incomplete record (undecidable)
             os.fsync(fd)
             return True
         except OSError:
-            # cut back only our own bytes: with O_APPEND the offset after the write is our row's end; another
-            # writer's row appended after it (the same --out from two processes) is never cut (impl P2-6)
-            try:
-                end = os.lseek(fd, 0, os.SEEK_CUR)
-                if n and os.fstat(fd).st_size == end:
-                    os.ftruncate(fd, end - n)
-            except OSError:
-                pass
+            # never cut back: with another writer on the same file a truncate could take its rows too (Codex B2a-1
+            # impl round 2 P2-3); a whole row left unsynced reads as the same verdict, a torn one as undecidable
             return False
 
     def flush_record(self) -> bool:
@@ -999,6 +991,13 @@ class CommissionSession(Session):
     def _distance_run(self) -> bool:
         return self.bench_image and self.bench is not None and self.bench.distance
 
+    def _late_stop(self, stop) -> None:
+        """The samples seen while a failed first answer was awaited still judged (a window left then): its reason is
+        kept apart, so a late board record never turns the run into a label (Codex B2a-1 impl round 2 P2-1)."""
+        if stop is not None and (reason := stop()) is not None:
+            self.stop_reason = self.stop_reason or reason
+            self.late_failures = [*getattr(self, "late_failures", []), reason]
+
     def confirm_last_prep_zero(self) -> bool:
         """Before a one-shot first frame (a distance run's first non-zero, a hold's first BENCH_HOLD): the readiness
         zeros stop and the last one is seen accepted -- a STATE of its boot and arming, received after its last byte,
@@ -1115,6 +1114,7 @@ class CommissionSession(Session):
                 return first
         if nonzero and self._distance_run():
             if not self._first_nonzero_answered(duty_e4, bound):
+                self._late_stop(stop)
                 return None
             if not self.b.host.ready and self.board_ended is None:
                 why = self._abort_reason()  # out of ARMED already: its result pair decides (impl r3 P2-2)
@@ -1178,6 +1178,7 @@ class CommissionSession(Session):
 
     def _hold_loop(self, end_ns: int, stop_ns: int, stop) -> None:
         if not self._first_nonzero_answered(0, end_ns, send=lambda: self.send_hold(end_ns), kind="BENCH_HOLD"):
+            self._late_stop(stop)
             return
         if not self.b.host.ready and self.board_ended is None:
             why = self._abort_reason()
@@ -1564,7 +1565,6 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         if rest is not None:
             bench_out["rest"] = rest
         bench_out["bench_result"] = br  # the one read the verdicts above were made from (impl r1 P2-4)
-        b.host.on_pair = b.host.on_accepted = None  # the rows end after the result read (impl P2-4)
     if getattr(session, "bench_image", False) and profile is None:
         # verdict ① for every bench7 run, as a hold's (plan 4.4 B2: the bundle reads it, never chk's PASS)
         bench_out["verdict1"] = bench_verdict1(b, session, session.bench_result() or {}, distance=distance_run,
@@ -1662,7 +1662,7 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         elif br.get("stop_reason") != "end_zero":
             session.aborted = session.aborted or f"bench_stop_{br.get('stop_reason')}"
     finally:
-        b.host.on_pair = b.host.on_accepted = None
+        pass  # the recorders stay on to the end of execute (its cleanup retry included, Codex B2a-1 r2 P2-2)
     why = session_abort_reason(b.samples, i_arm)
     if why is not None:
         session.aborted = session.aborted or why
@@ -3154,12 +3154,19 @@ def execute(args, bench: Bench) -> dict:
         _mark_commission_result(result, names, session.large, session.preflight_product, _absent_of(args))
     elif args.cmd in ("step", "scenario"):
         _mark_absent_result(result, _absent_of(args))
-    bench.flush_record()
     v1 = result.get("verdict1") if isinstance(result, dict) else None
-    if isinstance(v1, dict) and bench.record_errors > v1.get("record_errors_at", bench.record_errors):
-        # rows lost after verdict 1 was made (a cleanup retried here, Codex B2a-1 impl P2-4): it is not a pass
-        v1["ok"] = False
-        v1["why"] = [*v1.get("why", []), f"record_errors_after_verdict:{bench.record_errors - v1['record_errors_at']}"]
+    if isinstance(v1, dict) and getattr(session, "bench_image", False):
+        # verdict 1 made again from where the run really ended: after execute's cleanup retry and every row lost
+        # since (Codex B2a-1 impl rounds 1-2 P2-4); the labels the run already earned are kept
+        again = bench_verdict1(bench, session, session.bench_result() or {}, distance=session._distance_run())
+        again["labels"] = [*v1.get("labels", []), *(x for x in again["labels"] if x not in v1.get("labels", []))]
+        result["verdict1"] = again
+        if isinstance(result.get("hold"), dict):
+            result["hold"]["verdict1"] = again
+        result["cleanup_confirmed"] = session.cleanup_confirmed
+        if not again["ok"] and result.get("result") == "ok":
+            result["result"] = "aborted"  # the CLI's result never says ok beside a failed verdict 1 (r2 P2-4)
+    bench.host.on_pair = bench.host.on_accepted = None
     result["record_errors"] = bench.record_errors
     if args.cmd == "commission":
         # the final row in one write (plan 4.4 B2): its own fate is reported apart from the verdict, which the rows
