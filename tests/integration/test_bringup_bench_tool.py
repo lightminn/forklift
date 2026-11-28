@@ -679,3 +679,39 @@ def test_a_recovered_hold_result_is_undecidable():
     assert f["kind"] == "hold" and f["target"] == 1000 and f["result_bypass"] == ["steer_range"]
     assert f["hold_verdict"]["result"] == "undecidable"
     assert "hold_verdict" not in bringup.result_fields(bs)
+
+
+def test_the_boards_own_end_confirms_the_cleanup_when_the_disarm_echo_is_lost(model, monkeypatch):
+    """This run's ENDED then DISARMED pair of the arming that named it: the cleanup is confirmed without the DISARM's
+    echo (plan 3 verdict 1; Codex A1b-2b rounds 2-3)."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    orig = bringup.CommissionSession.cleanup
+
+    def cleanup_echo_lost(self):
+        orig(self)
+        self.cleanup_confirmed = False  # as if the DISARM's echo never came
+
+    monkeypatch.setattr(bringup.CommissionSession, "cleanup", cleanup_echo_lost)
+    res = bringup.execute(hargs(hold="here", seconds=1.4), b)
+    assert res["hold"]["verdict1"]["ok"] and res["result"] == "ok", res
+    assert [r for r in rows(b) if r["t"] == "cleanup_confirmed_by_board"]
+
+
+def test_the_run_pairs_keep_the_confirmed_arming():
+    from types import SimpleNamespace as NS
+
+    pairs = [(0, Mode.DISARMED, NS(run_id=0)), (10, Mode.ARMED, NS(run_id=5)), (20, Mode.ARMED, NS(run_id=5))]
+    idents = [(1, 7), (1, 8), (2, 8)]  # the last pair: another boot
+    kept = bringup._run_pairs(pairs, idents, (1, 8))
+    assert kept == pairs[:2]
+
+
+def test_the_cli_gate_refuses_a_hold_at_its_stop_time_itself(monkeypatch):
+    from types import SimpleNamespace
+
+    t = 5_000_000_000
+    monkeypatch.setattr(bringup.time, "monotonic_ns", lambda: t)
+    holder = {"host": SimpleNamespace(auth_epoch=1), "cancelled": False, "hold_until_ns": t}
+    hold = SimpleNamespace(kind="BENCH_HOLD", nonzero=True, generation=1, expires_ns=t + 10**9)
+    assert not bringup._cli_gate(holder, hold, lambda: None)  # >=: the same instant is past the stop

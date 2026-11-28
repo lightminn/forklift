@@ -733,6 +733,7 @@ class CommissionSession(Session):
         self._boot0: int | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.holds_sent = 0  # BENCH_HOLDs queued (bench7)
+        self.run_ident: tuple | None = None  # (boot_id, arm_gen) of the arming that named this run
         self.pre_run_pair_t: int | None = None  # the MCU time of the last pair before this run's BENCH_ARM
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -902,6 +903,7 @@ class CommissionSession(Session):
 
         if not b.run_until(named, 0.5):
             raise Refused("bench: the board's arming never named this run's BENCH_SET")
+        self.run_ident = (b.host.bench_state_of.boot_id, b.host.bench_state_of.arm_gen)  # this run's boot and arming
         self.bench_taken = self._bench_pending  # the board took it, whatever happens next
         if not b.host.ready:
             b.emit({"t": "bench_set", **self.bench_taken})
@@ -1567,7 +1569,7 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     why = session_abort_reason(b.samples, i_arm)
     if why is not None:
         session.aborted = session.aborted or why
-    pairs = _run_pairs(pairs, idents, session.run_id)  # this run's boot and arming only
+    pairs = _run_pairs(pairs, idents, session.run_ident)  # this run's boot and arming only
     verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id)
                 if br.get("confirmed") else {"result": "undecidable", "why": ["no_result"]})
     pts = _entry_points(session, pairs)
@@ -1592,12 +1594,19 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         entries["label"] = None
     last_pair = bench_session.pair_of(b.host.bench_state_of, b.host.bench_state)
     board_end = (last_pair is not None and last_pair.mode == Mode.DISARMED and last_pair.result_run_id == session.run_id
-                 and (last_pair.boot_id, last_pair.arm_gen) == (idents[0] if idents else (None, None)))
+                 and session.run_ident is not None
+                 and (last_pair.boot_id, last_pair.arm_gen) == session.run_ident)
     if board_end and session.cleanup_confirmed is not True:
         # the board's own end (this run's ENDED, then DISARMED) confirms the cleanup without the DISARM's echo (plan 3
         # verdict 1; Codex A1b-2b round 2 P2)
         session.cleanup_confirmed = True
         b.emit({"t": "cleanup_confirmed_by_board", "run_id": session.run_id})
+    latest = b.host.state
+    if (last_pair is not None and latest is not None and session.run_ident is not None
+            and (latest.boot_id, latest.arm_gen) == session.run_ident and latest.mcu_time_us >= last_pair.mcu_time_us):
+        # the end evidence is the pair's; the mode, duty and faults are the latest accepted STATE of the same arming
+        # (a newer STATE whose BENCH_STATE was lost still counts, Codex A1b-2b round 3 P2)
+        last_pair = replace(last_pair, mode=latest.mode, duty_e4=tuple(latest.duty_e4), fault_flags=latest.fault_flags)
     faults = [] if last_pair is None else [f.name for f in FaultFlag if f in last_pair.fault_flags
                                           and f != FaultFlag.COMMAND_TIMEOUT]
     verdict1 = bench_session.run_verdict(
@@ -1615,13 +1624,12 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
 
 
-def _run_pairs(pairs: list, idents: list, run_id: int) -> list:
-    """The pairs of this run's boot and arming (those of its first pair naming it while armed), and any before it on
-    that boot (the entry window's zero base)."""
-    ident = next((idents[i] for i, (_t, m, bs) in enumerate(pairs) if bs.run_id == run_id and m == Mode.ARMED), None)
+def _run_pairs(pairs: list, idents: list, ident: tuple | None) -> list:
+    """The pairs of this run's boot and arming (the one confirm_bench_arm saw name it), and any earlier pair of that
+    boot under another arming (the entry window's zero base)."""
     if ident is None:
         return pairs
-    return [p for p, idn in zip(pairs, idents) if idn == ident or (idn[0] == ident[0] and p[2].run_id != run_id)]
+    return [p for p, idn in zip(pairs, idents) if idn == ident or (idn[0] == ident[0] and idn[1] != ident[1])]
 
 
 def recovered_fields(bs) -> dict:
@@ -2473,7 +2481,7 @@ def _cli_gate(holder: dict, f, write) -> bool:
                 or (f.expires_ns is not None and f.expires_ns <= now)):
             return False
     if getattr(f, "kind", None) == "BENCH_HOLD" and holder.get("hold_until_ns") is not None \
-            and now > holder["hold_until_ns"]:
+            and now >= holder["hold_until_ns"]:
         return False  # past the hold's own renewal stop (T - HANDOVER_S): never completed before the end zero
     write()
     return True
