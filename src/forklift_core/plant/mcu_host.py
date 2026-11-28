@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from forklift_core.mcu_link.messages import (
     Arm,
     BenchArm,
+    BenchHold,
     BenchMode,
     BenchSet,
     BenchSource,
@@ -123,7 +124,7 @@ class Outgoing:
     echo: tuple | None = None  # ARM and the arming zero: the (boot id, MCU time) of the STATE they echo (6a design 2)
 
 
-_MOTION = ("DRIVE", "COMMISSION")  # the commands that move an axis: one outbox rule for both
+_MOTION = ("DRIVE", "COMMISSION", "BENCH_HOLD")  # the commands that move an axis: one outbox rule for all
 
 
 _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pending", "ready"
@@ -605,7 +606,7 @@ class McuLinkHost:
         if len(self._outbox) >= self.cfg.outbox_max:
             return Blocked("outbox_full")
         try:
-            msg = BenchSet(s.boot_id, s.mcu_time_us, int(run_id), int(BenchMode.DUTY), int(ask.axis),
+            msg = BenchSet(s.boot_id, s.mcu_time_us, int(run_id), int(ask.mode), int(ask.axis),
                            int(source), int(count_sign), ask.bypass, ask.duty_max_e4(), ask.time_ms(), int(stop_counts))
         except ValueError as exc:
             return Blocked(f"bad_value: {exc}")
@@ -725,6 +726,27 @@ class McuLinkHost:
         s = self._state
         msg = Commission(axis, duty_e4, valid, s.arm_gen, s.boot_id, s.mcu_time_us)
         self._enqueue("COMMISSION", msg, now_ns, expires_ns=expires_ns, nonzero=duty_e4 != 0)
+        return None
+
+    def request_bench_hold(self, run_id: int, axis: int, hold: bl.HoldAsk, sign: int, expires_ns: int,
+                           now_ns: int) -> Blocked | None:
+        """Queue one BENCH_HOLD (bench7, contract 8.7) expiring at ``expires_ns``: the bench gate, then the motion
+        checks and validity rule of a COMMISSION; dropped like one when it expires or the authorization changes before
+        its first byte. The board takes the first as the drive start and the later identical ones as extensions."""
+        refused = self.bench_refusal()
+        if refused is not None:
+            return Blocked(f"bench_refused: {refused}")
+        blocked, valid = self._motion_check(expires_ns, now_ns)
+        if blocked is not None:
+            return blocked
+        s = self._state
+        try:
+            msg = BenchHold(s.boot_id, s.arm_gen, s.mcu_time_us, valid, int(run_id), int(axis), int(BenchSource.KTH),
+                            int(hold.kind), int(hold.value), 4096, float(hold.kp), float(hold.ki), float(hold.kd),
+                            int(hold.deadband), hold.duty_max_e4, hold.min_duty_e4, int(sign))
+        except ValueError as exc:
+            return Blocked(f"bad_value: {exc}")
+        self._enqueue("BENCH_HOLD", msg, now_ns, expires_ns=expires_ns, nonzero=True)
         return None
 
     def _motion_check(self, expires_ns: int, now_ns: int) -> tuple[Blocked | None, int]:
