@@ -9,6 +9,7 @@
 
 #include "fw/abs_axis.h"
 #include "fw/drv8244.h"
+#include "fw/bench_hold.h"
 #include "fw/bench_kth.h"
 #include "fw/link.h"
 #include "fw/pi.h"
@@ -67,6 +68,7 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_LIFT_RANGE (1u << 1)  /* H: the lift joint range (KTH validity stays) */
 #define DRIVE_BENCH_KNOWN (DRIVE_BENCH_STEER_RANGE | DRIVE_BENCH_LIFT_RANGE)
 #define DRIVE_BENCH_MODE_DUTY 1u
+#define DRIVE_BENCH_MODE_HOLD 2u /* bench7 (plan 4.3 A1b-2): source kth, axis M or H, no stop_counts */
 #define DRIVE_BENCH_SOURCE_NONE 0u
 #define DRIVE_BENCH_SOURCE_KTH 1u /* bench6: the run axis's KTH travel count (M, H) */
 /* BENCH_STATE.count_state */
@@ -83,6 +85,8 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_BENCH_FLAG_RES_LOSS 0x04u    /* the result: the provisional confirmation ended by a loss */
 #define DRIVE_BENCH_FLAG_RES_TENTATIVE 0x08u /* the result: the last counted frame at the end was 0x0000 */
 #define DRIVE_BENCH_FLAG_RES_NO_REF 0x10u    /* the result: no fresh non-zero frame at the drive start */
+#define DRIVE_BENCH_FLAG_RES_HOLD 0x20u      /* bench7: the result run was a hold run */
+#define DRIVE_BENCH_FLAG_RES_DISTANCE 0x40u  /* bench7: the result run was a distance run */
 #define DRIVE_BENCH_ZERO_RUN_US 4000u     /* driven 0x0000-only time before kth_zero_suspect */
 #define DRIVE_BENCH_WATCH_US 300000u      /* driven time without progress */
 #define DRIVE_BENCH_PROGRESS_COUNTS 2     /* R */
@@ -205,6 +209,19 @@ typedef struct {
     bool nfault_low[DRIVE_CH_COUNT];
     bool estop_active;
     bool cycle_overrun; /* this cycle started late (set by the app) */
+#if defined(FW_CORE_BENCH)
+    /* bench7 (plan 4.3 A1b-2 decision 6): the motor output HAL's report at read_inputs (fw/bench_pwm.h). Without it
+       (pwm_report false) the core takes its own last duty as written at its tick time. */
+    bool pwm_report;
+    int16_t applied_e4[DRIVE_CH_COUNT]; /* active now, physical sign x compare value (0 when cut) */
+    bool applied_any[DRIVE_CH_COUNT];   /* a non-zero may have been active since the last read */
+    uint32_t applied_window_us;         /* HAL clock from the last read to this one */
+    bool run_valid[DRIVE_CH_COUNT];     /* the written values form one sign's unbroken non-zero run */
+    uint32_t run_since_us[DRIVE_CH_COUNT]; /* HAL clock after that run's first write */
+    int8_t run_sign[DRIVE_CH_COUNT];       /* physical */
+    uint32_t abs_start_us[2];              /* each fresh frame's bundle start: a lower bound of its acquisition */
+    bool abs_start_known[2];
+#endif
 } drive_inputs;
 
 typedef struct {
@@ -290,6 +307,23 @@ typedef struct drive {
     uint16_t res_end_age;
     uint64_t boundary_us; /* after every STATE sent before the last one: bench commands echo a later STATE */
     uint32_t cm_on_limit_ms; /* the open output interval's time limit, fixed when it opened (a run's own) */
+    /* bench7 (plan 4.3 A1b-2): the hold run, this tick's frames' acquisition lower bounds, the result's bypass */
+    bench_hold hold;
+    bool hold_started; /* the run's first BENCH_HOLD accepted: target and entries are this run's */
+    uint64_t kth_lo[2];
+    bool kth_lo_known[2];
+    uint32_t res_bypass;
+    /* the motor output report of this tick, widened (decision 6); without a HAL report the core's own writes */
+    int16_t pwm_applied[DRIVE_CH_COUNT];
+    bool pwm_any[DRIVE_CH_COUNT];
+    uint64_t pwm_window_us, pwm_last_us;
+    bool pwm_have_last, pwm_reported;
+    bool pwm_run_valid[DRIVE_CH_COUNT];
+    uint64_t pwm_run_since[DRIVE_CH_COUNT];
+    int8_t pwm_run_sign[DRIVE_CH_COUNT]; /* physical */
+    bool fb_run_valid[DRIVE_CH_COUNT];   /* the fallback's runs of the core's own written duty */
+    uint64_t fb_run_since[DRIVE_CH_COUNT];
+    int8_t fb_run_sign[DRIVE_CH_COUNT];
     bool lc_pending, lc_settled; /* a link change noted for the next drive_begin */
     uint32_t lc_since32;         /* HAL clock when it began */
 #endif

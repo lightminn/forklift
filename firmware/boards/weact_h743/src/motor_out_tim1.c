@@ -7,6 +7,9 @@
 #include "board/board_hal.h"
 #include "board/clock_config.h"
 #include "board/motor_pins.h"
+#if defined(FW_BENCH_IMAGE)
+#include "fw/bench_pwm.h"
+#endif
 
 #define PWM_TOP 10000u /* ARR + 1: 200 MHz / 10000 = 20 kHz (DRV8244 up to 25 kHz) */
 #define PWM_MODE1 6u   /* OCxM = 0110: active while CNT < CCR (RM0433 TIMx_CCMR1) */
@@ -21,6 +24,9 @@ static int8_t g_ph[DRIVE_CH_COUNT] = {-1, -1, -1, -1};
 static uint32_t g_ccr[DRIVE_CH_COUNT];
 static bool g_zero_pending[DRIVE_CH_COUNT];
 static bool g_cut[DRIVE_CH_COUNT] = {true, true, true, true}; /* DRVOFF high */
+#if defined(FW_BENCH_IMAGE)
+static bench_pwm_track g_track; /* what the calls wrote, for the next read (plan 4.3 A1b-2 decision 6) */
+#endif
 
 static volatile uint32_t *ccr_reg(int ch)
 {
@@ -59,6 +65,9 @@ void motor_out_safe_init(void)
         g_zero_pending[ch] = false;
         g_cut[ch] = true;
     }
+#if defined(FW_BENCH_IMAGE)
+    bench_pwm_track_reset(&g_track);
+#endif
 }
 
 /* Faults (NMI, HardFault, unexpected IRQ): registers only. DRVOFF high first, then the timer's
@@ -118,6 +127,11 @@ void motor_out_apply(const drive_outputs *out)
             g_zero_pending[ch] = false;
         }
     }
+#if defined(FW_BENCH_IMAGE)
+    if (updated) {
+        bench_pwm_update_seen(&g_track); /* what the last call wrote is active (Codex A1b-2a round 1 P2) */
+    }
+#endif
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         if (out->drvoff[ch] || (g_cut[ch] && g_zero_pending[ch])) {
             /* A cut, or a cut channel whose 0 is not active yet: lowering DRVOFF now would let the
@@ -143,4 +157,23 @@ void motor_out_apply(const drive_outputs *out)
         drvoff(ch, false);
     }
     MO_WR(TIM1->SR, ~TIM_SR_UIF); /* rc_w0: clears UIF only */
+#if defined(FW_BENCH_IMAGE)
+    int16_t w[DRIVE_CH_COUNT];
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        w[ch] = (int16_t)((int32_t)g_ph[ch] * (int32_t)g_ccr[ch]);
+    }
+    bench_pwm_wrote(&g_track, w, g_cut, timebase_now_us()); /* after every write of the call */
+#endif
 }
+
+#if defined(FW_BENCH_IMAGE)
+/* At read_inputs: UIF set means an update event after the last call's end (it clears UIF last), so what it wrote
+   is active; UIF is not cleared here. UIF is read before the clock: an update between the two reads as none (the
+   stopping side), never as one before the report's time (Codex A1b-2a round 1 P1-1). */
+void motor_out_report(drive_inputs *in)
+{
+    bool updated = (TIM1->SR & TIM_SR_UIF) != 0u;
+    uint32_t now = timebase_now_us();
+    bench_pwm_read(&g_track, updated, now, in);
+}
+#endif

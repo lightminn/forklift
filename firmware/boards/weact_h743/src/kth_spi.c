@@ -21,6 +21,10 @@ static volatile uint32_t g_stage;
 static stamped_slot g_slot[2];           /* generation | frame with its completion time (mailbox.h) */
 static uint16_t g_generation[2];          /* interrupt side */
 static uint16_t g_consumed[2];            /* tick side */
+#if defined(FW_BENCH_IMAGE)
+static volatile uint32_t g_bundle_start; /* HAL microseconds when the running bundle started */
+static uint32_t g_start[2];              /* tick side: the bundle start of the frames snapshot took */
+#endif
 static const uint32_t cs_pin[2] = {0, 1}; /* PD0, PD1 */
 
 static void wait_cycles(uint32_t n)
@@ -62,6 +66,9 @@ void kth_spi_start_bundle(void)
     }
 #endif
     g_stage = STAGE_STEER;
+#if defined(FW_BENCH_IMAGE)
+    g_bundle_start = timebase_now_us(); /* before the first CS edge: no frame of the bundle is acquired earlier */
+#endif
     gpio_clear(GPIOD, cs_pin[0]);
     wait_cycles(CS_GAP_CYCLES);
     spi_start(SPI2, KTH_READ_WORD);
@@ -74,12 +81,20 @@ void kth_spi_snapshot(uint32_t now, uint16_t frame[2], bool fresh[2], uint32_t t
 #if defined(FW_BENCH_IMAGE)
         /* the bench image counts on acquisition times (plan 4.2 A1b-1): the frame with its time, never one acquired
            after this tick's time */
-        fresh[i] = stamped_take(&g_slot[i], &g_consumed[i], now, &frame[i], &time[i]);
+        fresh[i] = stamped_take(&g_slot[i], &g_consumed[i], now, &frame[i], &time[i], &g_start[i]);
 #else
         fresh[i] = slot_take(g_slot[i].slot, &g_consumed[i], &frame[i]); /* one 32-bit read, as before */
 #endif
     }
 }
+
+#if defined(FW_BENCH_IMAGE)
+void kth_spi_starts(uint32_t start[2])
+{
+    start[0] = g_start[0];
+    start[1] = g_start[1];
+}
+#endif
 
 void SPI2_IRQHandler(void)
 {
@@ -90,7 +105,7 @@ void SPI2_IRQHandler(void)
     if (ok) {
         g_generation[axis]++;
 #if defined(FW_BENCH_IMAGE)
-        stamped_put(&g_slot[axis], slot_pack(g_generation[axis], rx), timebase_now_us());
+        stamped_put(&g_slot[axis], slot_pack(g_generation[axis], rx), timebase_now_us(), g_bundle_start);
 #else
         g_slot[axis].slot = slot_pack(g_generation[axis], rx); /* one 32-bit write, as before */
 #endif

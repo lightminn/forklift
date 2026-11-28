@@ -15,5 +15,9 @@ void kth_spi_init(void);
 void kth_spi_start_bundle(void);
 /* Latest frames; fresh[i] is true once per completed read (generations, board design 4.5). */
 void kth_spi_snapshot(uint32_t now, uint16_t frame[2], bool fresh[2], uint32_t time[2]);
+#if defined(FW_BENCH_IMAGE)
+/* bench7: each frame's bundle start (plan 4.3 A1b-2 decision 6), as kth_spi_snapshot left them */
+void kth_spi_starts(uint32_t start[2]);
+#endif
 
 #endif

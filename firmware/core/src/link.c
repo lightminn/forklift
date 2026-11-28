@@ -15,7 +15,8 @@
 #define STATE_LEN 84u
 #define BENCH_SET_LEN 52u   /* contract 8 */
 #define BENCH_ARM_LEN 16u
-#define BENCH_STATE_LEN 48u
+#define BENCH_HOLD_LEN 48u  /* bench7 */
+#define BENCH_STATE_LEN 51u /* bench7: + deadband_entries, result_bypass */
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
 typedef struct {
@@ -105,6 +106,8 @@ static size_t payload_len(uint8_t type)
 #if defined(FW_CORE_BENCH) /* every other image keeps these types unknown (plan A1, contract 8) */
     case LINK_BENCH_SET:
         return BENCH_SET_LEN;
+    case LINK_BENCH_HOLD:
+        return BENCH_HOLD_LEN;
     case LINK_BENCH_ARM:
         return BENCH_ARM_LEN;
     case LINK_BENCH_STATE:
@@ -207,6 +210,27 @@ static void put_payload(wr *w, const link_msg *m)
         put_u32(w, (uint32_t)b->stop_counts);
         break;
     }
+    case LINK_BENCH_HOLD: {
+        const link_bench_hold *h = &m->u.bench_hold;
+        put_u32(w, h->boot_id);
+        put_u16(w, h->arm_gen);
+        put_u64(w, h->echo_mcu_time_us);
+        put_u16(w, h->valid_after_echo_ms);
+        put_u32(w, h->run_id);
+        put_u8(w, h->axis);
+        put_u8(w, h->source);
+        put_u8(w, h->target_kind);
+        put_u32(w, (uint32_t)h->target_value);
+        put_u16(w, h->cpr);
+        put_f32(w, h->kp);
+        put_f32(w, h->ki);
+        put_f32(w, h->kd);
+        put_u16(w, h->deadband_counts);
+        put_u16(w, h->duty_max_e4);
+        put_u16(w, h->min_duty_e4);
+        put_u8(w, (uint8_t)h->sign);
+        break;
+    }
     case LINK_BENCH_ARM: {
         const link_bench_arm *a = &m->u.bench_arm;
         put_u32(w, a->boot_id);
@@ -240,6 +264,8 @@ static void put_payload(wr *w, const link_msg *m)
         put_u8(w, b->run_flags);
         put_u8(w, b->result_axis);
         put_u8(w, b->result_source);
+        put_u16(w, b->deadband_entries);
+        put_u8(w, b->result_bypass);
         break;
     }
 #endif
@@ -340,6 +366,27 @@ static void get_payload(rd *r, link_msg *m)
         b->stop_counts = (int32_t)get_u32(r);
         break;
     }
+    case LINK_BENCH_HOLD: {
+        link_bench_hold *h = &m->u.bench_hold;
+        h->boot_id = get_u32(r);
+        h->arm_gen = get_u16(r);
+        h->echo_mcu_time_us = get_u64(r);
+        h->valid_after_echo_ms = get_u16(r);
+        h->run_id = get_u32(r);
+        h->axis = get_u8(r);
+        h->source = get_u8(r);
+        h->target_kind = get_u8(r);
+        h->target_value = (int32_t)get_u32(r);
+        h->cpr = get_u16(r);
+        h->kp = get_f32(r);
+        h->ki = get_f32(r);
+        h->kd = get_f32(r);
+        h->deadband_counts = get_u16(r);
+        h->duty_max_e4 = get_u16(r);
+        h->min_duty_e4 = get_u16(r);
+        h->sign = (int8_t)get_u8(r);
+        break;
+    }
     case LINK_BENCH_ARM: {
         link_bench_arm *a = &m->u.bench_arm;
         a->boot_id = get_u32(r);
@@ -373,6 +420,8 @@ static void get_payload(rd *r, link_msg *m)
         b->run_flags = get_u8(r);
         b->result_axis = get_u8(r);
         b->result_source = get_u8(r);
+        b->deadband_entries = get_u16(r);
+        b->result_bypass = get_u8(r);
         break;
     }
 #endif

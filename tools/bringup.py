@@ -1948,10 +1948,10 @@ def main(argv=None) -> int:
     cm.add_argument("--bench-duty-max", type=float, help="bench image: this axis's duty limit for the run, (0, 1]")
     cm.add_argument("--bench-time-max", type=float, help="bench image: this axis's continuous output limit for the run, s")
     cm.add_argument("--stop-kth-turns", type=float,
-                    help="bench image (bench6): steering/lift only -- the board cuts the output after this many KTH "
+                    help="bench image (bench7): steering/lift only -- the board cuts the output after this many KTH "
                          "sensor turns in the duty's direction (plan 4.2 A1b-1)")
     cm.add_argument("--kth-measure", action="store_true",
-                    help="bench image (bench6): steering/lift only -- measure the run by the KTH count without a "
+                    help="bench image (bench7): steering/lift only -- measure the run by the KTH count without a "
                          "distance stop (the end displacement and how far it is trusted)")
     cm.add_argument("--count-sign", type=int, choices=(1, -1), default=1,
                     help="bench image: +1 when a positive duty raises the KTH count, -1 when it lowers it")

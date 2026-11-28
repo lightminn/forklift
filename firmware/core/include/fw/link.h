@@ -18,9 +18,10 @@
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
 #define LINK_STATE 0x81u
-/* Bench extension (contract section 8, wire generation bench6): decoded only by a core compiled with
+/* Bench extension (contract section 8, wire generation bench7): decoded only by a core compiled with
    FW_CORE_BENCH (the bench image and the host tests); every other image drops these types as unknown. */
 #define LINK_BENCH_SET 0x06u
+#define LINK_BENCH_HOLD 0x07u /* bench7 (plan 4.3 A1b-2) */
 #define LINK_BENCH_ARM 0x08u
 #define LINK_BENCH_STATE 0x82u
 
@@ -92,6 +93,22 @@ typedef struct {
     uint32_t run_id;
 } link_bench_arm;
 
+/* bench7 (plan 4.3 A1b-2 decision 2): a hold run's command; the first accepted one fixes the target and settings,
+   the later ones (identical) extend its deadline. */
+typedef struct {
+    uint32_t boot_id;
+    uint16_t arm_gen;
+    uint64_t echo_mcu_time_us;
+    uint16_t valid_after_echo_ms;
+    uint32_t run_id;
+    uint8_t axis, source, target_kind;
+    int32_t target_value;
+    uint16_t cpr;
+    float kp, ki, kd;
+    uint16_t deadband_counts, duty_max_e4, min_duty_e4;
+    int8_t sign;
+} link_bench_hold;
+
 /* Sent right after its STATE (header seq pair_seq), as one write. Ages in ms, 0xFFFF = none yet. */
 typedef struct {
     uint16_t pair_seq;
@@ -102,6 +119,8 @@ typedef struct {
     uint8_t stop_reason, distance_confirm;
     uint16_t blocked, dropped_pairs, evidence_age_ms, end_evidence_age_ms;
     uint8_t mcu_bypass, drive, conn_gen, run_flags, result_axis, result_source; /* run_flags: bench6 (contract 8.5) */
+    uint16_t deadband_entries; /* bench7: a hold run's deadband entries (out -> in), modular, kept until the next ARM */
+    uint8_t result_bypass;     /* bench7: the result run's bypass bits, fixed at its end */
 } link_bench_state;
 #endif
 
@@ -116,6 +135,7 @@ typedef struct {
         link_state state;
 #if defined(FW_CORE_BENCH)
         link_bench_set bench_set;
+        link_bench_hold bench_hold;
         link_bench_arm bench_arm;
         link_bench_state bench_state;
 #endif

@@ -181,7 +181,7 @@ class McuLinkHost:
         self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
         self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
         # the bench image (mcu-link contract 8): the latest BENCH_STATE whose pair_seq names the STATE decoded right
-        # before it, and that STATE's seq; only a commission-mode host on a bench6 image sends bench commands
+        # before it, and that STATE's seq; only a commission-mode host on a bench7 image sends bench commands
         self.bench_state: BenchState | None = None
         self.bench_state_rx_ns: int | None = None
         self.bench_state_boot: int | None = None  # the boot of the accepted STATE it came with
@@ -572,7 +572,7 @@ class McuLinkHost:
     # ---------------------------------------------------------------- operator requests
     def bench_refusal(self, s: McuState | None = None) -> str | None:
         """Why this host must not send a bench command (plan A1a 1, contract 8): only a commission-mode (bring-up)
-        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench6``), whose
+        host, on the opened tty whose USB product string is exactly this tool's bench image (``lim=lr1 bench7``), whose
         STATE says a commissioning build with open outputs and no HIL plant."""
         s = self._state if s is None else s
         if not self.commission_mode:

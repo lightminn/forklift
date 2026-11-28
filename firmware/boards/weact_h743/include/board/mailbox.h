@@ -65,22 +65,28 @@ static inline bool mailbox_take(mailbox *m, uint8_t *channel, uint16_t *value, u
    then makes it even; the tick reads only an even, unchanged seq. */
 typedef struct {
     volatile uint32_t seq;
-    volatile uint32_t slot; /* slot_pack(generation, frame) */
-    volatile uint32_t time; /* HAL microseconds at the read's completion */
+    volatile uint32_t slot;  /* slot_pack(generation, frame) */
+    volatile uint32_t time;  /* HAL microseconds at the read's completion */
+#if defined(FW_BENCH_IMAGE) /* the other images keep the slot (and their bytes) as it was */
+    volatile uint32_t start; /* bench7: HAL microseconds at its bundle's start (a lower bound of the acquisition) */
+#endif
 } stamped_slot;
 
-static inline void stamped_put(stamped_slot *s, uint32_t slot, uint32_t time)
+#if defined(FW_BENCH_IMAGE) /* the bench image is the only reader of a stamped read */
+
+static inline void stamped_put(stamped_slot *s, uint32_t slot, uint32_t time, uint32_t start)
 {
     s->seq = s->seq + 1u;
     MAILBOX_BARRIER();
     s->slot = slot;
     s->time = time;
+    s->start = start;
     MAILBOX_BARRIER();
     s->seq = s->seq + 1u;
 }
 
 /* False while the interrupt is writing (or wrote during the read): no frame this tick. */
-static inline bool stamped_read(const stamped_slot *s, uint32_t *slot, uint32_t *time)
+static inline bool stamped_read(const stamped_slot *s, uint32_t *slot, uint32_t *time, uint32_t *start)
 {
     uint32_t a = s->seq;
     if (a & 1u) {
@@ -89,9 +95,11 @@ static inline bool stamped_read(const stamped_slot *s, uint32_t *slot, uint32_t 
     MAILBOX_BARRIER();
     *slot = s->slot;
     *time = s->time;
+    *start = s->start;
     MAILBOX_BARRIER();
     return s->seq == a;
 }
+#endif /* FW_BENCH_IMAGE */
 
 /* A completed sensor read as one 32-bit word: generation (16 bits) | frame (16 bits). The
    interrupt writes the word once; the tick reads it once -- one aligned 32-bit access each, so the
@@ -113,6 +121,7 @@ static inline bool slot_take(uint32_t slot, uint16_t *consumed, uint16_t *frame)
     return false;
 }
 
+#if defined(FW_BENCH_IMAGE)
 /* An unconsumed completion is waiting in the slot (a frame deferred to the next tick): no new read may overwrite
    it (Codex A1b-1a impl round 1 P2-1). */
 static inline bool stamped_pending(const stamped_slot *s, uint16_t consumed)
@@ -124,17 +133,19 @@ static inline bool stamped_pending(const stamped_slot *s, uint16_t consumed)
    stays unconsumed for the next tick: a higher-priority interrupt may publish between the tick's clock read and
    this one); *time is its acquisition time. */
 static inline bool stamped_take(const stamped_slot *s, uint16_t *consumed, uint32_t now, uint16_t *frame,
-                                uint32_t *time)
+                                uint32_t *time, uint32_t *start)
 {
-    uint32_t slot, t;
-    if (!stamped_read(s, &slot, &t)) {
+    uint32_t slot, t, b;
+    if (!stamped_read(s, &slot, &t, &b)) {
         return false;
     }
     if ((int32_t)(t - now) > 0) {
         return false;
     }
     *time = t;
+    *start = b;
     return slot_take(slot, consumed, frame);
 }
+#endif /* FW_BENCH_IMAGE */
 
 #endif
