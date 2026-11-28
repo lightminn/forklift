@@ -32,7 +32,7 @@ def test_the_units_keep_the_motor_shaft_cpr():
     ({"counts_per_wheel_rev": 327680}, "counts per wheel turn only"),
     ({"motor_counts_per_rev": 4096.5, "gear_ratio": 80.0}, "not whole"),
     ({"motor_counts_per_rev": 70000, "gear_ratio": 80.0}, "outside"),
-    ({"motor_counts_per_rev": 0, "gear_ratio": 80.0}, "outside"),
+    ({"motor_counts_per_rev": 0, "gear_ratio": 80.0}, "finite positive"),
 ])
 def test_a_side_without_a_usable_motor_cpr(entry, why):
     left, right = units_of(entry, {"motor_counts_per_rev": 4096, "gear_ratio": 80.0})
@@ -140,12 +140,16 @@ def test_the_seen_time_counts_only_contiguous_inside_pairs():
     mixed = [hold_pair(10_000 * k, 1000 if k % 2 == 0 else 1100) for k in range(100)]
     v = bs.hold_verdict(mixed, result, deadband=12, run_id=9, source=2)
     assert v["inside_s"] == 0.0 and v["inside_share"] == 0.5
+    missing = [hold_pair(10_000 * k, 1000) for k in range(10)]
+    for _t, _m, b in missing:
+        del b.count_state  # a row without the field never counts as inside (Codex A1c-2 r2 P3)
+    assert not any(bs._inside(b, 12, source=2) for _t, _m, b in missing)
     lost = [hold_pair(10_000 * k, 1000, count_state=int(BenchCountState.LOST)) for k in range(100)]
     assert bs.hold_verdict(lost, result, deadband=12, run_id=9, source=2)["inside_s"] == 0.0  # VALID only
 
 
 def test_an_mt_inside_pair_is_one_read_at_its_tick():
-    b = SimpleNamespace(target=1000, cumulative=1005, raw_angle=0)
+    b = SimpleNamespace(target=1000, cumulative=1005, raw_angle=0, count_state=int(BenchCountState.VALID))
     assert bs._inside(b, 12, source=2)
     b.raw_angle = 1  # the pair's read failed: its count is an older sample's
     assert not bs._inside(b, 12, source=2)
@@ -167,6 +171,20 @@ def test_a_cpr_that_is_no_number_leaves_no_nan_in_the_record():
                                                                            "gear_ratio": 80.0})
     assert left.motor_cpr is None and left.counts_per_wheel_rev is None  # never NaN (Codex A1c-2 r1 P2-5)
     json.dumps(left.record(), allow_nan=False)
+
+
+@pytest.mark.parametrize("entry", [
+    {"motor_counts_per_rev": 4096, "gear_ratio": float("nan")},
+    {"motor_counts_per_rev": 4096, "gear_ratio": float("inf")},
+    {"motor_counts_per_rev": 4096, "gear_ratio": 1e308},
+    {"counts_per_wheel_rev": float("inf")},
+])
+def test_no_infinity_or_nan_in_the_units_record(entry):
+    import json
+
+    left, _right = units_of(entry, {"motor_counts_per_rev": 4096, "gear_ratio": 80.0})
+    json.dumps(left.record(), allow_nan=False)  # Codex A1c-2 r2 P2-2
+    assert left.motor_cpr is None
 
 
 def test_a_board_only_recovery_reads_the_results_own_axis_and_source():

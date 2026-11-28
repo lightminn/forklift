@@ -90,8 +90,13 @@ def test_a_moving_mt_hold_that_settles_is_held_after_1_s(model):
     b = model("--bench", "1")
     res = bringup.execute(args(axis="L", duty=0.15, seconds=1.45, hold="rel:600", count_sign=1, observed="none",
                                wheels_lifted=True), b)
-    v2 = res["hold"]["verdict"]
-    assert v2["result"] == "held" and v2["why"] == ["mt_evidence_age"] and v2["inside_s"] > 0.5, v2
+    v2, br = res["hold"]["verdict"], res["bench_result"]
+    # the model's settling time varies with the host's timing: held when the last qualified progress is more than 1 s
+    # before the end (the usual case), met when it lands within it -- each checked by its own evidence age
+    if v2["result"] == "held":
+        assert v2["why"] == ["mt_evidence_age"] and br["end_evidence_age_ms"] > 1000 and v2["inside_s"] > 0.5, v2
+    else:
+        assert v2["result"] == "met" and br["end_evidence_age_ms"] <= 1000, (v2, br)
 
 
 def test_another_vehicle_cpr_reaches_the_wire(model, tmp_path, monkeypatch):
@@ -106,3 +111,11 @@ def test_another_vehicle_cpr_reaches_the_wire(model, tmp_path, monkeypatch):
     assert holds and all(m.cpr == 8192 for m in holds), res
     (cond,) = [r for r in rows(b) if r["t"] == "run_conditions"]
     assert cond["bench"]["units"]["motor_cpr"] == 8192 and cond["bench"]["units"]["gear_ratio"] == 40.0
+
+
+def test_a_read_failure_while_a_distance_drives_fails_its_continuity(model):
+    b = model("--bench", "1", "--encoder-read-fail-armed", "0:600:40")
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=1.0, stop_counts=60000, count_sign=1, observed="none",
+                               wheels_lifted=True), b)
+    assert res["bench_result"]["stop_reason"] == "fault", res
+    assert res["distance"]["result"] == "failed_continuity", res

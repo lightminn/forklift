@@ -415,9 +415,17 @@ class MtUnits:
                 "no_motor_cpr": self.why}
 
 
+def _finite_pos(v) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) and f > 0 else None
+
+
 def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
     """L and R from vehicle.yaml's content (its ``wheel_counts``); the loader keeps the motor shaft CPR the vehicle
-    config folds into counts per wheel turn."""
+    config folds into counts per wheel turn. Every recorded number is finite (never NaN or Infinity in a JSON row --
+    Codex A1c-2 r2 P2-2): a value that is not a finite positive number is recorded as None with the reason."""
     out = []
     for side in ("left", "right"):
         entry = (data.get("wheel_counts") or {}).get(side)
@@ -427,20 +435,25 @@ def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
         prov = entry.get("provenance") or {}
         measured = bool(prov.get("measured", False)) if isinstance(prov, dict) else False
         if keys == {"motor_counts_per_rev", "gear_ratio"}:
-            raw, gear = entry["motor_counts_per_rev"], float(entry["gear_ratio"])
+            raw = _finite_pos(entry["motor_counts_per_rev"])
+            gear = _finite_pos(entry["gear_ratio"])
             cpr, why = None, None
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(float(raw)):
-                why = "motor_counts_per_rev is not a number"
-            elif float(raw) != int(raw):
-                why = f"motor_counts_per_rev {raw} is not whole"
+            if raw is None:
+                why = "motor_counts_per_rev is not a finite positive number"
+            elif raw != int(raw):
+                why = f"motor_counts_per_rev {raw:g} is not whole"
             elif not 1 <= int(raw) <= MT_CPR_MAX:
                 why = f"motor_counts_per_rev {int(raw)} is outside 1..{MT_CPR_MAX}"
             else:
                 cpr = int(raw)
-            per_wheel = float(raw) * gear if why is None or "whole" in why or "outside" in why else None
+            if gear is None:
+                cpr, why = None, why or "gear_ratio is not a finite positive number"
+            per_wheel = raw * gear if raw is not None and gear is not None else None
+            if per_wheel is not None and not math.isfinite(per_wheel):
+                per_wheel, cpr, why = None, None, why or "the counts per wheel turn overflow"
             out.append(MtUnits(side, cpr, gear, per_wheel, measured, why))
         elif keys == {"counts_per_wheel_rev"}:
-            out.append(MtUnits(side, None, None, float(entry["counts_per_wheel_rev"]), measured,
+            out.append(MtUnits(side, None, None, _finite_pos(entry["counts_per_wheel_rev"]), measured,
                                "this side gives counts per wheel turn only"))
         else:
             raise ValueError(f"wheel_counts.{side} takes either motor_counts_per_rev + gear_ratio or counts_per_wheel_rev")

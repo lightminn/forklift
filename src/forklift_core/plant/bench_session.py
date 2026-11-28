@@ -391,7 +391,7 @@ HOLD_EVIDENCE_MT_MS = 1000  # plan 1, 4.5 A1c decision 8: the MT evidence (the l
 def _inside(b, deadband: int, source: int = 1) -> bool:
     if source == MT_SOURCE:  # a VALID sample accepted at its own pair's tick only (plan 4.5 A1c decisions 8, 10)
         return (abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle == 0
-                and getattr(b, "count_state", int(BenchCountState.VALID)) == int(BenchCountState.VALID))
+                and getattr(b, "count_state", None) == int(BenchCountState.VALID))  # a missing state is not VALID
     return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle != 0  # a tentative 0 is never inside
 
 

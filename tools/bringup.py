@@ -770,6 +770,7 @@ class CommissionSession(Session):
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.holds_sent = 0  # BENCH_HOLDs queued (bench7)
         self.run_ident: tuple | None = None  # (boot_id, arm_gen) of the arming that named this run
+        self.arm_conn = self.arm_conn_gen = None  # the opening and the board connection generation of that arming
         self.pre_run_pair_t: int | None = None  # the MCU time of the last pair before this run's BENCH_ARM
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -940,6 +941,9 @@ class CommissionSession(Session):
         if not b.run_until(named, 0.5):
             raise Refused("bench: the board's arming never named this run's BENCH_SET")
         self.run_ident = (b.host.bench_state_of.boot_id, b.host.bench_state_of.arm_gen)  # this run's boot and arming
+        # the host opening and the board's connection generation that confirmed the arming: the rest observation
+        # keeps to them (plan 4.5 A1c decision 9, Codex A1c-2 r2 P2-1)
+        self.arm_conn, self.arm_conn_gen = b.conn, b.host.bench_state.conn_gen
         self.bench_taken = self._bench_pending  # the board took it, whatever happens next
         if not b.host.ready:
             b.emit({"t": "bench_set", **self.bench_taken})
@@ -1319,13 +1323,13 @@ class CommissionSession(Session):
         give_up = time.monotonic() + seconds + STOPPING_WAIT_S
         end = None
         last = None
-        conn0 = b.conn  # this run's host opening: a reopening ends the observation's samples (Codex A1c-2 r1 P2-1)
+        conn0, gen0 = self.arm_conn, self.arm_conn_gen  # the arming's opening and board connection generation
         while time.monotonic() < (end if end is not None else give_up):
             b.cycle()
             bs, st = b.host.bench_state, b.host.bench_state_of
             if bs is not None and st is not None and bs is not last and st.mode == Mode.DISARMED:
                 last = bs
-                if (b.conn == conn0 and self.run_ident is not None
+                if (conn0 is not None and b.conn == conn0 and bs.conn_gen == gen0 and self.run_ident is not None
                         and (st.boot_id, st.arm_gen) == self.run_ident and bs.run_id == self.run_id):
                     seen.append((st.mcu_time_us, bs))
                     if end is None:
