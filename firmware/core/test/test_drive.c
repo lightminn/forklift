@@ -3971,6 +3971,117 @@ static void mt_hold_frozen_here_has_no_evidence(void)
     CHECK_EQ_U(bench_state_now().end_evidence_age_ms, 0xFFFFu);
 }
 
+static void mod_bench_l_read_fails(drive_config *c)
+{
+    mod_bench(c);
+    in.wheel_report = true;
+    in.wheel_fresh[0] = false; /* L's reads fail from boot */
+    in.wheel_fresh[1] = true;
+}
+
+/* L failing from boot: reported after 20 ms, M and R still arm, only L's MT ARM is refused (plan 4.5 decision 4). */
+static void mt_boot_read_failure(void)
+{
+    boot_with(mod_bench_l_read_fails);
+    ticks(30);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    CHECK_EQ_U(bench_state_now().count_state, DRIVE_BENCH_COUNT_NONE_YET); /* no run yet: nothing measured */
+    kraw(0, 1000);
+    ticks(2);
+    CHECK(bench_arm_run(111, DRIVE_CH_M, DRIVE_BENCH_STEER_RANGE));
+    send(simple(LINK_DISARM, cm_seq++));
+    ticks(150);
+    link_bench_set b = bench_defaults(112, DRIVE_CH_L);
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 112, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    CHECK(mt_arm(113, DRIVE_CH_R, 0, 1, 1500)); /* R's reads are fine */
+}
+
+/* A result fixed by an SPI answer before this tick's wheel samples is tentative, and a loss of the result's own wheel in
+   that next tick is attributed to it; another wheel's is not (plan 4.5 decision 10). */
+static void mt_spi_end_is_tentative_and_takes_its_wheels_loss(void)
+{
+    for (int jw = 0; jw < 2; jw++) {
+        boot_with(mod_bench);
+        ticks(3);
+        CHECK(mt_arm(114 + (uint32_t)jw, DRIVE_CH_L, 0, 1, 1500)); /* measuring */
+        cml(DRIVE_CH_L, 0);
+        cml(DRIVE_CH_L, 1000);
+        for (int k = 0; k < 3; k++) {
+            wstep(0, 3);
+            tick();
+        }
+        vm_ok = false; /* the next status poll's answer is invalid: a driver fault between ticks */
+        int k = 0;
+        while (d.mode != DRIVE_MODE_FAULT && k < 200) {
+            if (k % 50 == 0) {
+                cml(DRIVE_CH_L, 1000);
+            }
+            if (d.mode != DRIVE_MODE_FAULT) {
+                wstep(0, 3);
+                tick();
+            }
+            k++;
+        }
+        CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+        link_bench_state s = bench_state_now();
+        CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_FAULT);
+        CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_TENTATIVE); /* fixed before the next tick's wheel samples */
+        CHECK(!(s.run_flags & DRIVE_BENCH_FLAG_RES_UNCLEAN));
+        wstep(jw, 3000); /* the next tick: a jump on wheel jw */
+        tick();
+        s = bench_state_now();
+        if (jw == 0) {
+            CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_UNCLEAN); /* the result's own wheel */
+        } else {
+            CHECK(!(s.run_flags & DRIVE_BENCH_FLAG_RES_UNCLEAN)); /* another wheel's loss is not the result's */
+        }
+        CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(jw)); /* reported either way */
+    }
+}
+
+/* An MT hold gives no output on a tick whose read failed (plan 4.5 decision 6), and drives again on the next. */
+static void mt_hold_failed_read_gives_no_output(void)
+{
+    boot_with(mod_bench);
+    pwm_sim = true;
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    ticks(3);
+    link_bench_set b = bench_defaults(116, DRIVE_CH_L);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 116, echo_now()));
+    hcfg = (link_bench_hold){.boot_id = d.boot_id,
+                             .valid_after_echo_ms = 100,
+                             .run_id = 116,
+                             .axis = DRIVE_CH_L,
+                             .source = DRIVE_BENCH_SOURCE_MT,
+                             .target_kind = BENCH_HOLD_TARGET_REL,
+                             .target_value = 500,
+                             .cpr = 4096,
+                             .kp = 0.5f,
+                             .deadband_counts = 12,
+                             .duty_max_e4 = 1500,
+                             .min_duty_e4 = 1200,
+                             .sign = 1};
+    cml(DRIVE_CH_L, 0);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    ticks(3);
+    CHECK(out.duty[DRIVE_CH_L] > 0.1f);
+    in.wheel_fresh[0] = false;
+    tick();
+    CHECK(out.duty[DRIVE_CH_L] == 0.0f); /* the core's request on the failed tick */
+    in.wheel_fresh[0] = true;
+    tick();
+    CHECK(out.duty[DRIVE_CH_L] > 0.1f);
+}
+
 static void bench_mt_tests(void)
 {
     mt_pairs();
@@ -3981,6 +4092,9 @@ static void bench_mt_tests(void)
     mt_polarity_follows_count_sign();
     mt_hold();
     mt_hold_frozen_here_has_no_evidence();
+    mt_boot_read_failure();
+    mt_spi_end_is_tentative_and_takes_its_wheels_loss();
+    mt_hold_failed_read_gives_no_output();
 }
 
 int main(void)
