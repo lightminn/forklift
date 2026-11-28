@@ -949,6 +949,7 @@ A1b(#666–#669)가 펌웨어 `bench7` 과 CLI 의 hold·거리 실행을 넣었
 - Codex 일관성 검토 2 회차: P1 1(`measure: true` + `stop` 의 수락·거부 상충), P2 3(라벨로 옮기는 것은 `bench_start_unconfirmed` 하나, 최종 행 실패는 판정이 아니라 `record_complete` 로 따로·다음 단계는 둘 다 요구, 한 방향 초과면 축 전체 범위 밖). 반영했다.
 - Codex 일관성 검토 3 회차: **새 P1 없음**. P2 4(되돌린 최종 행은 재생이 '판정 불가' — 판정이 갈리는 것이 아님을 명시, `result.json` 은 `record_complete` 참일 때만, 실행마다 `stdout.json` 반환, `verdict1` 의 `record_errors` 는 최종 행 이전까지·최종 행 오류는 `final_record_error` 로 따로). 반영했다.
 - Codex 일관성 검토 4 회차: P1 1(stdout 리디렉션이 5 s 차단 확인을 가림 → `tee`), P2 1(3 절 ①·닫는 중 기록 실패의 범위를 최종 행 이전까지로), P3 1('언제나' 에 조건). 반영했다.
+- Codex 일관성 검토 5 회차: P1 1(파이프 stdout 블록 버퍼로 결과가 늦게 보임 → `PYTHONUNBUFFERED`·CLI `flush=True`), P2 1(Ctrl-C 때 `tee` 가 먼저 죽음 → `tee -i`). 반영했다.
 
 ## 5. 미검증으로 남는 것
 
@@ -983,7 +984,7 @@ A1b(#666–#669)가 펌웨어 `bench7` 과 CLI 의 hold·거리 실행을 넣었
   5. 저듀티: `here` 10 s 를 상한 `--duty 0.13`(최소 듀티 0.12 바로 위)으로, 시작 뒤 손으로 축을 약 30° 밀었다 놓아 데드밴드 밖 보정을 만든다. STATE 듀티(펌웨어가 낸 명령값)와 영상의 축 움직임을 대조하고, 끝은 결과의 정지 사유·`cleanup_confirmed` 로 본다. 실제 PWM·브리지 출력은 별도 계측이 없으면 미확인으로 적는다.
   6. M `zero` 10 s(마지막): 먼저 지금 위치에서 원시 0 까지의 경로에 걸림이 없는지 손으로 확인하고, 그 뒤 축을 원시 0 에서 조금(약 30° 이상) 떨어진 곳에 두고 `record` 로 원시 0 이 아님을 본 다음 시작한다(경로 확인 끝에 원시 0 에 둔 채 시작하면 그 `zero` 자체의 첫 HOLD 가 `sensor_invalid` 로 거부됨, 일관성 검토 P2-5). **원시 0**(독립 검토 P2-6): 축이 원시 0x0000 에 정확히 서 있으면 새 비영 KTH 프레임이 없어 다음 hold 의 첫 HOLD 가 `sensor_invalid` 로 거부된다. 그래서 `zero` 는 맨 끝에 두고, 그 뒤에 다른 hold 를 하면 먼저 손으로 축을 조금 돌려 `record` 로 원시 0 이 아님을 본다. 첫 HOLD 거부는 별도 결과('첫 HOLD 거부: sensor_invalid')로 적는다.
 - **이 묶음으로 확인하지 못하는 것**(미확인으로 적음): 1 kHz 정지 폭, 실제 PWM·브리지 출력과 차단 시각, 짝 유실·1 kHz 틱 여유, 활성 IN 전송 중 재개봉, 1–3 ms 속도 피크.
-- **돌려줄 것**: CLI JSONL(또는 `~/bench_runs/…`), 굽은 이미지의 제품 문자열·sha256·크기, 복구 이미지의 제품 문자열, 속도 확인 슬로모션 영상(두 방향), 흔들기 비교 영상(두 kd, 놓는 순간과 밀어낸 각도가 보이게)과 표식 시각, 구속 시험 영상, 확인 범위(축·구성·`S`·방향별 듀티 상한), 그리고 **실행마다의 CLI 출력 `$D/stdout.json`**(`verdict1`·`record_complete` 가 실린 실시간 출력 — JSONL 만으로는 쓰기는 됐지만 `fsync` 가 실패한 실행을 가릴 수 없어 5.1 다음 단계 조건을 사후 확인하려면 필요, 일관성 3 회차 P2-3). 각 `commission` 은 `2> $D/stderr.txt | tee $D/stdout.json` 으로 낸다 — 결과 JSON 이 전경 터미널에 바로 보여야 구속 시험의 '명령 입력 뒤 5 s 안 `cleanup_confirmed: true`' 를 차단 담당이 실시간으로 볼 수 있다(파일로만 리디렉션하면 화면에 안 보임, 일관성 4 회차 P1). 흔들기 비교는 `--markers` 때문에 사람이 전경 터미널에서 실행한다(stdin 은 TTY 그대로).
+- **돌려줄 것**: CLI JSONL(또는 `~/bench_runs/…`), 굽은 이미지의 제품 문자열·sha256·크기, 복구 이미지의 제품 문자열, 속도 확인 슬로모션 영상(두 방향), 흔들기 비교 영상(두 kd, 놓는 순간과 밀어낸 각도가 보이게)과 표식 시각, 구속 시험 영상, 확인 범위(축·구성·`S`·방향별 듀티 상한), 그리고 **실행마다의 CLI 출력 `$D/stdout.json`**(`verdict1`·`record_complete` 가 실린 실시간 출력 — JSONL 만으로는 쓰기는 됐지만 `fsync` 가 실패한 실행을 가릴 수 없어 5.1 다음 단계 조건을 사후 확인하려면 필요, 일관성 3 회차 P2-3). 각 `commission` 은 `PYTHONUNBUFFERED=1 br commission … 2> $D/stderr.txt | tee -i $D/stdout.json` 으로 낸다(`PYTHONUNBUFFERED`: 파이프로 연결된 stdout 은 블록 버퍼라 결과가 프로세스 끝까지 늦게 도착함; `tee -i`: Ctrl-C 로 멈출 때 `tee` 가 같은 SIGINT 로 먼저 죽어 정리 뒤 결과를 잃지 않게 — 일관성 5 회차 P1·P2. B2a 에서 CLI 도 결과 JSON 을 `flush=True` 로, 기록 파일을 닫기 전에 낸다) — 결과 JSON 이 전경 터미널에 바로 보여야 구속 시험의 '명령 입력 뒤 5 s 안 `cleanup_confirmed: true`' 를 차단 담당이 실시간으로 볼 수 있다(파일로만 리디렉션하면 화면에 안 보임, 일관성 4 회차 P1). 흔들기 비교는 `--markers` 때문에 사람이 전경 터미널에서 실행한다(stdin 은 TTY 그대로).
 
 ## 6. 자체 검토
 
