@@ -219,6 +219,11 @@ def test_a_pushed_hold_comes_back(mrig):
     assert run_until(lambda: b.results, 8.0)
     res = b.results[-1]
     assert res["kind"] == "hold" and res["stop_reason"] == "end_zero" and res["verdict"]["run_cleanup"]["ok"], res
+    errs = [r["target"] - r["cumulative"] for r in record_rows(res) if r["t"] == "bench_pair" and r["mode"] == "ARMED"
+            and r["run_id"] == res["run_id"] and (r["drive"] & 3) == 2]
+    out = [i for i, e in enumerate(errs) if abs(e) > 12]
+    assert out, "the push never moved the axis out of the deadband"
+    assert abs(errs[-1]) <= 12 and out[-1] < len(errs) - 1, errs[-20:]  # it came back
 
 
 def test_a_refused_first_hold_is_written_once_and_closed_with_a_zero(mrig):
@@ -382,3 +387,74 @@ def test_the_first_answer_is_recomputed_from_the_record_alone(rig):  # noqa: F81
                                    lim_host_ns=ff["host_deadline_ns"], now_ns=start["host_ns"],
                                    stop_zero_done_ns=start["stop_zero_done_ns"])
     assert v == res["start"], (v, res["start"])
+
+
+def test_a_first_answer_at_the_renewal_end_stops_in_the_same_cycle(rig, monkeypatch):  # noqa: F811
+    """The first HOLD's acceptance seen only at T - HANDOVER: recorded, and the stop entered in that same cycle -- no
+    renewal, the end zero not held to the next cycle (Codex B2a-2 impl round 2 P1)."""
+    c, b, run_until = rig(*KTH)
+    real = bench_console.bs.first_answer
+
+    def late(*a, **kw):
+        v = real(*a, **kw)
+        r = c.run
+        if v is None or r is None or r.send_until_ns is None or kw["now_ns"] < r.send_until_ns:
+            return None
+        return v
+
+    monkeypatch.setattr(bench_console.bs, "first_answer", late)
+    b.send("bench_run", **hold(seconds=1.2))
+    assert run_until(lambda: b.results, 8.0), b.replies
+    res = b.results[-1]
+    rows = record_rows(res)
+    phases = [r for r in rows if r["t"] == "phase"]
+    drive = next(r for r in phases if r["phase"] == "drive")
+    stop = next(r for r in phases if r["phase"] == "stop")
+    assert drive["host_ns"] == stop["host_ns"], (drive, stop)
+    assert len(holds_written(c)) == 1  # the first HOLD only
+
+
+def test_a_reopening_during_the_rest_position_keeps_the_boards_result(rig):  # noqa: F811
+    from forklift_core.plant.mcu_host import HostEvent
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **M, duty=0.2, seconds=1.0, stop={"turns": 0.02}, count_sign=1)
+    assert run_until(lambda: c.run is not None and c.run.phase == "rest", 8.0)
+    c.dev.extra_events.append(HostEvent("connected", {"path": "pty", "product": BENCH5}))
+    assert run_until(lambda: b.results, 3.0)
+    res = b.results[-1]
+    assert res["closed"] == "ended" and res["stop_reason"] == "distance_reached", res
+    assert res["distance"]["result"] == "reached" and res["bench_result"]["confirmed"], res
+    assert res["rest"] is None and "reopened" in res["rest_note"]
+
+
+def test_a_stop_zero_torn_while_the_board_stops_itself_is_abandoned(rig):  # noqa: F811
+    """STOP mid-hold, its zero written up to the delimiter and then held back: the HOLDs run out, the board stops by
+    itself (STOPPING), and the rest of the zero is never written -- abandoned with the poison (plan 4.4, r2 P1-1)."""
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    assert run_until(lambda: len(holds_written(c)) >= 5, 2.0)
+    state = {"seq": None}
+    real_write = os.write
+
+    def writer(fd, data):
+        cur = c.dev.link._cur
+        if cur is not None and cur.kind == "COMMISSION" and not cur.nonzero and c.run is not None \
+                and c.run.phase == "stop":
+            seq = int(cur.seq) & 0xFFFF
+            if state["seq"] is None and bytes(data) == bytes(cur.data):
+                state["seq"] = seq
+                return real_write(fd, data[:-1])  # all but the delimiter
+            if state["seq"] == seq:
+                raise BlockingIOError  # held back until the gate refuses it
+        return real_write(fd, data)
+
+    c.dev.link._write = writer
+    b.c.channels.message(b.conn, b.client, {"t": "stop", "request_id": "S1", "source": "console"})
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    assert state["seq"] is not None and c.dev.link.abandoned >= 1, res
+    rows = record_rows(res)
+    assert not any(r.get("t") == "state" and r["last_rx_seq"] == state["seq"] for r in rows)
+    assert res["aborted"] == "stop" and not res["verdict"]["run_cleanup"]["ok"]

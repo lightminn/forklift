@@ -1213,23 +1213,14 @@ class BenchConsole:
                             lim_mcu_us=r.first_lim_mcu_us or 0, lim_host_ns=r.first_host_deadline_ns, now_ns=now,
                             stop_zero_done_ns=r.zero_written_ns)
         if v is None:
-            p = self.pair()
-            if p is not None and p.mode in STOPPED and self._after_arm(r, p):
-                if p.boot_id != r.boot:
-                    v = "result_lost"  # a new boot keeps no record of this run (plan 4.4, round 3 P2-1)
-                elif r.arm_ident is not None and (p.boot_id, p.arm_gen) == r.arm_ident and p.result_run_id == 0:
-                    v = "no_drive_confirmed"  # this arming ended with no run result: the first frame never drove
-        if v is None:
             return None
         r.bench_start = v
         self._emit(r, {"t": "bench_start", "result": v, "seq": r.first_seq, "lim_mcu_us": r.first_lim_mcu_us,
                        "host_ns": now, "stop_zero_done_ns": r.zero_written_ns})
         if v.startswith("refused:"):
             r.aborted = r.aborted or f"bench_start_refused_{v.split(':', 1)[1]}"
-        elif v in ("unconfirmed", "result_lost"):
-            r.aborted = r.aborted or f"bench_start_{v}"
-        elif v == "no_drive_confirmed":
-            r.aborted = r.aborted or "bench_start_no_drive"
+        elif v == "unconfirmed":
+            r.aborted = r.aborted or "bench_start_unconfirmed"
         return v
 
     def _first(self, r: Run, now: int, states: list) -> None:  # noqa: ARG002 -- the window is judged in _step
@@ -1240,6 +1231,8 @@ class BenchConsole:
             return
         if ans in ("accepted", "confirmed_by_result"):
             self._phase(r, "drive", now)
+            if r.send_until_ns is not None and now >= r.send_until_ns:
+                self._end(r, now)  # the end zero in this same cycle (Codex B2a-2 impl round 2 P1)
             return
         self._enter_stop(r, None, now)
 
@@ -1446,6 +1439,21 @@ class BenchConsole:
         r.disarm_seq, r.disarm_written_ns = seq, None
         self._emit(r, {"t": "stop_disarm", "seq": seq, "host_ns": now})
 
+    def _latched_result(self, r: Run):
+        """The last recorded BENCH_STATE of this run's boot and arming carrying its result (any host opening)."""
+        if r.arm_ident is None or r.run_id is None:
+            return None
+        return next((b for (_t, _m, b), idn in zip(reversed(r.pairs), reversed(r.idents), strict=True)
+                     if idn[:2] == r.arm_ident and b.result_run_id == r.run_id), None)
+
+    def _no_drive_by_end_pair(self, r: Run) -> bool:
+        """An end pair (DISARMED, FAULT, ESTOP) of this run's boot and arming with no run result: the arming ended
+        without the run having driven (plan 4.4 decision 3, '구동 없음 확인')."""
+        if r.arm_ident is None:
+            return False
+        return any(m in STOPPED and idn[:2] == r.arm_ident and b.result_run_id == 0
+                   for (_t, m, b), idn in zip(r.pairs, r.idents, strict=True))
+
     def _restore_zero_axis(self, r: Run, *, force: bool = False) -> None:
         """The readiness zero's axis back to L once the ARM's exchange is over (plan 4.4, r1 P1-4): never while the
         host is still arming or waiting for that zero -- an L(0) made then would be refused by the hold image."""
@@ -1475,18 +1483,20 @@ class BenchConsole:
             self._phase(r, "rest", now)
             return
         p = self.pair()
+        latched = self._latched_result(r)
         # the run's own frames still queued go with it (round 4 P2-2): an unsent stop DISARM would otherwise be
         # refused at every gate and handed back to the queue head, in front of the next run's BENCH_SET
         self.host.drop_frames(("COMMISSION", "DISARM", "BENCH_SET", "BENCH_ARM", "BENCH_HOLD"), "run closed")
         self._restore_zero_axis(r, force=True)
-        result_seen = p is not None and r.run_id is not None and p.result_run_id == r.run_id
-        stop_reason = _stop_name(p.stop_reason) if result_seen else None
+        result_seen = latched is not None or (p is not None and r.run_id is not None and p.result_run_id == r.run_id)
+        stop_reason = (_stop_name(latched.stop_reason) if latched is not None
+                       else _stop_name(p.stop_reason) if result_seen else None)
         if closed is None:
             if result_seen:
                 closed = "ended"  # the board drove this run and recorded how it ended
-            elif r.bench_start == "no_drive_confirmed":
-                closed = "no_drive"  # this arming's end pair carries no run result
-            elif r.nonzero_written or r.bench_start == "result_lost":
+            elif self._no_drive_by_end_pair(r):
+                closed = "no_drive"  # this arming's end pair carries no run result: it never drove (plan 4.4)
+            elif r.nonzero_written:
                 closed = "result_lost"  # a duty or a hold went out but the board's record of the run was not read
             else:
                 closed = "no_drive"
@@ -1519,7 +1529,8 @@ class BenchConsole:
                   "cleanup": r.cleanup_state or ("confirmed" if r.cleanup_confirmed else "unconfirmed"),
                   "advisories": list(r.ask.advisories), "range_mark": r.ask.range_mark,
                   "notes": [n for n, on in (("brake_end_unseen", r.brake_notice),
-                                            ("result_pair_absent", r.pair_wait_noted)) if on], **b2}
+                                            ("result_pair_absent", r.pair_wait_noted)) if on],
+                  "late_aborts": list(r.late_failures), **b2}
         result["closed"] = closed
         r.phase = "closed"
         try:
@@ -1565,8 +1576,9 @@ class BenchConsole:
             return ident is not None and idn[:2] == ident and idn[2:] == link
 
         mine = [(t, m, b) for (t, m, b), idn in zip(r.pairs, r.idents, strict=True) if ours(idn)]
-        # the board's result from the run's own record (the host's kept pair may be gone after a loss)
-        res = next((b for _t, _m, b in reversed(mine) if b.result_run_id == r.run_id), None)
+        # the board's latched result from the run's record of this boot and arming, on any opening (the host's kept
+        # pair may be gone after a loss; the board keeps its record across a reopening) -- Codex B2a-2 r2 P2-2
+        res = self._latched_result(r)
         br = {"confirmed": True, **bringup.result_fields(res)} if res is not None else {"confirmed": False}
         out["bench_result"] = br
         out["start"] = r.bench_start
@@ -1747,7 +1759,8 @@ class BenchConsole:
         started = a.kind == "measure" or r.bench_start in ("accepted", "confirmed_by_result")
         own = (p is not None and bst is not None and r.arm_ident is not None and (p.boot_id, p.arm_gen) == r.arm_ident
                and started and bst.run_id == r.run_id and bst.axis == a.axis and bst.source == a.bench.source
-               and p.drive_state in (BenchDriveState.DRIVING, BenchDriveState.ENDED)
+               and (p.drive_state == BenchDriveState.DRIVING
+                    or (p.drive_state == BenchDriveState.ENDED and bst.result_run_id == r.run_id))
                and self.pair_rx_ns is not None and now - self.pair_rx_ns <= int(bs.HOLD_GAP_US * 1000) * 2)
         if a.kind in ("hold", "distance", "measure"):
             out["arming"] = list(r.arm_ident) if r.arm_ident else None
