@@ -447,6 +447,7 @@ class Run:
     arm_rx_conn: int | None = None
     pair_wait_noted: bool = False
     last_pair: object = None  # bs.Pair of this arming's last accepted pair
+    last_state: object = None  # this arming's latest accepted STATE
 
 
 @dataclass
@@ -570,6 +571,8 @@ class BenchConsole:
         r = self.run
         if r is not None:
             self._emit(r, {**state_row(Sample(received_ns, st)), "conn": self.rx_conn})
+            if r.arm_ident is not None and (st.boot_id, st.arm_gen) == r.arm_ident:
+                r.last_state = st  # this arming's latest accepted STATE, kept across a loss (verdict 1)
             if r.first_seq is not None and r.bench_start is None:
                 r.evidence.append(("state", st, None, received_ns, self.rx_conn))
             r.peak_current_ma = [max(a, abs(int(b))) for a, b in zip(r.peak_current_ma, st.current_ma)]
@@ -1508,6 +1511,9 @@ class BenchConsole:
             else:
                 closed = "no_drive"
         st = self.host.state
+        if r.last_state is not None and (st is None or st.boot_id != r.last_state.boot_id
+                                         or st.mcu_time_us < r.last_state.mcu_time_us):
+            st = r.last_state  # a loss cleared the host's STATE: this arming's latest one decides (impl r4 P2)
         if (p is not None and st is not None and st.boot_id == p.boot_id and st.mcu_time_us >= p.mcu_time_us
                 and (r.arm_ident is None or st.arm_gen == p.arm_gen)):
             # the verdict reads the latest STATE of the same arming too: a FAULT after the last pair is not a clean

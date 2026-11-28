@@ -493,3 +493,25 @@ def test_a_stop_zero_torn_while_the_board_stops_itself_is_abandoned(rig):  # noq
     rows = record_rows(res)
     assert not any(r.get("t") == "state" and r["last_rx_seq"] == state["seq"] for r in rows)
     assert res["aborted"] == "stop" and not res["verdict"]["run_cleanup"]["ok"]
+
+
+def test_a_fault_state_seen_before_a_loss_in_the_rest_position_fails_verdict1(rig):  # noqa: F811
+    """A FAULT STATE of this arming received during the rest position, its pair never in, then the link lost: the
+    verdict reads that STATE (the host's is cleared by the loss), not the earlier DISARMED pair (impl round 4 P2)."""
+    import dataclasses
+
+    from forklift_core.mcu_link.messages import FaultFlag, Mode
+    from forklift_core.plant.mcu_host import HostEvent
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **M, duty=0.2, seconds=0.8, measure=True, count_sign=1, source="kth")
+    assert run_until(lambda: c.run is not None and c.run.phase == "rest", 8.0)
+    r = c.run
+    st = r.last_state
+    r.last_state = dataclasses.replace(st, mode=Mode.FAULT, fault_flags=FaultFlag.DRIVER_FAULT_M,
+                                       mcu_time_us=st.mcu_time_us + 5_000)
+    c.dev.extra_events.append(HostEvent("connected", {"path": "pty", "product": BENCH5}))
+    assert run_until(lambda: b.results, 3.0)
+    res = b.results[-1]
+    v1 = res["verdict"]["run_cleanup"]
+    assert not v1["ok"] and any("DRIVER_FAULT_M" in w or "last_mode:FAULT" in w for w in v1["why"]), res
