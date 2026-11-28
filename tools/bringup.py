@@ -286,7 +286,13 @@ class Bench:
         data = (json.dumps(row, default=str) + "\n").encode("utf-8")
         try:
             if os.write(fd, data) != len(data):
-                return False  # a torn final row: a replay reads it as an incomplete record (undecidable)
+                # a torn final row: closed with a line end so the next run's rows start on their own line (Codex
+                # B2a-1 impl round 3 P2-2); a replay reads the torn row as an incomplete record (undecidable)
+                try:
+                    os.write(fd, b"\n")
+                except OSError:
+                    pass
+                return False
             os.fsync(fd)
             return True
         except OSError:
@@ -595,6 +601,7 @@ def mcu_time_of_acceptance(samples, seqs, start: int = 0):
 def _final(result: dict, session: Session) -> dict:
     ok = result.get("result") == "ok" and session.aborted is None and session.cleanup_confirmed
     return {**result, "aborted": session.aborted, "cleanup_confirmed": session.cleanup_confirmed,
+            "result_basis": result.get("result"),  # before the session's own abort and cleanup (B2a-1: made again)
             "result": "ok" if ok else ("aborted" if result.get("result") in ("ok", None) else result["result"])}
 
 
@@ -1550,16 +1557,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             # the duty and current figures then have no sample (plan 4.2 A1b-1 decision 8)
             result = "board_record_only"
             metrics = replace(metrics, valid=False, reason="no_driving_sample")
-        if br.get("confirmed"):
-            if session.bench.distance:
-                bench_out["distance"] = bench_session.distance_verdict(
-                    stop_reason=br.get("stop_reason"), confirm=br.get("distance_confirm", 0),
-                    run_flags=br.get("run_flags", 0), stop_counts=session.bench.stop_counts,
-                    distance_ref=br.get("distance_ref", 0), cut_position=br.get("cut_position", 0))
-            else:
-                bench_out["measure"] = bench_session.measure_verdict(
-                    run_flags=br.get("run_flags", 0), distance_ref=br.get("distance_ref", 0),
-                    cut_position=br.get("cut_position", 0))
+        bench_out.update(_kth_verdicts(session, br))
         if session.bench_start is not None:
             bench_out["start"] = session.bench_start
         if rest is not None:
@@ -1702,6 +1700,20 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
 
 
+def _kth_verdicts(session: CommissionSession, br: dict) -> dict:
+    """A KTH duty run's distance or measuring verdict from the board's result (empty until it is confirmed)."""
+    if not br.get("confirmed"):
+        return {}
+    if session.bench.distance:
+        return {"distance": bench_session.distance_verdict(
+            stop_reason=br.get("stop_reason"), confirm=br.get("distance_confirm", 0),
+            run_flags=br.get("run_flags", 0), stop_counts=session.bench.stop_counts,
+            distance_ref=br.get("distance_ref", 0), cut_position=br.get("cut_position", 0))}
+    return {"measure": bench_session.measure_verdict(
+        run_flags=br.get("run_flags", 0), distance_ref=br.get("distance_ref", 0),
+        cut_position=br.get("cut_position", 0))}
+
+
 def _run_recorders(b: Bench, pairs: list, idents: list):
     """The host hooks a bench7 KTH run keeps for its whole length (plan 4.4 B2: verdicts and the first answer can be
     recomputed from the JSONL alone): every accepted pair as a ``bench_pair`` row with its receipt time, the host's
@@ -1739,7 +1751,6 @@ def bench_verdict1(b: Bench, session: CommissionSession, br: dict, *, distance: 
     A short distance run whose first answer stayed unconfirmed but whose board record of this arming shows it reached
     its distance (reason 8) and then DISARMED keeps that doubt as a label, not an abort (plan 4.4, consistency round
     1 P2-1) -- only that doubt: any other abort stays."""
-    b.flush_record()  # every row so far out of the buffer before the verdict counts the lost ones (impl P2-5)
     last_pair = bench_session.pair_of(b.host.bench_state_of, b.host.bench_state)
     same_arming = (last_pair is not None and session.run_ident is not None
                    and (last_pair.boot_id, last_pair.arm_gen) == session.run_ident)
@@ -1765,6 +1776,9 @@ def bench_verdict1(b: Bench, session: CommissionSession, br: dict, *, distance: 
         last_pair = replace(last_pair, mode=latest.mode, duty_e4=tuple(latest.duty_e4), fault_flags=latest.fault_flags)
     names = tuple(session.bench.names) if session.bench is not None else ()
     faults = () if last_pair is None else bench_session.unexpected_faults(last_pair.fault_flags, session.axis, names)
+    # every row so far -- the ones written just above included -- out of the buffer before the lost ones are counted
+    # (Codex B2a-1 impl P2-5, round 3 P2-3)
+    b.flush_record()
     v = bench_session.run_verdict(
         closed="ended" if br.get("confirmed") else "no_drive", stop_reason=br.get("stop_reason"),
         aborted=session.aborted, cleanup_confirmed=bool(session.cleanup_confirmed), last=last_pair,
@@ -2524,6 +2538,7 @@ def main(argv=None) -> int:
         markers = {"requested": True, "active": active, "why": why}
         if not active:
             print(f"bringup.py: --markers is off ({why}): no Enter marks will be recorded", file=sys.stderr)
+    _end_torn_line(args.out)  # a torn last row of an earlier run never swallows this run's header
     with open(args.out, "a", encoding="utf-8") as out:
         # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
@@ -2584,6 +2599,23 @@ def main(argv=None) -> int:
         print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
                          default=str), flush=True)
     return 0
+
+
+def _end_torn_line(path: str) -> None:
+    """A record file whose last byte is not a line end (an earlier run's torn final row) gets one before this run
+    appends (Codex B2a-1 impl round 3 P2-2)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                return
+            f.seek(-1, os.SEEK_END)
+            torn = f.read(1) != b"\n"
+    except OSError:
+        return
+    if torn:
+        with open(path, "ab") as f:
+            f.write(b"\n")
 
 
 HOLD_DUTY_DEFAULT = 0.15  # the hold's cap without --duty (11-27 measured start, lead 2026-11-28)
@@ -3158,12 +3190,25 @@ def execute(args, bench: Bench) -> dict:
     if isinstance(v1, dict) and getattr(session, "bench_image", False):
         # verdict 1 made again from where the run really ended: after execute's cleanup retry and every row lost
         # since (Codex B2a-1 impl rounds 1-2 P2-4); the labels the run already earned are kept
-        again = bench_verdict1(bench, session, session.bench_result() or {}, distance=session._distance_run())
+        br = session.bench_result() or {}
+        again = bench_verdict1(bench, session, br, distance=session._distance_run())
         again["labels"] = [*v1.get("labels", []), *(x for x in again["labels"] if x not in v1.get("labels", []))]
         result["verdict1"] = again
+        # every field that moves with verdict 1 from the same last evidence (Codex B2a-1 impl round 3 P2-1)
+        result["bench_result"] = br
+        result["bench_run"] = br
+        if session.bench is not None and session.bench.source == 1 and not session._hold_run():
+            result.update(_kth_verdicts(session, br))
         if isinstance(result.get("hold"), dict):
             result["hold"]["verdict1"] = again
-        result["cleanup_confirmed"] = session.cleanup_confirmed
+            result["hold"]["start"] = session.bench_start
+        elif "start" in result:
+            result["start"] = session.bench_start
+        basis = result.get("result_basis")
+        if session._hold_run():
+            basis = "ok" if again["ok"] else "aborted"  # a hold's result is its verdict 1
+        if basis is not None:
+            result.update({k: v for k, v in _final({"result": basis}, session).items() if k != "result_basis"})
         if not again["ok"] and result.get("result") == "ok":
             result["result"] = "aborted"  # the CLI's result never says ok beside a failed verdict 1 (r2 P2-4)
     bench.host.on_pair = bench.host.on_accepted = None

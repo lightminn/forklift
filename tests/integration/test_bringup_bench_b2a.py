@@ -238,6 +238,36 @@ def test_a_verdict1_failed_at_the_end_never_leaves_the_result_ok(model, monkeypa
     assert not res["verdict1"]["ok"] and res["result"] == "aborted", res
 
 
+def test_a_torn_final_row_never_swallows_the_next_runs_rows(tmp_path, monkeypatch):
+    path = tmp_path / "run.jsonl"
+    real_write = bringup.os.write
+
+    def short(fd, data):
+        return real_write(fd, data[:10]) if data.startswith(b"{") else real_write(fd, data)
+
+    with open(path, "a", encoding="utf-8") as out:
+        b = bringup.Bench(None, out, commission=True)
+        b.emit({"t": "a"})
+        monkeypatch.setattr(bringup.os, "write", short)
+        assert b.final_row({"t": "result", "n": 1}) is False
+    monkeypatch.setattr(bringup.os, "write", real_write)
+    bringup._end_torn_line(str(path))  # a no-op here: the torn row was already closed with a line end
+    with open(path, "a", encoding="utf-8") as out:
+        out.write(json.dumps({"t": "header"}) + "\n")
+    lines = path.read_text().splitlines()
+    assert json.loads(lines[0]) == {"t": "a"} and json.loads(lines[-1]) == {"t": "header"}
+    assert len(lines) == 3  # the torn row stands alone on its line
+
+
+def test_a_record_ending_in_a_torn_line_gets_a_line_end_first(tmp_path):
+    path = tmp_path / "old.jsonl"
+    path.write_text('{"t": "a"}\n{"t": "res')
+    bringup._end_torn_line(str(path))
+    assert path.read_text().endswith('res\n')
+    bringup._end_torn_line(str(path))
+    assert path.read_text().endswith('res\n')  # once only
+
+
 def test_an_in_memory_record_takes_the_final_row_as_any_row():
     b = bringup.Bench(None, io.StringIO(), commission=True)
     assert b.final_row({"t": "result"}) is True
