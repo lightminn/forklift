@@ -704,7 +704,16 @@ def test_the_run_pairs_keep_the_confirmed_arming():
     pairs = [(0, Mode.DISARMED, NS(run_id=0)), (10, Mode.ARMED, NS(run_id=5)), (20, Mode.ARMED, NS(run_id=5))]
     idents = [(1, 7), (1, 8), (2, 8)]  # the last pair: another boot
     kept = bringup._run_pairs(pairs, idents, (1, 8))
-    assert kept == pairs[:2]
+    assert [k[0] for k in kept] == [0, 10] and kept[1] is pairs[1]
+    assert kept[0][2].run_id == 0  # the earlier arming: its time only
+    # a run id reused by an earlier arming of the same boot never mixes its count in (Codex A1b-2b round 4 P3)
+    from forklift_core.plant import bench_session as bs_
+
+    pairs = [(0, Mode.ARMED, NS(run_id=5, deadband_entries=24)), (100_000, Mode.DISARMED, NS(run_id=5,
+             deadband_entries=24)), (200_000, Mode.ARMED, NS(run_id=5, deadband_entries=8))]
+    kept = bringup._run_pairs(pairs, [(1, 7), (1, 7), (1, 8)], (1, 8))
+    w = bs_.entry_window(bs_.entry_points(kept, 5), 200_000)
+    assert w["lower"] == 8 and w["label"] == "none", w
 
 
 def test_the_cli_gate_refuses_a_hold_at_its_stop_time_itself(monkeypatch):

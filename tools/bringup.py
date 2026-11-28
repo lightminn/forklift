@@ -1629,7 +1629,9 @@ def _run_pairs(pairs: list, idents: list, ident: tuple | None) -> list:
     boot under another arming (the entry window's zero base)."""
     if ident is None:
         return pairs
-    return [p for p, idn in zip(pairs, idents) if idn == ident or (idn[0] == ident[0] and idn[1] != ident[1])]
+    # another arming's pair keeps only its time (the zero base): never its run id or count (Codex A1b-2b round 4 P3)
+    return [p if idn == ident else (p[0], p[1], _NoRun()) for p, idn in zip(pairs, idents)
+            if idn == ident or idn[0] == ident[0]]
 
 
 def recovered_fields(bs) -> dict:
