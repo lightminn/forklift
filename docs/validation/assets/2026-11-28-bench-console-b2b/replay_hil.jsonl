@@ -1,0 +1,6 @@
+{"at": 1795850696.8218143, "mode": "hil", "epoch": 4242, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795850697.149635, "mode": "hil", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "18931a38-e364-4034-aba9-c10235be8125", "source": "console", "session_epoch": 4242, "_before_welcome": false}}
+{"at": 1795850697.1498322, "mode": "hil", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "585a3e6c-15db-4eee-80d1-23bf19a49c7c", "source": "key", "session_epoch": 4242, "_before_welcome": false}}
+{"at": 1795850697.348927, "mode": "hil", "epoch": 4242, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795850702.644151, "mode": "hil", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "bb308251-d097-430c-9372-67fb6879e7ab", "source": "console", "session_epoch": 4242, "_before_welcome": false}}
+{"at": 1795850702.9443007, "mode": "hil", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "a1ee5e8a-47c3-4303-8973-63944eb5cd9f", "source": "key", "session_epoch": 4242, "_before_welcome": false}}
