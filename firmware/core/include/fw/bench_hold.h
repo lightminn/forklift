@@ -34,6 +34,7 @@ typedef struct {
     /* watch (plan 4.3 decision 7) */
     uint32_t r;
     uint64_t timer_us, zr_us;
+    uint64_t fb_timer_us, fb_zr_us; /* what unreported windows added to each since the last HAL report */
     bool trusted_seen; /* a trusted sample since the watch last reset: 10, else 11 */
     bool in_band;      /* the last trusted sample was inside the deadband */
     uint16_t entries;  /* deadband entries (out -> in), modular */
@@ -44,7 +45,9 @@ typedef struct {
 
 /* One tick's watch input (the run axis). */
 typedef struct {
-    uint64_t window_us; /* this read's window (HAL read to HAL read) */
+    bool reported;      /* a HAL report this tick: window_us is its read-to-read window, which covers the unreported
+                           ticks since its last read (their additions are taken back out of it) */
+    uint64_t window_us; /* this read's window (HAL read to HAL read), or the tick's when unreported */
     bool applied_any;   /* a non-zero may have been active in it */
     bool last_zero;     /* the last counted frame was 0x0000 */
     uint32_t cum;       /* the counter now (tentative when last_zero) */

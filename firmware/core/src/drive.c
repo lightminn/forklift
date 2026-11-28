@@ -794,10 +794,7 @@ static void bench_pwm_view(drive *d, const drive_inputs *in)
 {
     if (in->pwm_report) {
         d->pwm_reported = true;
-        /* the HAL's window runs from its last read: the ticks the fallback already counted are in it (Codex A1b-2a
-           round 3) */
-        d->pwm_window_us = in->applied_window_us > d->pwm_fb_us ? in->applied_window_us - d->pwm_fb_us : 0u;
-        d->pwm_fb_us = 0;
+        d->pwm_window_us = in->applied_window_us; /* the unreported ticks it covers: bench_hold_watch */
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             d->pwm_applied[ch] = in->applied_e4[ch];
             d->pwm_any[ch] = in->applied_any[ch];
@@ -808,7 +805,6 @@ static void bench_pwm_view(drive *d, const drive_inputs *in)
     } else {
         d->pwm_reported = false;
         d->pwm_window_us = d->pwm_have_last ? d->time_us - d->pwm_last_us : 0u;
-        d->pwm_fb_us += d->pwm_window_us;
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             float u = d->out.drvoff[ch] ? 0.0f : d->out.duty[ch];
             float m = u < 0.0f ? -u : u;
@@ -852,7 +848,8 @@ static uint8_t bench_hold_step(drive *d)
         return DRIVE_BENCH_STOP_KTH_LOST;
     }
     uint8_t ax = d->run_axis;
-    bench_hold_tick t = {.window_us = d->pwm_window_us,
+    bench_hold_tick t = {.reported = d->pwm_reported,
+                         .window_us = d->pwm_window_us,
                          .applied_any = d->pwm_any[ax],
                          .last_zero = k->last_zero,
                          .cum = k->cum,

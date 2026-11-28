@@ -158,14 +158,31 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
 {
     uint32_t db = h->cfg.deadband_counts;
     uint32_t now_err = abs_err(h, t->last_zero ? t->cum : t->trust_cum); /* tentative when the last frame was 0 */
+    /* a reported window covers the unreported ticks since the last report: only what they did not already add counts
+       (Codex A1b-2a rounds 3-4) */
+    uint64_t wt = t->window_us, wz = t->window_us;
+    if (t->reported) {
+        wt = wt > h->fb_timer_us ? wt - h->fb_timer_us : 0u;
+        wz = wz > h->fb_zr_us ? wz - h->fb_zr_us : 0u;
+        h->fb_timer_us = h->fb_zr_us = 0;
+    }
     /* time: the window when a non-zero may have been active or the error is outside the deadband (decision 7) */
     if (t->applied_any || now_err > db) {
-        h->timer_us += t->window_us;
+        h->timer_us += wt;
+        if (!t->reported) {
+            h->fb_timer_us += wt;
+        }
     }
     if (t->last_zero) {
-        h->zr_us += t->applied_any ? t->window_us : 0u;
+        if (t->applied_any) {
+            h->zr_us += wz;
+            if (!t->reported) {
+                h->fb_zr_us += wz;
+            }
+        }
     } else {
         h->zr_us = 0;
+        h->fb_zr_us = 0;
     }
     if (t->trusted_new) {
         uint32_t a = abs_err(h, t->trust_cum);
@@ -177,7 +194,7 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
                         t->lo >= t->run_since + BENCH_HOLD_ELIGIBLE_US && e != 0 &&
                         (e > 0 ? 1 : -1) == t->run_dir;
         if (in) {
-            h->timer_us = 0; /* 1: the target reached, eligible or not */
+            h->timer_us = h->fb_timer_us = 0; /* 1: the target reached, eligible or not */
             h->r = a;
             h->trusted_seen = false;
         } else if (!eligible) {
@@ -185,7 +202,7 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
                 h->r = a; /* 2: lower only */
             }
         } else if ((int64_t)a <= (int64_t)h->r - BENCH_HOLD_R) {
-            h->timer_us = 0; /* 3 */
+            h->timer_us = h->fb_timer_us = 0; /* 3 */
             h->r = a;
             h->trusted_seen = false;
         } else if ((int64_t)a >= (int64_t)h->r + 2 * BENCH_HOLD_R) {

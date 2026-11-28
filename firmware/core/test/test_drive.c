@@ -3501,13 +3501,13 @@ static void hold_time_limit_stops(void)
     in.applied_any[DRIVE_CH_M] = true;
     in.abs_start_known[0] = true;
     in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
-    tick();
+    tick(); /* 1 ms into the interval */
+    kraw(0, 1095); /* 2 ms: inside, 0 requested, not over the limit yet, the 1200 still active */
     in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
     tick();
-    kraw(0, 1095); /* inside: 0 requested, the 1200 still active */
-    in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
-    tick();
-    kraw(0, 1000); /* out again */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(out.duty[DRIVE_CH_M] == 0.0f);
+    kraw(0, 1000); /* 3 ms: out again with the 1200 reported -> the limit first */
     in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
     tick();
     CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);

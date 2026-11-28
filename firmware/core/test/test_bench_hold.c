@@ -154,6 +154,7 @@ static uint8_t wtick(int32_t e, bool out, bool trusted, bool zero_frame)
     now_us += 1000;
     bench_hold_tick t;
     memset(&t, 0, sizeof t);
+    t.reported = true;
     t.window_us = 1000;
     t.applied_any = out;
     t.last_zero = zero_frame;
@@ -387,6 +388,7 @@ static void watch_eligibility_window(void)
         wstart(30, 12);
         bench_hold_tick t;
         memset(&t, 0, sizeof t);
+        t.reported = true;
         t.window_us = 1000;
         t.applied_any = true;
         t.trusted_new = true;
@@ -454,6 +456,60 @@ static void watch_driven_zero_run(void)
     CHECK_EQ_I(n, 5);
 }
 
+/* unreported ticks that added nothing take nothing out of the next report's window: a 0x0000 run with the output
+   withheld, three unreported in-band ticks, then a report of a 4 ms window with a non-zero -> 1 + 4 = 5 ms > 4 ->
+   11 (Codex A1b-2a round 4); and unreported ticks that did add are taken back out (round 3) */
+static void watch_unreported_ticks(void)
+{
+    wstart(0, 12);
+    bench_hold_tick t;
+    memset(&t, 0, sizeof t);
+    t.last_zero = true;
+    t.cum = h.target;
+    t.trust_cum = h.target;
+    t.reported = true;
+    t.window_us = 1000;
+    t.applied_any = true;
+    CHECK_EQ_U(bench_hold_watch(&h, &t), 0); /* zr 1 ms */
+    t.reported = false;
+    t.applied_any = false;
+    for (int k = 0; k < 3; k++) {
+        CHECK_EQ_U(bench_hold_watch(&h, &t), 0); /* nothing added */
+    }
+    t.reported = true;
+    t.applied_any = true;
+    t.window_us = 4000;
+    CHECK_EQ_U(bench_hold_watch(&h, &t), DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT);
+    /* the other way: unreported ticks that did add (outside the deadband) */
+    wstart(30, 12);
+    memset(&t, 0, sizeof t);
+    t.cum = t.trust_cum = h.target - 30u;
+    t.applied_any = true;
+    t.window_us = 1000;
+    t.reported = false;
+    (void)bench_hold_watch(&h, &t);
+    (void)bench_hold_watch(&h, &t);
+    CHECK_EQ_U(h.timer_us, 2000);
+    t.reported = true;
+    t.window_us = 3000; /* the HAL's window across the two unreported ticks and this one */
+    (void)bench_hold_watch(&h, &t);
+    CHECK_EQ_U(h.timer_us, 3000);
+    /* the same for the driven 0x0000 run: two unreported driven ticks, then a 3 ms report -> 3 ms, not 5 (no 11) */
+    wstart(0, 12);
+    memset(&t, 0, sizeof t);
+    t.last_zero = true;
+    t.cum = t.trust_cum = h.target;
+    t.applied_any = true;
+    t.window_us = 1000;
+    t.reported = false;
+    CHECK_EQ_U(bench_hold_watch(&h, &t), 0);
+    CHECK_EQ_U(bench_hold_watch(&h, &t), 0);
+    t.reported = true;
+    t.window_us = 3000;
+    CHECK_EQ_U(bench_hold_watch(&h, &t), 0);
+    CHECK_EQ_U(h.zr_us, 3000);
+}
+
 /* deadband entries wrap mod 65536 */
 static void watch_entries_wrap(void)
 {
@@ -488,5 +544,6 @@ int main(void)
     watch_time_added_once();
     watch_driven_zero_run();
     watch_entries_wrap();
+    watch_unreported_ticks();
     return fw_test_failures;
 }
