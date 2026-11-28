@@ -1,0 +1,140 @@
+{
+ "t": "bench_result",
+ "request_id": "bench-bench_run-35b4bd2d77b178-21467",
+ "run": "distance_M_20261128_162112",
+ "record": "model_runs/distance_M_20261128_162112",
+ "axis": "M",
+ "duty": 0.2,
+ "seconds": 1.0,
+ "closed": "ended",
+ "run_id": 4037666217,
+ "bench_set": {
+  "seq": 40996,
+  "run_id": 4037666217,
+  "bypass": [
+   "steer_range"
+  ],
+  "duty_max_e4": [
+   10000,
+   10000,
+   2500,
+   1500
+  ],
+  "time_ms": [
+   2147483,
+   2147483,
+   2000,
+   2000
+  ],
+  "overrides": true,
+  "mode": 1,
+  "source": 1,
+  "count_sign": 1,
+  "stop_counts": 2048
+ },
+ "stop_reason": "end_zero",
+ "aborted": null,
+ "cleanup_confirmed": true,
+ "previous_result": {
+  "t": "bench_previous_result_final",
+  "boot_id": 11536128,
+  "run_id": 3642583783,
+  "stop_reason": "end_zero",
+  "kind": "hold",
+  "axis": "M",
+  "source": 1,
+  "blocked": 0,
+  "distance_confirm": 0,
+  "run_flags": 33,
+  "distance_ref": 0,
+  "cut_position": 48,
+  "end_evidence_age_ms": 0,
+  "result_bypass": [
+   "steer_range"
+  ],
+  "target": 60,
+  "deadband_entries": 1,
+  "measure": {
+   "moved": 48,
+   "status": "confirmed"
+  },
+  "hold_verdict": {
+   "result": "undecidable",
+   "why": [
+    "\ud310\uc815 \ubd88\uac00(\uc124\uc815\u00b7\ud45c\ubcf8 \uc5c6\uc74c)"
+   ]
+  }
+ },
+ "bypass_mcu": [
+  "steer_range"
+ ],
+ "bypass_host": [],
+ "not_for_gate": true,
+ "physical_setup": null,
+ "peak_current_ma": [
+  0,
+  0,
+  0,
+  0
+ ],
+ "final": {
+  "mode": "DISARMED",
+  "duty_e4": [
+   0,
+   0,
+   0,
+   0
+  ]
+ },
+ "kind": "distance",
+ "board_cause": "end_zero",
+ "cleanup": "confirmed",
+ "advisories": [],
+ "range_mark": "unchecked",
+ "notes": [],
+ "late_aborts": [],
+ "bench_result": {
+  "confirmed": true,
+  "run_id": 4037666217,
+  "stop_reason": "end_zero",
+  "kind": "distance",
+  "axis": "M",
+  "source": 1,
+  "blocked": 0,
+  "distance_confirm": 0,
+  "run_flags": 64,
+  "distance_ref": 48,
+  "cut_position": 171,
+  "end_evidence_age_ms": 0,
+  "result_bypass": [
+   "steer_range"
+  ],
+  "measure": {
+   "moved": 123,
+   "status": "confirmed"
+  }
+ },
+ "start": "accepted",
+ "rest": {
+  "result": "settled_at_100hz",
+  "cumulative": 171,
+  "wording": "100 Hz \uad00\uce21\uc5d0\uc11c 0.5 s \ub3d9\uc548 \uc704\uce58 \ubcc0\ud654 \uc5c6\uc74c"
+ },
+ "distance": {
+  "stop_counts": 2048,
+  "moved_at_cut": 123,
+  "result": "missed",
+  "ended_by": "end_zero"
+ },
+ "verdict": {
+  "run_cleanup": {
+   "ok": false,
+   "why": [
+    "stop_reason:end_zero"
+   ],
+   "labels": []
+  }
+ },
+ "record_errors": 0,
+ "record_complete": true
+}

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSession } from "../js/protocol.js";
-import { Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
+import { BENCH_TEXT } from "../js/profile.js";
+import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, restWords, targetsInWindow, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
   resultView, runFields, wheelDelta } from "../js/bench.js";
 
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
@@ -99,7 +100,7 @@ test("replies are kept with their reason and detail", async () => {
   assert.equal(largePhrase("something else"), null);
 });
 
-test("fields that do not fit the axis or the source are closed; hold, stop, MT and kth_invalid wait for B2/A2", () => {
+test("fields that do not fit the axis or the source are closed; hold and stop open on the KTH source only", () => {
   const l = fieldState({ axis: "L" });
   assert.deepEqual(l.sources, ["none"]);
   assert.equal(l.source, "none");
@@ -114,9 +115,14 @@ test("fields that do not fit the axis or the source are closed; hold, stop, MT a
   const off = fieldState({ axis: "M", bypass: ["steer_range"] });
   assert.equal(off.windowOpen, false);
   assert.equal(off.rangeOff, true);
+  assert.equal(l.holdOpen, false);
+  assert.equal(l.stopOpen, false);
+  assert.equal(m.holdOpen, true);
+  assert.equal(m.stopOpen, true);
+  const none = fieldState({ axis: "M", source: "none" });
+  assert.equal(none.holdOpen, false);
+  assert.equal(none.stopOpen, false);
   for (const f of [l, m]) {
-    assert.equal(f.holdOpen, false);
-    assert.equal(f.stopOpen, false);
     assert.equal(f.mtOpen, false);
     assert.equal(f.kthInvalidOpen, false);
   }
@@ -424,4 +430,211 @@ test("an earlier run's late ACK never clears the next run's result (round 4 P2-1
   s.onMessage({ t: "ack", of: "bench_run", request_id: a }); // A's resend answered late
   await new Promise((r) => setImmediate(r));
   assert.equal(b.result?.request_id, bId);
+});
+
+
+// ---- B2 (plan 4.4 decisions 2 and 6) -------------------------------------------------------------------------------
+const M = { axis: "M", source: "kth", seconds: 2, power_switch_in_hand: true, bypass: ["steer_range"] };
+
+test("a hold: the target, its gains and the sign the operator gave; the cap may be left out", () => {
+  const { fields, problems } = runFields({ ...M, mode: "hold", hold_target: "rel", hold_value: "60", hold_kd: "0.02",
+    count_sign: "1" });
+  assert.deepEqual(problems, []);
+  assert.equal(fields.mode, "hold");
+  assert.equal(fields.duty, undefined);
+  assert.deepEqual(fields.hold, { target: "rel:60", kd: 0.02 });
+  assert.equal(fields.count_sign, 1);
+  assert.equal(fields.stop, undefined);
+  assert.equal(runKind({ ...M, mode: "hold" }), "hold");
+});
+
+test("a hold or a stop without its sign is the page's own problem, never a default", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "here" }).problems.includes("count_sign"));
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "0.5" }).problems.includes("count_sign"));
+  assert.ok(runFields({ ...M, duty: "0.2", measure: true }).problems.includes("count_sign"));
+  assert.deepEqual(runFields({ ...M, duty: "0.2" }).problems, []);  // a plain duty run needs none
+});
+
+test("a stop after N turns and a measuring run", () => {
+  const d = runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "-1" });
+  assert.deepEqual(d.problems, []);
+  assert.deepEqual(d.fields.stop, { turns: 0.5 });
+  assert.equal(d.fields.count_sign, -1);
+  assert.equal(d.fields.measure, undefined);
+  const m = runFields({ ...M, duty: "0.2", measure: true, count_sign: "1" });
+  assert.equal(m.fields.measure, true);
+  assert.equal(m.fields.stop, undefined);
+  // a measuring box left on with a stop typed: the stop wins, the box is not sent
+  assert.equal(runKind({ ...M, duty: "0.2", stop_turns: "0.5", measure: true }), "distance");
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "-1", count_sign: "1" }).problems.includes("stop_turns"));
+});
+
+test("a hold target needs a whole number for abs and rel", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "abs", hold_value: "12.5", count_sign: "1" })
+    .problems.includes("hold_value"));
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "abs", count_sign: "1" }).problems.includes("hold_value"));
+  assert.ok(runFields({ ...M, mode: "hold", hold_deadband: "3.5", hold_target: "zero", count_sign: "1" })
+    .problems.includes("hold_deadband"));
+});
+
+test("the KTH-only fields close on the none source and on L/R, and a mode change drops the stop", () => {
+  assert.equal(runKind({ ...M, source: "none", mode: "hold", stop_turns: "1" }), "duty");
+  assert.equal(runKind({ axis: "L", mode: "hold" }), "duty");
+  assert.deepEqual(clearedOnChange("mode"), ["stop_turns", "measure", "duty"]);  // a duty never carries over
+  for (const k of ["count_sign", "hold_target", "stop_turns", "same_setup"]) assert.ok(clearedOnChange("axis").includes(k));
+  assert.deepEqual(clearedOnChange("source"), clearedOnChange("axis"));
+});
+
+test("a high duty stop is shown, a negative one too, never refused", () => {
+  assert.ok(advice({ ...M, duty: "0.45", stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.ok(advice({ ...M, duty: "-0.45", stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.ok(!advice({ ...M, duty: String(HIGH_DUTY_DISTANCE), stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.equal(rangeMarkBefore({ ...M, duty: "0.2", stop_turns: "0.5" }), "unchecked");
+  assert.equal(rangeMarkBefore({ ...M, mode: "hold" }), "not_applicable");
+  assert.equal(rangeMarkBefore({ ...M, duty: "0.2" }), null);
+});
+
+test("the result view carries verdicts 2 and 3 and the B2 labels", () => {
+  const v = resultView({ kind: "hold", closed: "ended", stop_reason: "end_zero", start: "accepted", cleanup: "confirmed",
+    record_complete: true, verdict: { run_cleanup: { ok: true, why: [], labels: [] } },
+    hold: { verdict: { result: "met", end_error: 3, settle: { samples: 100, inside: 97 } }, entries: { label: null },
+      settings: { target: "here" } } });
+  assert.equal(v.holdVerdict.result, "met");
+  assert.equal(v.holdVerdict.endError, 3);
+  assert.equal(v.holdVerdict.insideShare, 0.97);
+  assert.equal(v.distanceVerdict, null);
+  const d = resultView({ kind: "distance", verdict: { run_cleanup: { ok: true, why: [], labels: ["보드 기록만(구동 표본 없음)"] } },
+    distance: { result: "reached", stop_counts: 2048, moved_at_cut: 2050 }, rest: { result: "settled_at_100hz", cumulative: 2100 },
+    range_mark: "unchecked", late_aborts: ["stop"] });
+  assert.equal(d.distanceVerdict.result, "reached");
+  assert.deepEqual(d.labels, ["보드 기록만(구동 표본 없음)"]);
+  assert.equal(d.rest.cumulative, 2100);
+  assert.deepEqual(d.lateAborts, ["stop"]);
+  assert.equal(d.rangeMark, "unchecked");
+});
+
+test("the graph keeps the run's hold error and breaks on a null", () => {
+  const g = new Graph(10000);
+  const st = (err) => ({ board: { boot_id: 1, duty_e4: [0, 0, 100, 0], current_ma: [0, 0, 0, 0], steering_rad: 0.1,
+    lift_m: 0, wheel_count: [0, 0] }, run: { axis: "M", error_counts: err, deadband: 12 } });
+  g.push(0, st(null));
+  g.push(10, st(40));
+  g.push(20, st(null));  // a pair gap in the middle breaks the line
+  g.push(30, st(5));
+  const s = g.series("M");
+  assert.deepEqual(s.map((x) => x.holdError), [null, 40, null, 5]);
+  assert.equal(s[1].deadband, 12);
+  assert.equal(g.series("M")[1].target, null);  // no target in these samples
+  // another axis's graph never shows the M run's error (B2b r1 P2)
+  assert.deepEqual(g.series("H").map((x) => x.holdError), [null, null, null, null]);
+});
+
+test("a board gap's sample is null in every field and the legend names each run's target (B2b r3 P2-1, P2-2)", () => {
+  const g = new Graph(100000);
+  const st = (err, target) => ({ board: { boot_id: 1, duty_e4: [0, 0, 100, 0], current_ma: [0, 0, 0, 0],
+    steering_rad: 0.1, lift_m: 0, wheel_count: [0, 0] }, run: { axis: "M", error_counts: err, target, deadband: 12 } });
+  g.push(0, st(3, 60));
+  g.push(10, { board: null });  // the board lost: no target, no error -- never undefined
+  g.push(20, st(2, 60));
+  g.push(30, st(null, null));  // the next run, its target not confirmed yet
+  g.push(40, st(-8, 120));
+  const s = g.series("M");
+  assert.deepEqual(s.map((x) => x.target), [60, null, 60, null, 120]);
+  assert.deepEqual(s.map((x) => x.holdError), [3, null, 2, null, -8]);
+  // every target sample here is alone between a gap or an unconfirmed target: no dashed segment, no legend number
+  assert.deepEqual(targetsInWindow(s), []);
+  g.push(50, st(-4, 120));
+  g.push(60, { board: null });
+  g.push(70, st(1, 130));  // alone again: drawn as nothing, named as nothing
+  assert.deepEqual(targetsInWindow(g.series("M")), [120]);
+  const two = [60, 60, null, 120, 120].map((target) => ({ target }));
+  assert.deepEqual(targetsInWindow(two), [60, 120]);  // the earlier run's line keeps its own number
+});
+
+
+test("the hold's cap is its own field: a switch to a duty run never sends it as a fixed output", () => {
+  const h = runFields({ ...M, mode: "hold", hold_target: "here", hold_cap: "0.13", duty: "0.4", count_sign: "1" });
+  assert.equal(h.fields.duty, 0.13);
+  const d = runFields({ ...M, mode: "duty", hold_cap: "0.15" });  // back to a duty run: the cap stays in its field
+  assert.ok(d.problems.includes("duty"));
+  assert.equal(d.fields.duty, undefined);
+});
+
+test("a number the browser could not read is a typing error, never an empty field", () => {
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "NaN", count_sign: "1" }).problems.includes("stop_turns"));
+  assert.equal(runKind({ ...M, duty: "0.2", stop_turns: "NaN" }), "distance");  // still a stop run: never a plain one
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "here", hold_kp: "NaN", count_sign: "1" })
+    .problems.includes("hold_kp"));
+});
+
+test("values below the wire's resolution: the back end's own rounding, for a stop run only", () => {
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "0.0001", count_sign: "1" }).problems.includes("stop_turns_too_small"));
+  assert.deepEqual(runFields({ ...M, duty: "0.2", stop_turns: "0.0002", count_sign: "1" }).problems, []);
+  // exactly half a unit: Python rounds to the even neighbour (0), as the back end does -- refused here too
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: String(0.5 / 4096), count_sign: "1" })
+    .problems.includes("stop_turns_too_small"));
+  assert.ok(runFields({ ...M, duty: "0.00005", stop_turns: "0.5", count_sign: "1" }).problems.includes("duty_too_small"));
+  // a plain duty run's or a measuring run's small duty is the back end's to judge
+  assert.ok(!runFields({ ...M, duty: "0.00001" }).problems.includes("duty_too_small"));
+  assert.ok(!runFields({ ...M, duty: "0.00001", measure: true, count_sign: "1" }).problems.includes("duty_too_small"));
+});
+
+test("the bundle's setup mark goes with a speed check only, never beside a contradicting setup", () => {
+  assert.equal(runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "1", same_setup: true })
+    .fields.same_setup_as_bundle, true);
+  assert.equal(runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "1", same_setup: true,
+    physical_setup: "coupled" }).fields.same_setup_as_bundle, undefined);
+  assert.equal(runFields({ ...M, mode: "hold", hold_target: "here", count_sign: "1", same_setup: true })
+    .fields.same_setup_as_bundle, undefined);
+});
+
+test("a hold needs its target picked, and a target change empties the value", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "", count_sign: "1" }).problems.includes("hold_target"));
+  assert.deepEqual(clearedOnChange("hold_target"), ["hold_value"]);
+  assert.ok(clearedOnChange("axis").includes("hold_cap"));
+});
+
+test("the result view: a withheld measure, a missing distance result, the previous hold and the run's bypass", () => {
+  const v = resultView({ kind: "measure", measure: { moved: -256, status: "withheld:no_reference" },
+    bench_result: { result_bypass: ["steer_range"] }, previous_result: { kind: "hold", stop_reason: "end_zero",
+      target: 812, hold_verdict: { result: "undecidable" } }, copy_error: "disk", verdict: { run_cleanup: { ok: true } } });
+  assert.equal(v.measure.status, "withheld:no_reference");
+  assert.deepEqual(v.resultBypass, ["steer_range"]);
+  assert.equal(v.previous.target, 812);
+  assert.equal(v.previous.holdVerdict, "undecidable");
+  assert.deepEqual(resultView({ previous_result: { kind: "hold", hold_verdict: { result: "undecidable",
+    why: ["판정 불가(설정·표본 없음)"] } }, verdict: { run_cleanup: { ok: true } } }).previous.holdWhy,
+  ["판정 불가(설정·표본 없음)"]);
+  assert.deepEqual(resultView({ rest: { result: "unconfirmed", why: "no_sample" }, verdict: { run_cleanup: { ok: true } } })
+    .rest, { result: "unconfirmed", cumulative: null, why: "no_sample", note: null });
+  // a reopening during the rest position: the back end sends rest null and the note at the top level (r3 P2-3)
+  assert.deepEqual(resultView({ rest: null, rest_note: "reopened", verdict: { run_cleanup: { ok: true } } }).rest,
+    { result: null, cumulative: null, why: null, note: "reopened" });
+  // the back end's real notes: its cancel reasons (a reopening's is link_reopened; a STOP noted first stays the note)
+  assert.equal(resultView({ rest: null, rest_note: "link_reopened", verdict: { run_cleanup: { ok: true } } }).rest.note,
+    "link_reopened");
+  assert.deepEqual(resultView({ rest: null, rest_note: "stop", verdict: { run_cleanup: { ok: true } } }).rest,
+    { result: null, cumulative: null, why: null, note: "stop" });
+  // the words: a reopening is always said, the reason noted first after it, raw note keys never shown
+  const words = (res) => restWords(resultView({ ...res, verdict: { run_cleanup: { ok: true } } }).rest, BENCH_TEXT);
+  assert.equal(words({ rest: null, rest_note: "link_reopened" }), BENCH_TEXT.restLinkEnd.link_reopened);
+  // the back end's rest null for a loss or a reboot on the same link: each said by its own name (r5 P2)
+  assert.equal(words({ rest: null, rest_note: "link_lost" }), BENCH_TEXT.restLinkEnd.link_lost);
+  assert.equal(words({ rest: null, rest_note: "rebooted" }), BENCH_TEXT.restLinkEnd.rebooted);
+  // a STOP noted first hides which link change it was: said as a link change, the STOP after it
+  assert.equal(words({ rest: null, rest_note: "stop" }),
+    `${BENCH_TEXT.restLinkEnd.changed} · ${BENCH_TEXT.restNote.stop}`);
+  // the panel's own stop and disarm requests are notes in words too (r5 P3)
+  for (const k of ["bench_stop", "bench_disarm"]) {
+    assert.ok(!words({ rest: { result: "settled_at_100hz", cumulative: 1 }, rest_note: k }).includes(k));
+  }
+  assert.ok(!words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" }).includes("link_lost"));
+  assert.ok(words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" })
+    .includes(BENCH_TEXT.restNote.link_lost));
+  assert.equal(words({ rest: { result: "settled_at_100hz", cumulative: 9 } }), BENCH_TEXT.restSettled);
+  assert.equal(resultView({ rest: { result: "settled_at_100hz", cumulative: 9 }, rest_note: "stop",
+    verdict: { run_cleanup: { ok: true } } }).rest.note, "stop");
+  assert.equal(resultView({ verdict: { run_cleanup: { ok: true } } }).rest, null);
+  assert.equal(v.copyError, "disk");
+  assert.equal(resultView({ kind: "distance", verdict: { run_cleanup: { ok: false } } }).distanceMissing, true);
 });

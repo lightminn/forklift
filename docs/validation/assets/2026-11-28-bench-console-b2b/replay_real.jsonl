@@ -1,0 +1,5 @@
+{"at": 1795850560.4342241, "mode": "real", "epoch": 4242, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795850560.450709, "mode": "real", "epoch": 4242, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795850560.4532566, "mode": "real", "epoch": 4242, "conn": "control", "msg": {"t": "targets_request", "request_id": "ae34125c-4206-4d19-b437-ead1d8c1c1a6", "session_epoch": 4242, "control_gen": 3, "request_token": 1242, "request_seq": 1, "_before_welcome": false}}
+{"at": 1795850567.8203318, "mode": "real", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "cb6cc0f4-00e6-4f89-b2cb-693f76e9f9af", "source": "console", "session_epoch": 4242, "_before_welcome": false}}
+{"at": 1795850568.1209404, "mode": "real", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "fe9926e5-6b19-4ebb-985d-c008626ae4b8", "source": "key", "session_epoch": 4242, "_before_welcome": false}}

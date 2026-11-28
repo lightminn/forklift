@@ -1,0 +1,4 @@
+{"at": 1795850600.5080714, "mode": "isaac", "epoch": 4242, "conn": "control", "msg": {"t": "hello", "api": "console/1", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40"}}
+{"at": 1795850600.5218828, "mode": "isaac", "epoch": 4242, "conn": "media", "msg": {"t": "media_subscribe", "client_id": "b4fd3037-383c-4f11-b687-5fcb9d7dce40", "camera_rgb": {"hz": 15}, "scan": {"hz": 10}, "grid": {"hz": 1}}}
+{"at": 1795850602.7419014, "mode": "isaac", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "a4e8480f-0e9f-420e-bef6-36c3ac5ba470", "source": "console", "session_epoch": 4242, "_before_welcome": false}}
+{"at": 1795850603.0420144, "mode": "isaac", "epoch": 4242, "conn": "control", "msg": {"t": "stop", "request_id": "822113e6-8f3b-4c29-99b9-0e4e727853ef", "source": "key", "session_epoch": 4242, "_before_welcome": false}}
