@@ -3,6 +3,7 @@
 #include "fw_test.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define TWO_PI 6.28318530717958647692
@@ -151,6 +152,7 @@ static void tick_msgs(const link_msg *msgs, int count)
     in.now_us += cfg.period_us;
     in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0]); /* wheels idle unless a test moves them */
     in.abs_time_us[0] = in.abs_time_us[1] = in.now_us; /* acquired this tick */
+    in.wheel_start_us[0] = in.wheel_start_us[1] = in.now_us; /* bench8: read at the tick's time */
     if (pwm_sim) { /* an update between every two calls; the bundle began 50 us before this tick */
         in.abs_start_us[0] = in.abs_start_us[1] = in.now_us - 50u;
         in.abs_start_known[0] = in.abs_start_known[1] = true;
@@ -3646,6 +3648,341 @@ static void bench_review_round1_tests(void)
     bench_distance_across_the_clock_wrap();
 }
 
+/* ---- bench8: the MT source (plan 4.5 A1c) ------------------------------------------------------------------ */
+
+static void wstep(int i, int counts)
+{
+    in.wheel_hw[i] = (uint16_t)(in.wheel_hw[i] + counts);
+}
+
+static void cml(uint8_t axis, int16_t duty)
+{
+    send(commission_msg(cm_seq++, axis, duty, 150, echo_now()));
+}
+
+/* An MT run on a wheel axis (L or R): stop counts (0: measuring), the count sign, the axis's duty limit. */
+static bool mt_arm(uint32_t run_id, uint8_t axis, int32_t stop, int8_t count_sign, uint16_t duty_max)
+{
+    link_bench_set b = bench_defaults(run_id, axis);
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    b.stop_counts = stop;
+    b.count_sign = count_sign;
+    b.duty_max_e4[axis] = duty_max;
+    send(bench_set_msg(10, b));
+    if (d.reject_reason != DRIVE_REJECT_NONE) {
+        return false;
+    }
+    send(bench_arm_msg(11, run_id, echo_now()));
+    return d.mode == DRIVE_MODE_ARMED;
+}
+
+static void mt_pairs(void)
+{
+    boot_with(mod_bench);
+    ticks(3);
+    const uint8_t bad[4][2] = {{DRIVE_CH_L, DRIVE_BENCH_SOURCE_KTH},
+                               {DRIVE_CH_M, DRIVE_BENCH_SOURCE_MT},
+                               {DRIVE_CH_H, DRIVE_BENCH_SOURCE_MT},
+                               {DRIVE_CH_R, DRIVE_BENCH_SOURCE_KTH}};
+    for (int k = 0; k < 4; k++) {
+        link_bench_set b = bench_defaults(70 + (uint32_t)k, bad[k][0]);
+        b.source = bad[k][1];
+        send(bench_set_msg(10, b));
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    }
+    for (uint8_t ax = DRIVE_CH_L; ax <= DRIVE_CH_R; ax++) {
+        link_bench_set b = bench_defaults(80 + ax, ax);
+        b.source = DRIVE_BENCH_SOURCE_MT;
+        b.stop_counts = 40;
+        send(bench_set_msg(10, b));
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    }
+}
+
+/* L forward and R backward to a distance, across the 16-bit counter's wrap on R. */
+static void mt_distance_reached(void)
+{
+    for (int side = 0; side < 2; side++) {
+        boot_with(mod_bench);
+        uint8_t ax = side == 0 ? DRIVE_CH_L : DRIVE_CH_R;
+        int dir = side == 0 ? 1 : -1;
+        in.wheel_hw[side] = side == 0 ? 1000 : 20; /* R crosses 0 -> 65535 going down */
+        ticks(3);
+        CHECK(mt_arm(90 + (uint32_t)side, ax, 40 * dir, 1, 1500));
+        cml(ax, 0);
+        cml(ax, (int16_t)(1000 * dir));
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        int32_t ref = bench_state_now().distance_ref;
+        int n = 0;
+        while (d.mode == DRIVE_MODE_ARMED && n < 50) {
+            wstep(side, 3 * dir);
+            tick();
+            n++;
+        }
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        link_bench_state s = bench_state_now();
+        CHECK_EQ_U(s.source, DRIVE_BENCH_SOURCE_MT);
+        CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED);
+        CHECK((s.cut_position - ref) * dir >= 40 && (s.cut_position - ref) * dir < 43);
+        CHECK_EQ_U(s.run_flags, DRIVE_BENCH_FLAG_RES_DISTANCE); /* no tentative, no unclean */
+        CHECK(s.end_evidence_age_ms <= 1u);                     /* qualified progress before the cut */
+        CHECK_EQ_U(s.distance_confirm, DRIVE_BENCH_CONFIRM_NONE); /* no provisional cut for MT */
+        CHECK_EQ_I(n, 14);
+    }
+}
+
+static void mt_distance_wrong_way_and_frozen(void)
+{
+    boot_with(mod_bench);
+    ticks(3);
+    CHECK(mt_arm(95, DRIVE_CH_L, 400, 1, 1500));
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 1000);
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 100) {
+        wstep(0, -4); /* counts down under a positive duty with count_sign +1 */
+        tick();
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK(n >= 32 && n <= 34); /* 128 counts the wrong way */
+
+    boot_with(mod_bench);
+    ticks(3);
+    CHECK(mt_arm(96, DRIVE_CH_L, 400, 1, 1500));
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 1000);
+    uint64_t t0 = d.time_us;
+    n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        if (n % 100 == 0) {
+            cml(DRIVE_CH_L, 1000); /* renewed: the command does not expire */
+        }
+        tick();
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    uint64_t ms = (d.time_us - t0) / 1000u; /* the renewals are ticks too */
+    CHECK(ms >= 299 && ms <= 302); /* the 0.3 s watch */
+    CHECK_EQ_U(bench_state_now().end_evidence_age_ms, 0xFFFFu); /* no progress, no evidence */
+}
+
+/* A failed read: the run wheel's gap faults its MT run; another run only reports it (lead decision 2026-11-28). */
+static void mt_read_failure_scope(void)
+{
+    boot_with(mod_bench);
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    ticks(3);
+    CHECK(mt_arm(97, DRIVE_CH_L, 0, 1, 1500)); /* measuring */
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 1000);
+    for (int k = 0; k < 5; k++) {
+        wstep(0, 3);
+        tick();
+    }
+    in.wheel_fresh[0] = false;
+    uint64_t t0 = d.time_us;
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 40) {
+        if (n % 10 == 0) {
+            cml(DRIVE_CH_L, 1000);
+        }
+        tick();
+        n++;
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK_EQ_U((d.time_us - t0) / 1000u, 21u); /* the first tick past 20 ms since the last success, no new sample */
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_FAULT);
+    CHECK(s.run_flags & DRIVE_BENCH_FLAG_RES_UNCLEAN);
+
+    /* the same failure under an M duty run without a source: no fault, the bit reported, the next ARM clears it */
+    boot_with(mod_bench);
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    kraw(0, 1000);
+    ticks(3);
+    CHECK(bench_arm_run(98, DRIVE_CH_M, DRIVE_BENCH_STEER_RANGE));
+    in.wheel_fresh[0] = false;
+    for (int k = 0; k < 30; k++) {
+        if (k % 10 == 0) {
+            cm(0);
+        }
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    send(simple(LINK_DISARM, cm_seq++));
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    /* still failing: an MT ARM of L is refused, M's runs arm */
+    link_bench_set b = bench_defaults(99, DRIVE_CH_L);
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 99, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    in.wheel_fresh[0] = true; /* the first success re-bases L */
+    tick();
+    CHECK(mt_arm(100, DRIVE_CH_L, 0, 1, 1500));
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_GAP)); /* the ARM cleared the report */
+}
+
+/* One failed read, then the 2 ms step: judged on its real interval, no jump (plan 4.5 decision 4). */
+static void mt_short_failure_recovers(void)
+{
+    boot_with(mod_bench);
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    ticks(3);
+    CHECK(mt_arm(101, DRIVE_CH_L, 0, 1, 1500));
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 1000);
+    for (int k = 0; k < 5; k++) {
+        wstep(0, 50); /* 50 counts/ms; the 1 ms jump limit here is about 66 counts */
+        tick();
+    }
+    wstep(0, 50);
+    in.wheel_fresh[0] = false;
+    tick();
+    CHECK_EQ_U(bench_state_now().raw_angle, 1u); /* the last accepted sample is a tick old: at least 1 */
+    wstep(0, 50);
+    in.wheel_fresh[0] = true;
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED); /* 100 counts over 2 ms: no jump */
+    CHECK(!(d.fault_flags & (DRIVE_FAULT_ENCODER_JUMP(0) | DRIVE_FAULT_ENCODER_GAP)));
+    CHECK_EQ_U(bench_state_now().raw_angle, 0u); /* accepted at this tick */
+}
+
+/* The polarity check of the MT run's wheel follows the declared count sign (independent round 3 P1). */
+static void mt_polarity_follows_count_sign(void)
+{
+    boot_with(mod_bench);
+    ticks(3);
+    CHECK(mt_arm(102, DRIVE_CH_L, 0, -1, 5000)); /* measuring, counts fall under a positive duty */
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 4000);
+    for (int k = 0; k < 600; k++) {
+        if (k % 100 == 0) {
+            cml(DRIVE_CH_L, 4000);
+        }
+        wstep(0, -5);
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_POLARITY(0)));
+}
+
+/* An MT hold: here, settling, the CPR and the target kinds (plan 4.5 decision 6). */
+static void mt_hold(void)
+{
+    boot_with(mod_bench);
+    pwm_sim = true;
+    ticks(3);
+    link_bench_set b = bench_defaults(103, DRIVE_CH_L);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(bench_arm_msg(11, 103, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    hcfg = (link_bench_hold){.boot_id = d.boot_id,
+                             .valid_after_echo_ms = 100,
+                             .run_id = 103,
+                             .axis = DRIVE_CH_L,
+                             .source = DRIVE_BENCH_SOURCE_MT,
+                             .target_kind = BENCH_HOLD_TARGET_ZERO,
+                             .cpr = 4096,
+                             .kp = 0.5f,
+                             .deadband_counts = 12,
+                             .duty_max_e4 = 1500,
+                             .min_duty_e4 = 1200,
+                             .sign = 1};
+    cml(DRIVE_CH_L, 0);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE); /* no zero target for MT */
+    hcfg.target_kind = BENCH_HOLD_TARGET_ABS;
+    hcfg.target_value = 100;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hcfg.target_kind = BENCH_HOLD_TARGET_REL;
+    hcfg.target_value = 200;
+    hcfg.cpr = 0;
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    hcfg.cpr = 8192; /* any motor shaft CPR */
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_I(s.target - s.cumulative, 200);
+    /* the wheel follows the output: 1 count a tick per 0.1 of duty */
+    int settled = 0;
+    for (int k = 0; k < 400 && d.mode == DRIVE_MODE_ARMED; k++) {
+        if (k % 50 == 0) {
+            hold();
+        }
+        float u = out.duty[DRIVE_CH_L];
+        wstep(0, (int)lroundf(u * 10.0f));
+        tick();
+        s = bench_state_now();
+        settled = labs((long)s.target - (long)s.cumulative) <= 12 ? settled + 1 : 0;
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(settled > 100);
+    CHECK(bench_state_now().deadband_entries >= 1);
+    CHECK(bench_state_now().evidence_age_ms < 0xFFFFu); /* the moving approach left evidence */
+}
+
+/* A frozen encoder under an MT here: no evidence at all (plan 4.5 decision 8), then the watch. */
+static void mt_hold_frozen_here_has_no_evidence(void)
+{
+    boot_with(mod_bench);
+    pwm_sim = true;
+    ticks(3);
+    link_bench_set b = bench_defaults(104, DRIVE_CH_L);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 104, echo_now()));
+    hcfg = (link_bench_hold){.boot_id = d.boot_id,
+                             .valid_after_echo_ms = 100,
+                             .run_id = 104,
+                             .axis = DRIVE_CH_L,
+                             .source = DRIVE_BENCH_SOURCE_MT,
+                             .target_kind = BENCH_HOLD_TARGET_HERE,
+                             .cpr = 4096,
+                             .kp = 0.5f,
+                             .deadband_counts = 12,
+                             .duty_max_e4 = 1500,
+                             .min_duty_e4 = 1200,
+                             .sign = 1};
+    cml(DRIVE_CH_L, 0);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    for (int k = 0; k < 200; k++) {
+        if (k % 50 == 0) {
+            hold();
+        }
+        tick();
+    }
+    CHECK_EQ_U(bench_state_now().evidence_age_ms, 0xFFFFu);
+    cml(DRIVE_CH_L, 0); /* the end zero */
+    CHECK_EQ_U(bench_state_now().end_evidence_age_ms, 0xFFFFu);
+}
+
+static void bench_mt_tests(void)
+{
+    mt_pairs();
+    mt_distance_reached();
+    mt_distance_wrong_way_and_frozen();
+    mt_read_failure_scope();
+    mt_short_failure_recovers();
+    mt_polarity_follows_count_sign();
+    mt_hold();
+    mt_hold_frozen_here_has_no_evidence();
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -3720,5 +4057,6 @@ int main(void)
     bench_bench6_tests();
     bench_review_round1_tests();
     bench_hold_tests();
+    bench_mt_tests();
     return FW_TEST_RESULT();
 }

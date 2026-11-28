@@ -1,6 +1,6 @@
-/* Bench image (bench console plan 4.3 A1b-2): a hold run's target, control and progress watch, as pure functions the
-   drive core calls once a tick. Counts are the KTH travel counter's (fw/bench_kth.h), modular 32-bit. Compiled only
-   with FW_CORE_BENCH. */
+/* Bench image (bench console plan 4.3 A1b-2, 4.5 A1c): a hold run's target, control and progress watch, as pure
+   functions the drive core calls once a tick. Counts are the run source's, modular 32-bit: the KTH travel counter
+   (fw/bench_kth.h) or the MT wheel count. Compiled only with FW_CORE_BENCH. */
 #ifndef FW_BENCH_HOLD_H
 #define FW_BENCH_HOLD_H
 
@@ -15,7 +15,7 @@
 #define BENCH_HOLD_TARGET_ABS 1u
 #define BENCH_HOLD_TARGET_HERE 2u
 #define BENCH_HOLD_TARGET_REL 3u
-#define BENCH_HOLD_CPR 4096u
+#define BENCH_HOLD_CPR 4096u /* the KTH source's; an MT hold carries its motor shaft CPR (1..65535) */
 #define BENCH_HOLD_TAU_US 10000.0f   /* the D term's low-pass */
 #define BENCH_HOLD_ELIGIBLE_US 200u  /* run start to a sample's acquisition: one PWM period + resolution + KTH lag */
 #define BENCH_HOLD_R 2               /* the watch's progress step */
@@ -37,6 +37,10 @@ typedef struct {
     uint64_t fb_timer_us, fb_zr_us; /* what unreported windows added to each since the last HAL report */
     bool trusted_seen; /* a trusted sample since the watch last reset: 10, else 11 */
     bool in_band;      /* the last trusted sample was inside the deadband */
+    bool progress;     /* A1c: this tick's trusted sample was qualified progress (decision 8: watch 3, or a moving
+                          entry into the deadband) -- the MT source's evidence */
+    bool prev_in;      /* the previous trusted sample (as the watch saw it) was inside the deadband */
+    uint32_t prev_cum; /* and its count */
     uint16_t entries;  /* deadband entries (out -> in), modular */
     /* the previous trusted sample, for the progress eligibility */
     bool prev_lo_known, prev_run_valid;
@@ -58,9 +62,11 @@ typedef struct {
     bool run_valid; /* the HAL's written values form one sign's run, now */
     uint64_t run_since;
     int8_t run_dir; /* that run's direction in count space (+1 raises the count) */
+    bool mt;        /* A1c: the MT source -- no 0x0000 frames, so no zero suspicion: an expiry is no_progress */
 } bench_hold_tick;
 
-/* The value checks of a BENCH_HOLD (plan 4.3 decision 2) against the run axis's duty limit. */
+/* The value checks of a BENCH_HOLD (plan 4.3 decision 2, 4.5 decisions 5-6) against the run axis's duty limit: the
+   KTH source's CPR is 4096; the MT source carries its own (1..65535) and has no zero or absolute target. */
 bool bench_hold_values_ok(const link_bench_hold *c, uint16_t axis_duty_max_e4);
 
 /* The target the first HOLD fixes from the sample raw/cum (decision 4). */
