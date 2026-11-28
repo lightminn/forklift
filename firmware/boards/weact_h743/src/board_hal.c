@@ -24,7 +24,7 @@ static void hal_read(void *ctx, drive_inputs *in)
 #if defined(FW_BENCH_IMAGE)
     kth_spi_starts(in->abs_start_us);
     in->abs_start_known[0] = in->abs_start_known[1] = true;
-    motor_out_report(timebase_now_us(), in);
+    motor_out_report(in);
 #endif
     in->adc_fresh = adc_take(in->adc_raw);
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {

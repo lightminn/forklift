@@ -127,6 +127,11 @@ void motor_out_apply(const drive_outputs *out)
             g_zero_pending[ch] = false;
         }
     }
+#if defined(FW_BENCH_IMAGE)
+    if (updated) {
+        bench_pwm_update_seen(&g_track); /* what the last call wrote is active (Codex A1b-2a round 1 P2) */
+    }
+#endif
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         if (out->drvoff[ch] || (g_cut[ch] && g_zero_pending[ch])) {
             /* A cut, or a cut channel whose 0 is not active yet: lowering DRVOFF now would let the
@@ -163,9 +168,12 @@ void motor_out_apply(const drive_outputs *out)
 
 #if defined(FW_BENCH_IMAGE)
 /* At read_inputs: UIF set means an update event after the last call's end (it clears UIF last), so what it wrote
-   is active; UIF is not cleared here. */
-void motor_out_report(uint32_t now, drive_inputs *in)
+   is active; UIF is not cleared here. UIF is read before the clock: an update between the two reads as none (the
+   stopping side), never as one before the report's time (Codex A1b-2a round 1 P1-1). */
+void motor_out_report(drive_inputs *in)
 {
-    bench_pwm_read(&g_track, (TIM1->SR & TIM_SR_UIF) != 0u, now, in);
+    bool updated = (TIM1->SR & TIM_SR_UIF) != 0u;
+    uint32_t now = timebase_now_us();
+    bench_pwm_read(&g_track, updated, now, in);
 }
 #endif

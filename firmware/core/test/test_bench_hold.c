@@ -112,13 +112,14 @@ static void min_duty_only_toward_the_error(void)
 {
     link_bench_hold c = cfg_default();
     c.kd = 0.037f;
-    start_at(c, 0, 13);
-    /* moving fast toward the target: D brakes harder than P drives */
-    float d1 = bench_hold_control(&h, true, true, 2, 1000, 0.001f); /* 2 counts in 1 ms */
-    CHECK(d1 <= 0.0f && d1 > -0.12f);
-    start_at(c, 0, 13);
-    float d2 = bench_hold_control(&h, true, true, 2, 2000, 0.001f); /* the same 2 counts over 2 ms: half the rate */
-    CHECK(d2 != -0.12f);
+    start_at(c, 0, 15);
+    /* e 13 after 2 counts in 1 ms: D brakes a little harder than P drives -> a small negative q, not raised */
+    float d1 = bench_hold_control(&h, true, true, 2, 1000, 0.001f);
+    CHECK(d1 < 0.0f && d1 > -0.12f);
+    start_at(c, 0, 15);
+    /* the same 2 counts over 2 ms: half the rate, P wins -> raised to the minimum toward the error */
+    float d2 = bench_hold_control(&h, true, true, 2, 2000, 0.001f);
+    CHECK(fabsf(d2 - 0.12f) < 1e-6f);
     /* the rate is per acquisition time: 2 counts over 1 ms vs 2 ms */
     start_at(c, 0, 400);
     (void)bench_hold_control(&h, true, true, 2, 1000, 0.001f);
@@ -137,8 +138,8 @@ static void control_non_finite_resets(void)
     c.ki = 1000.0f;
     start_at(c, 0, 400);
     h.integ = INFINITY;
-    CHECK(bench_hold_control(&h, true, false, 0, 0, 0.001f) == 0.0f || isfinite(h.integ));
-    CHECK(isfinite(h.integ));
+    CHECK(bench_hold_control(&h, true, false, 0, 0, 0.001f) == 0.0f);
+    CHECK(h.integ == 0.0f);
 }
 
 /* ---- watch -------------------------------------------------------------------------------------------- */
@@ -164,6 +165,7 @@ static uint8_t wtick(int32_t e, bool out, bool trusted, bool zero_frame)
     t.run_valid = run_on;
     t.run_since = run_since;
     t.run_dir = run_dir;
+    bench_hold_count_entry(&h, t.trusted_new, t.trust_cum); /* at consumption, before the watch (drive_begin) */
     return bench_hold_watch(&h, &t);
 }
 
@@ -261,7 +263,7 @@ static void watch_noise_with_reversals(void)
         if (k % 4 == 0) {
             run_on = false; /* the reversal's brake write */
         } else if (k % 4 == 1) {
-            drive_on(e > 0 ? 1 : -1);
+            drive_on((k / 4) % 2 == 0 ? 1 : -1); /* D reverses the push each flip; e stays positive */
         }
         why = wtick(e, true, true, false);
     }
@@ -377,18 +379,37 @@ static void watch_two_tick_correction(void)
     CHECK_EQ_U(h.timer_us, 0);
 }
 
-/* the 200 us eligibility: a sample less than 200 us after the run's first write lowers only */
+/* the 200 us eligibility on the current sample: the previous one in the same run (+20 us), the current one
+   acquired +199 us (lowers only) or +200 us (eligible) after the run's first write (Codex A1b-2a round 1) */
 static void watch_eligibility_window(void)
 {
-    wstart(30, 12);
-    now_us = 0;
-    CHECK_EQ_U(wtick(30, true, true, false), 0);
-    run_on = true;
-    run_since = now_us + 1000 - 150; /* 150 us before the next bundle */
-    run_dir = 1;
-    CHECK_EQ_U(wtick(27, true, true, false), 0);
-    CHECK(h.timer_us > 0); /* the previous sample was before the run: not eligible anyway */
-    CHECK_EQ_U(h.r, 27);
+    for (int edge = 199; edge <= 200; edge++) {
+        wstart(30, 12);
+        bench_hold_tick t;
+        memset(&t, 0, sizeof t);
+        t.window_us = 1000;
+        t.applied_any = true;
+        t.trusted_new = true;
+        t.lo_known = true;
+        t.run_valid = true;
+        t.run_since = 10000;
+        t.run_dir = 1;
+        t.trust_cum = h.target - 30u;
+        t.cum = t.trust_cum;
+        t.lo = 10020; /* the previous sample: in the run, 20 us after its first write */
+        bench_hold_count_entry(&h, true, t.trust_cum);
+        CHECK_EQ_U(bench_hold_watch(&h, &t), 0);
+        t.trust_cum = h.target - 27u;
+        t.cum = t.trust_cum;
+        t.lo = 10000u + (uint64_t)edge;
+        CHECK_EQ_U(bench_hold_watch(&h, &t), 0);
+        if (edge == 199) {
+            CHECK(h.timer_us == 2000); /* not eligible: r lowered to 27, the time runs on */
+            CHECK_EQ_U(h.r, 27);
+        } else {
+            CHECK(h.timer_us == 0); /* eligible: 27 <= 30 - 2 */
+        }
+    }
 }
 
 /* a 0x0000-only run: withheld output still counts outside the deadband, and the stop is 11 (independent round 2) */

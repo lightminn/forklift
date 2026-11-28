@@ -57,7 +57,7 @@ static void hal_equals_model(void)
     memset(&a, 0, sizeof a);
     memset(&b, 0, sizeof b);
     g_now += 100;
-    motor_out_report(g_now, &a);
+    motor_out_report(&a);
     bench_pwm_read(&m.t, pending, g_now, &b);
     for (int step = 0; step < 4000; step++) {
         if (next() % 4u != 0u) { /* an update event before the apply (most cycles) */
@@ -83,7 +83,7 @@ static void hal_equals_model(void)
         g_now += 100;
         memset(&a, 0, sizeof a);
         memset(&b, 0, sizeof b);
-        motor_out_report(g_now, &a);
+        motor_out_report(&a);
         bench_pwm_read(&m.t, upd, g_now, &b);
         same_report(&a, &b, step);
         if (fw_test_failures) {
@@ -92,8 +92,75 @@ static void hal_equals_model(void)
     }
 }
 
+/* The register model's active output of a channel, physical sign x compare value (0 unless FWD or REV). */
+static int active_of(int ch)
+{
+    rm_channel c = regmodel_channel(ch);
+    int v = (int)(c.duty * 10000.0 + 0.5);
+    return c.state == RM_FWD ? v : c.state == RM_REV ? -v : 0;
+}
+
+/* The stopping side against the register model itself (not the shared report code): an update injected after any
+   write of a call, or none, between writes of 0 and of a first non-zero; whenever the output is non-zero at a read
+   the report says non-zero of that sign, and a window that began or ended non-zero reports applied_any (plan 4.3
+   decision 6, the four CCR 0 / first non-zero before/after cases; Codex A1b-2a round 1). */
+static void report_never_misses_an_active_output(void)
+{
+    static const float duties[] = {0.0f, 0.3f, -0.3f, 0.5f};
+    regmodel_reset();
+    motor_out_safe_init();
+    motor_out_wake_drivers();
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        regmodel_allow(ch, RM_ALLOW_FWD | RM_ALLOW_REV);
+    }
+    regmodel_uev();
+    drive_inputs r;
+    memset(&r, 0, sizeof r);
+    motor_out_report(&r);
+    int before = active_of(DRIVE_CH_M);
+    for (int step = 0; step < 4000; step++) {
+        drive_outputs o;
+        memset(&o, 0, sizeof o);
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            o.drvoff[ch] = ch != DRIVE_CH_M;
+        }
+        uint32_t x = next();
+        o.duty[DRIVE_CH_M] = duties[x % 4u];
+        uint32_t when = (x >> 3) % 6u; /* 0: no update; 1..4: after that write of the call; 5: before the call */
+        if (when == 5u) {
+            regmodel_uev();
+        } else if (when != 0u) {
+            regmodel_uev_after_write((int)when);
+        }
+        g_now += 900;
+        motor_out_apply(&o);
+        regmodel_uev_after_write(0);
+        int mid = active_of(DRIVE_CH_M);
+        if ((x >> 6) % 3u == 0u) {
+            regmodel_uev(); /* an update between the call and the read */
+        }
+        g_now += 100;
+        memset(&r, 0, sizeof r);
+        motor_out_report(&r);
+        int now_active = active_of(DRIVE_CH_M);
+        int rep = r.applied_e4[DRIVE_CH_M];
+        if (now_active != 0 && (rep == 0 || (rep > 0) != (now_active > 0))) {
+            fprintf(stderr, "step %d: active %d reported %d\n", step, now_active, rep);
+            fw_test_failures++;
+            return;
+        }
+        if ((before != 0 || mid != 0 || now_active != 0) && !r.applied_any[DRIVE_CH_M]) {
+            fprintf(stderr, "step %d: a non-zero window reported none (%d %d %d)\n", step, before, mid, now_active);
+            fw_test_failures++;
+            return;
+        }
+        before = now_active;
+    }
+}
+
 int main(void)
 {
     hal_equals_model();
+    report_never_misses_an_active_output();
     return fw_test_failures;
 }

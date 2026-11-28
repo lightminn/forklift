@@ -1,3 +1,4 @@
+#include "fw/bench_pwm.h"
 #include "fw/drive.h"
 #include "fw_test.h"
 
@@ -94,6 +95,9 @@ static bool spi_refuse = false; /* true: the HAL refuses to start transactions *
 static int clr_flt_seen;        /* CLR_FLT frames sent while every DRVOFF was high */
 static int clr_flt_unsafe;      /* CLR_FLT frames sent with any DRVOFF low */
 static bool nfault_after_clear[DRIVE_CH_COUNT]; /* nFAULT level a CLR_FLT leaves */
+/* bench7: the board's output rule and report (fw/bench_pwm.h) in place of a HAL, when a test turns it on */
+static bool pwm_sim;
+static bench_pwm_model pwm_m;
 
 static uint16_t kth_frame(double sensor_rad)
 {
@@ -147,11 +151,19 @@ static void tick_msgs(const link_msg *msgs, int count)
     in.now_us += cfg.period_us;
     in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0]); /* wheels idle unless a test moves them */
     in.abs_time_us[0] = in.abs_time_us[1] = in.now_us; /* acquired this tick */
+    if (pwm_sim) { /* an update between every two calls; the bundle began 50 us before this tick */
+        in.abs_start_us[0] = in.abs_start_us[1] = in.now_us - 50u;
+        in.abs_start_known[0] = in.abs_start_known[1] = true;
+        bench_pwm_read(&pwm_m.t, true, in.now_us, &in);
+    }
     drive_begin(&d, &in);
     for (int i = 0; i < count; i++) {
         drive_handle(&d, &msgs[i]);
     }
     drive_finish(&d, &out);
+    if (pwm_sim) {
+        bench_pwm_model_apply(&pwm_m, &out, true, in.now_us);
+    }
     uint8_t ch;
     uint32_t tag;
     uint16_t frame;
@@ -189,6 +201,8 @@ static void reset_world(uint32_t t0)
     vm_ok = true;
     spi_mute = false;
     spi_refuse = false;
+    pwm_sim = false;
+    bench_pwm_model_init(&pwm_m);
     clr_flt_seen = clr_flt_unsafe = 0;
     in.now_us = t0;
     in.abs_fresh[0] = in.abs_fresh[1] = true;
@@ -3071,6 +3085,7 @@ static void hold(void)
 static bool hold_start(uint32_t run_id, uint16_t raw, uint8_t kind, int32_t value)
 {
     kraw(0, raw);
+    pwm_sim = true; /* the board's report: progress needs it (Codex A1b-2a round 1 P1-2) */
     ticks(3);
     if (!hold_arm(run_id, 1, DRIVE_BENCH_STEER_RANGE)) {
         return false;
@@ -3330,21 +3345,28 @@ static void hold_range_is_judged(void)
     }
 }
 
-/* the echo must be of a STATE after the last connection change */
+/* the echo must be of a STATE after the last connection change: re-armed on the new connection with its zero, a
+   HOLD echoing a STATE before the boundary is stale_echo, one at the boundary is taken (Codex round 1) */
 static void hold_echo_boundary(void)
 {
     boot_with(mod_bench);
     kraw(0, 1000);
     ticks(3);
-    CHECK(hold_arm(95, 1, DRIVE_BENCH_STEER_RANGE));
-    cm(0);
     uint64_t old = echo_now();
     drive_note_link_change(&d, in.now_us, true);
     tick();
+    uint64_t boundary = d.boundary_us;
+    CHECK(old < boundary);
+    CHECK(hold_arm(95, 1, DRIVE_BENCH_STEER_RANGE));
+    cm(0);
     link_msg m = hold_msg();
     m.u.bench_hold.echo_mcu_time_us = old;
     send(m);
-    CHECK(d.reject_reason == DRIVE_REJECT_STALE_ECHO || d.mode != DRIVE_MODE_ARMED);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_ECHO);
+    m = hold_msg();
+    m.u.bench_hold.echo_mcu_time_us = boundary;
+    send(m);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
 }
 
 /* the HAL report: an armed interval closes only on a reported whole zero window, not on a requested 0 (decision 6) */
@@ -3355,6 +3377,7 @@ static void hold_interval_closes_on_the_report(void)
     tick();
     CHECK(d.cm_on);
     uint64_t since = d.cm_on_since_us;
+    pwm_sim = false; /* the reports below are set by hand */
     in.pwm_report = true;
     in.applied_window_us = 1000;
     in.abs_start_known[0] = true;
@@ -3374,7 +3397,81 @@ static void hold_interval_closes_on_the_report(void)
     in.abs_start_us[0] = in.now_us + cfg.period_us;
     tick();
     CHECK(!d.cm_on);
+    /* a whole zero window closes the old budget at the tick's start; a new request in the same tick opens a new one */
+    kraw(0, 1000);
+    in.applied_e4[DRIVE_CH_M] = 0;
+    in.applied_any[DRIVE_CH_M] = false;
+    in.abs_start_us[0] = in.now_us + cfg.period_us;
+    tick();
+    CHECK(out.duty[DRIVE_CH_M] != 0.0f);
+    CHECK(d.cm_on);
+    CHECK_EQ_U(d.cm_on_since_us, d.time_us);
     in.pwm_report = false;
+}
+
+/* progress needs the HAL's report: slow real progress (2 counts every 100 ms) keeps a hold going with the board's
+   report, and without any report the same run stops at 0.3 s -- the core never credits progress it cannot know
+   (Codex A1b-2a round 1 P1-2) */
+static void hold_progress_needs_the_report(void)
+{
+    for (int with = 0; with < 2; with++) {
+        boot_with(mod_bench);
+        CHECK(hold_start(99, 1000, BENCH_HOLD_TARGET_REL, 400));
+        pwm_sim = with != 0;
+        if (!with) {
+            in.pwm_report = false;
+        }
+        uint16_t raw = 1000;
+        int n = 0;
+        while (d.mode == DRIVE_MODE_ARMED && n < 1000) {
+            if (n % 100 == 99) {
+                raw = (uint16_t)(raw + 2);
+                kraw(0, raw);
+            }
+            if (n % 50 == 0) {
+                hold();
+            } else {
+                tick();
+            }
+            n++;
+        }
+        if (with) {
+            CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+        } else {
+            CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+            CHECK(n <= 302);
+        }
+    }
+}
+
+/* the run axis's zero only: after a hold ends, another axis's 0 is not this run's blocked request (Codex round 1) */
+static void hold_blocked_is_its_axis_only(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(100, 1000, BENCH_HOLD_TARGET_HERE, 0));
+    cm(0);
+    ticks(150);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(commission_msg(cm_seq++, DRIVE_CH_L, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_ARMED);
+    CHECK_EQ_U(bench_state_now().blocked, 0);
+    cm(0);
+    CHECK_EQ_U(bench_state_now().blocked, 1);
+}
+
+/* a deadband entry consumed in the tick the command expires is counted (Codex round 1) */
+static void hold_entry_on_the_end_tick(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(101, 1000, BENCH_HOLD_TARGET_REL, 13));
+    while (d.mode == DRIVE_MODE_ARMED && d.time_us < d.deadline_us) {
+        tick();
+    }
+    kraw(0, 1001); /* e 12: inside, consumed in the expiring tick */
+    tick();
+    link_bench_state s = bench_state_now();
+    CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_COMMAND_TIMEOUT);
+    CHECK_EQ_U(s.deadband_entries, 1);
 }
 
 /* DISARM ends a hold as 4; another arming's HOLD (old arm_gen) is refused; run A's late HOLD leaves B's blocked */
@@ -3417,6 +3514,9 @@ static void bench_hold_tests(void)
     hold_range_is_judged();
     hold_echo_boundary();
     hold_interval_closes_on_the_report();
+    hold_progress_needs_the_report();
+    hold_blocked_is_its_axis_only();
+    hold_entry_on_the_end_tick();
 }
 
 static void bench_review_round1_tests(void)

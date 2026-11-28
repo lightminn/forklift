@@ -88,6 +88,7 @@ typedef struct {
     bool short_written;
     int kth_zero_axis; /* --kth-zero-at-ms: 0 M, 1 H, -1 none */
     long kth_zero_at_ms;
+    bool bench; /* --bench: the bench image's output rule and report; other builds keep the plant on the duty */
     bench_pwm_model pwm; /* bench7: the board's output rule and report (plan 4.3 A1b-2 decision 6) */
     drive_outputs applied; /* what that rule wrote: the plant moves on it */
 } board;
@@ -156,16 +157,21 @@ static void hal_read(void *ctx, drive_inputs *in)
                        (B.estop_release_ms < 0 || t < B.estop_release_ms);
     /* bench7: an update event passes between every two calls here (20 kHz PWM, 1 kHz ticks); the frames are read
        in this call, so their bundle starts are now */
-    in->abs_start_us[0] = in->abs_start_us[1] = in->now_us;
-    in->abs_start_known[0] = in->abs_start_known[1] = true;
-    bench_pwm_read(&B.pwm.t, true, hal_now(ctx), in);
+    if (B.bench) {
+        in->abs_start_us[0] = in->abs_start_us[1] = in->now_us;
+        in->abs_start_known[0] = in->abs_start_known[1] = true;
+        bench_pwm_read(&B.pwm.t, true, hal_now(ctx), in);
+    }
 }
 
 static void hal_write(void *ctx, const drive_outputs *out)
 {
     B.out = *out;
-    bench_pwm_model_apply(&B.pwm, out, true, hal_now(ctx));
     B.applied = *out;
+    if (!B.bench) {
+        return; /* the HIL and the other images: the plant on the core's duty, as board_hal_hil.c */
+    }
+    bench_pwm_model_apply(&B.pwm, out, true, hal_now(ctx));
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         B.applied.duty[ch] = (float)B.pwm.t.w[ch] / (float)BENCH_PWM_TOP; /* a reversal's brake, a rounded 0 */
     }
@@ -391,6 +397,9 @@ static const char *kind_name(uint8_t t)
     case LINK_DISARM: return "DISARM";
     case LINK_CLEAR_FAULTS: return "CLEAR_FAULTS";
     case LINK_COMMISSION: return "COMMISSION";
+    case LINK_BENCH_SET: return "BENCH_SET";
+    case LINK_BENCH_HOLD: return "BENCH_HOLD";
+    case LINK_BENCH_ARM: return "BENCH_ARM";
     default: return "OTHER";
     }
 }
@@ -407,7 +416,8 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
         snprintf(verdict, sizeof verdict, "accepted"); /* always taken (it names its seq) */
     } else if (m->type == LINK_CLEAR_FAULTS) {
         snprintf(verdict, sizeof verdict, "handled");
-    } else if (m->type != LINK_ARM && m->type != LINK_DRIVE && m->type != LINK_COMMISSION) {
+    } else if (m->type != LINK_ARM && m->type != LINK_DRIVE && m->type != LINK_COMMISSION &&
+               m->type != LINK_BENCH_SET && m->type != LINK_BENCH_HOLD && m->type != LINK_BENCH_ARM) {
         snprintf(verdict, sizeof verdict, "ignored"); /* a STATE or an unknown type: no branch handles it */
     } else if (after->reject_reason == 0) {
         snprintf(verdict, sizeof verdict, "accepted"); /* ARM / DRIVE / COMMISSION set it on every frame */
@@ -500,6 +510,7 @@ int main(int argc, char **argv)
     cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     cfg.commission_single_axis = arg_long(argc, argv, "--commission-single", 0) != 0; /* fw-single */
     cfg.bench_build = arg_long(argc, argv, "--bench", 0) != 0; /* the bench image (core refuses it off commissioning) */
+    B.bench = cfg.bench_build;
     if (cfg.bench_build) {
         cfg.command_timeout_ms = 150; /* as the board (board_config.c): the echo bounds of SET/ARM match it */
     }

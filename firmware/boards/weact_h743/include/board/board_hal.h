@@ -17,7 +17,7 @@ void board_hal_tick_end(void);
 void motor_out_apply(const drive_outputs *out);
 #if defined(FW_BENCH_IMAGE)
 /* bench7 (plan 4.3 A1b-2 decision 6): what the outputs wrote and may have active, into in (fw/bench_pwm.h) */
-void motor_out_report(uint32_t now, drive_inputs *in);
+void motor_out_report(drive_inputs *in); /* reads UIF, then the HAL clock */
 #endif
 void motor_out_wake_drivers(void);
 

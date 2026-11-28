@@ -33,6 +33,16 @@ void bench_pwm_wrote(bench_pwm_track *t, const int16_t w[DRIVE_CH_COUNT], const 
     }
 }
 
+void bench_pwm_update_seen(bench_pwm_track *t)
+{
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        if (t->active[ch] != 0) {
+            t->wnz[ch] = true; /* the window began on it: still a non-zero window */
+        }
+        t->active[ch] = t->cut[ch] ? 0 : t->w[ch];
+    }
+}
+
 void bench_pwm_read(bench_pwm_track *t, bool updated, uint32_t now, drive_inputs *in)
 {
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
@@ -83,6 +93,9 @@ void bench_pwm_model_apply(bench_pwm_model *m, const drive_outputs *o, bool upda
         if (updated) {
             m->zero_pending[ch] = false;
         }
+    }
+    if (updated) {
+        bench_pwm_update_seen(&m->t);
     }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         if (o->drvoff[ch] || (m->cut[ch] && m->zero_pending[ch])) {

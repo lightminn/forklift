@@ -128,6 +128,25 @@ static void first_nonzero_before_its_update(void)
     CHECK(!in.applied_any[DRIVE_CH_M]);
 }
 
+/* +4000 active, 0 written, read before its update (the stopping side: 4000), then the update, a second 0 written:
+   the update the apply saw makes 0 the active value -- no 4000 is reported again (Codex A1b-2a round 1 P2) */
+static void update_seen_at_the_apply(void)
+{
+    start();
+    apply_m(0.4f, true);
+    read_m(true);
+    apply_m(0.0f, true);
+    read_m(false);
+    CHECK_EQ_I(in.applied_e4[DRIVE_CH_M], 4000);
+    apply_m(0.0f, true); /* the update came before this call */
+    read_m(false);
+    CHECK_EQ_I(in.applied_e4[DRIVE_CH_M], 0);
+    CHECK(in.applied_any[DRIVE_CH_M]); /* the window began on the reported 4000 */
+    apply_m(0.0f, false);
+    read_m(false);
+    CHECK(!in.applied_any[DRIVE_CH_M]);
+}
+
 /* A cut acts at once; a rounded-to-zero duty writes 0 and breaks the run. */
 static void cut_and_rounding(void)
 {
@@ -181,6 +200,7 @@ int main(void)
     reentry_without_update();
     zero_overwritten_without_update();
     first_nonzero_before_its_update();
+    update_seen_at_the_apply();
     cut_and_rounding();
     run_keeps_its_start();
     run_at_time_zero();

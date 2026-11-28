@@ -122,9 +122,13 @@ float bench_hold_control(bench_hold *h, bool usable, bool trusted_new, uint32_t 
     float cap = (float)c->duty_max_e4 / 10000.0f;
     float er = (float)e * RAD_PER_COUNT;
     float integ = h->integ + c->ki * er * dt_s;
+    if (!isfinite(integ) || !isfinite(h->rate)) {
+        h->integ = 0.0f; /* checked before the clamp turns an infinity into the cap (Codex A1b-2a round 1) */
+        return 0.0f;
+    }
     integ = integ > cap ? cap : (integ < -cap ? -cap : integ);
     float q = c->kp * er + integ - c->kd * h->rate;
-    if (!isfinite(q) || !isfinite(integ)) {
+    if (!isfinite(q)) {
         h->integ = 0.0f;
         return 0.0f;
     }
@@ -136,6 +140,18 @@ float bench_hold_control(bench_hold *h, bool usable, bool trusted_new, uint32_t 
     }
     q = q > cap ? cap : (q < -cap ? -cap : q);
     return (float)c->sign * q;
+}
+
+void bench_hold_count_entry(bench_hold *h, bool trusted_new, uint32_t trust_cum)
+{
+    if (!trusted_new) {
+        return;
+    }
+    bool in = abs_err(h, trust_cum) <= h->cfg.deadband_counts;
+    if (in && !h->in_band) {
+        h->entries++;
+    }
+    h->in_band = in;
 }
 
 uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
@@ -155,10 +171,6 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
         uint32_t a = abs_err(h, t->trust_cum);
         int32_t e = bench_kth_diff(h->target, t->trust_cum);
         bool in = a <= db;
-        if (in && !h->in_band) {
-            h->entries++;
-        }
-        h->in_band = in;
         h->trusted_seen = true;
         bool eligible = t->run_valid && t->lo_known && h->prev_lo_known && h->prev_run_valid &&
                         h->prev_run_since == t->run_since && h->prev_lo >= t->run_since &&

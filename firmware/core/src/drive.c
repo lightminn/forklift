@@ -793,6 +793,7 @@ static uint64_t bench_widen(const drive *d, uint32_t now32, uint32_t t32)
 static void bench_pwm_view(drive *d, const drive_inputs *in)
 {
     if (in->pwm_report) {
+        d->pwm_reported = true;
         d->pwm_window_us = in->applied_window_us;
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             d->pwm_applied[ch] = in->applied_e4[ch];
@@ -802,6 +803,7 @@ static void bench_pwm_view(drive *d, const drive_inputs *in)
             d->pwm_run_sign[ch] = in->run_valid[ch] ? in->run_sign[ch] : 0;
         }
     } else {
+        d->pwm_reported = false;
         d->pwm_window_us = d->pwm_have_last ? d->time_us - d->pwm_last_us : 0u;
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             float u = d->out.drvoff[ch] ? 0.0f : d->out.duty[ch];
@@ -852,7 +854,9 @@ static uint8_t bench_hold_step(drive *d)
                          .cum = k->cum,
                          .trusted_new = (d->kth_bits[i] & BENCH_KTH_TRUSTED) != 0,
                          .trust_cum = k->trust_cum,
-                         .lo_known = d->kth_lo_known[i],
+                         /* without a HAL report the core cannot know when a sample's acquisition began or what the
+                            HAL wrote: no progress eligibility (Codex A1b-2a round 1 P1-2) */
+                         .lo_known = d->kth_lo_known[i] && d->pwm_reported,
                          .lo = d->kth_lo[i],
                          .run_valid = d->pwm_run_valid[ax],
                          .run_since = d->pwm_run_since[ax],
@@ -959,6 +963,11 @@ void drive_begin(drive *d, const drive_inputs *in)
     if (BENCH(d->cfg)) {
         bench_kth_update(d, in); /* first: a fault, a limit or a wheel jump ending the run this tick sees these frames */
         bench_pwm_view(d, in);
+        if (d->hold_started && d->run_drive == DRIVE_BENCH_RUN_DRIVING) {
+            /* a deadband entry counts when its sample is consumed, before any end this tick (Codex A1b-2a round 1) */
+            int i = kth_index(d->run_axis);
+            bench_hold_count_entry(&d->hold, (d->kth_bits[i] & BENCH_KTH_TRUSTED) != 0, d->kth[i].trust_cum);
+        }
         /* the bench image closes an output interval on the HAL's report, not on a requested 0: without an update
            event a 0 preload may be overwritten and the output never stop (plan 4.3 decision 6) */
         if (d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && d->pwm_applied[d->cm_on_axis] == 0 &&
@@ -1309,6 +1318,7 @@ static void handle_commission(drive *d, const link_msg *m)
         if (BENCH(d->cfg) && d->run_drive == DRIVE_BENCH_RUN_ENDED && d->res_run_id == d->run_id &&
             (d->reject_reason == DRIVE_REJECT_STOPPING || d->reject_reason == DRIVE_REJECT_NOT_ARMED) &&
             (c->duty_e4 == 0 || c->axis == d->res_axis) &&
+            (!(d->res_flags & DRIVE_BENCH_FLAG_RES_HOLD) || c->axis == d->res_axis) && /* hold: its axis only */
             d->res_blocked < UINT16_MAX) {
             d->res_blocked++; /* refused after the run that drove had ended */
         }

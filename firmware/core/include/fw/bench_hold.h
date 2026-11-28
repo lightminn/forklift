@@ -75,6 +75,9 @@ bool bench_hold_same(const bench_hold *h, const link_bench_hold *c);
 float bench_hold_control(bench_hold *h, bool usable, bool trusted_new, uint32_t trust_cum, uint64_t trust_t,
                          float dt_s);
 
+/* A deadband entry (out -> in) on this tick's trusted sample, counted when it is consumed (decision 7). */
+void bench_hold_count_entry(bench_hold *h, bool trusted_new, uint32_t trust_cum);
+
 /* This tick's watch (decision 7, time from decisions 5-6): 0, or the stop reason (DRIVE_BENCH_STOP_NO_PROGRESS,
    DRIVE_BENCH_STOP_KTH_ZERO_SUSPECT). */
 uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t);

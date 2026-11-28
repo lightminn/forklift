@@ -317,7 +317,7 @@ typedef struct drive {
     int16_t pwm_applied[DRIVE_CH_COUNT];
     bool pwm_any[DRIVE_CH_COUNT];
     uint64_t pwm_window_us, pwm_last_us;
-    bool pwm_have_last;
+    bool pwm_have_last, pwm_reported;
     bool pwm_run_valid[DRIVE_CH_COUNT];
     uint64_t pwm_run_since[DRIVE_CH_COUNT];
     int8_t pwm_run_sign[DRIVE_CH_COUNT]; /* physical */

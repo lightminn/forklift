@@ -36,9 +36,15 @@ void bench_pwm_track_reset(bench_pwm_track *t);
 void bench_pwm_wrote(bench_pwm_track *t, const int16_t w[DRIVE_CH_COUNT], const bool cut[DRIVE_CH_COUNT],
                      uint32_t now_after);
 
+/* At an apply's start, when an update event has passed since the last apply ended: what that apply wrote is
+   active now (the tracker's last reported value may be the stopping side's guess). Before the new writes. */
+void bench_pwm_update_seen(bench_pwm_track *t);
+
 /* At read_inputs. updated: an update event since the last apply ended (then what it wrote is active); without one
    the report leans to the stopping side: a written 0 counts as not yet active, a written non-zero as possibly
-   active. Fills in->pwm_report and the applied_* and run_* fields. */
+   active. updated must be read before now is taken: an update between the two then reads as none (the stopping
+   side), never as one before now (Codex A1b-2a round 1 P1-1). Fills in->pwm_report and the applied_* and run_*
+   fields. */
 void bench_pwm_read(bench_pwm_track *t, bool updated, uint32_t now, drive_inputs *in);
 
 /* motor_out_apply's register rules as a pure model (PH, compare value, the pending 0 of a direction change, the

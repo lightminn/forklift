@@ -812,6 +812,7 @@ A1b-1(#666·#667) 위에 hold 를 더한다. 1 절의 BENCH_HOLD·목표·감시
     - **CLI 의 이어쓰기**(2 회차 P1-4, 3 회차 P1-4): 큐에서 지워도 기본 `TtyLink` 는 일부 쓴 프레임의 나머지를 다음 호출에 바로 쓴다. 그래서 벤치 이미지에서 CLI 는 `BenchTtyLink`(매 이어쓰기 직전 검사, 실패면 독으로 폐기)를 쓴다. 그 검사는 BENCH_HOLD·비영 COMMISSION 에 대해 셋을 모두 본다: 세션 취소·정리가 시작되지 않았음, 프레임의 권한 세대가 호스트의 지금 세대와 같음(STATE 신선도 만료로 호스트가 권한을 회수했으면 다름), 프레임 마감(`expires_ns`)이 아직임. `ReconnectingLink.service()` 는 권한 회수 직후 같은 호출에서 쓰므로 바깥 세션 루프의 취소 표시에 기대지 않는다. 시험은 실제 `bringup commission --hold` 경로에서 구분자 직전 short write → 취소 → 쓰기 재개가 폐기로 끝나는지 본다.
     - 결과: 판정 ①, `hold_verdict`, 정지 위치.
     - 기본값은 11-27 실측 권장 시작값이다(총괄): 상한 0.15·kp 0.5·데드밴드 12·최소 듀티 0.12·ki 0·kd 0(미시험). 같은 값을 B2 화면 기본값으로 쓴다.
+    - **모형 끝까지 시험의 자리**(Codex A1b-2a 구현 1 회차 P2 답): `mcu_model` 로 0x07 을 보내는 시험(`here` 외란 뒤 복귀·정상 끝, `zero` 유지, 고착 주입)은 A1b-2b 에 둔다. 호스트의 송신 규칙(`_MOTION` 큐 폐기, `BenchTtyLink` 이어쓰기 검사, 첫 HOLD 한 건 규칙)을 거치지 않은 날 프레임으로 시험하면 그 규칙이 빠진 경로를 고정하게 되기 때문이다. A1b-2a 의 같은 동작은 코어 시험(`test_drive.c` bench_hold_tests, 보드 규칙을 쓰는 `pwm_sim` 하네스)과 모형의 출력 규칙(`mcu_model.c`)으로 덮는다.
     - **PR 나눔**(총괄 동의 2026-11-28): A1b-2a = 펌웨어(bench7·`BENCH_HOLD`·제어·감시·HAL 보고·KTH 묶음 시각)·코덱·계약·고정 벡터·모형, A1b-2b = 호스트(`mcu_host.request_bench_hold`·CLI `--hold`·`hold_verdict`·경계 진입 1 s 창·준비 0 축·끝 타임라인). 콘솔 hold 칸은 B2.
 11. **시험.**
     - 독립 검토 4 회차 몫: `kp 0.001`·db 12·신뢰 오차 13 고정(CCR 0 반올림) → 300 ms `no_progress`, 데드밴드 안·실제 출력 0 구간은 시간 안 쌓임, 단발 2.5 ms 틱의 `command_timeout`·지연 계수 +1·래치 없음, M 실행의 `L(0)` 응답 `bad_value`·뒤 M HOLD 응답 `zero_first`.
