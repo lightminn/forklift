@@ -4030,8 +4030,7 @@ static void mt_late_first_success_is_lost(void)
     tick_msgs(&arm, 1);
     CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID); /* lost since that late first success */
-    wheel_start_off[0] = 0;
-    tick();
+    tick(); /* the offset kept: the read times stay increasing (Codex A1c-1 r3 P3) */
     CHECK(mt_arm(118, DRIVE_CH_L, 0, 1, 1500));
 }
 
