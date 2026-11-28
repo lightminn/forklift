@@ -1,0 +1,134 @@
+{
+ "t": "bench_result",
+ "request_id": "bench-bench_run-82ae2b0afff04-36031.5",
+ "run": "distance_M_20261128_162126",
+ "record": "model_runs/distance_M_20261128_162126",
+ "axis": "M",
+ "duty": 0.2,
+ "seconds": 1.0,
+ "closed": "ended",
+ "run_id": 1299183159,
+ "bench_set": {
+  "seq": 41089,
+  "run_id": 1299183159,
+  "bypass": [
+   "steer_range"
+  ],
+  "duty_max_e4": [
+   10000,
+   10000,
+   2500,
+   1500
+  ],
+  "time_ms": [
+   2147483,
+   2147483,
+   2000,
+   2000
+  ],
+  "overrides": true,
+  "mode": 1,
+  "source": 1,
+  "count_sign": 1,
+  "stop_counts": 82
+ },
+ "stop_reason": "distance_reached",
+ "aborted": null,
+ "cleanup_confirmed": true,
+ "previous_result": {
+  "t": "bench_previous_result_final",
+  "boot_id": 11536128,
+  "run_id": 4037666217,
+  "stop_reason": "end_zero",
+  "kind": "distance",
+  "axis": "M",
+  "source": 1,
+  "blocked": 0,
+  "distance_confirm": 0,
+  "run_flags": 65,
+  "distance_ref": 48,
+  "cut_position": 171,
+  "end_evidence_age_ms": 0,
+  "result_bypass": [
+   "steer_range"
+  ],
+  "measure": {
+   "moved": 123,
+   "status": "confirmed"
+  }
+ },
+ "bypass_mcu": [
+  "steer_range"
+ ],
+ "bypass_host": [],
+ "not_for_gate": true,
+ "physical_setup": null,
+ "peak_current_ma": [
+  0,
+  0,
+  0,
+  0
+ ],
+ "final": {
+  "mode": "DISARMED",
+  "duty_e4": [
+   0,
+   0,
+   0,
+   0
+  ]
+ },
+ "kind": "distance",
+ "board_cause": "distance_reached",
+ "cleanup": "confirmed",
+ "advisories": [],
+ "range_mark": "unchecked",
+ "notes": [],
+ "late_aborts": [],
+ "bench_result": {
+  "confirmed": true,
+  "run_id": 1299183159,
+  "stop_reason": "distance_reached",
+  "kind": "distance",
+  "axis": "M",
+  "source": 1,
+  "blocked": 1,
+  "distance_confirm": 0,
+  "run_flags": 64,
+  "distance_ref": 171,
+  "cut_position": 253,
+  "end_evidence_age_ms": 0,
+  "result_bypass": [
+   "steer_range"
+  ],
+  "measure": {
+   "moved": 82,
+   "status": "confirmed"
+  },
+  "distance": {
+   "stop_counts": null,
+   "moved_at_cut": 82,
+   "result": "reached"
+  }
+ },
+ "start": "accepted",
+ "rest": {
+  "result": "settled_at_100hz",
+  "cumulative": 253,
+  "wording": "100 Hz \uad00\uce21\uc5d0\uc11c 0.5 s \ub3d9\uc548 \uc704\uce58 \ubcc0\ud654 \uc5c6\uc74c"
+ },
+ "distance": {
+  "stop_counts": 82,
+  "moved_at_cut": 82,
+  "result": "reached"
+ },
+ "verdict": {
+  "run_cleanup": {
+   "ok": true,
+   "why": [],
+   "labels": []
+  }
+ },
+ "record_errors": 0,
+ "record_complete": true
+}

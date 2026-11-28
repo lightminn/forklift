@@ -32,7 +32,7 @@ export function fieldState(form) {
     mode,
     holdOpen: kth, // a hold needs the KTH count (steering, lift)
     stopOpen: kth && mode === "duty", // a stop after N turns: a duty run on the KTH count
-    measureOpen: kth && mode === "duty" && !(num(form.stop_turns) > 0 || num(form.stop_turns) < 0),
+    measureOpen: kth && mode === "duty" && num(form.stop_turns) === null,
     signNeeded: kth && (mode === "hold" || num(form.stop_turns) !== null || form.measure === true),
     mtOpen: false, // A1c
     kthInvalidOpen: false, // A2
@@ -64,10 +64,12 @@ export function runKind(form) {
 // never goes out with H. Returns the form keys to empty.
 export function clearedOnChange(changed) {
   if (changed === "axis" || changed === "source") {
-    return ["hold_target", "hold_value", "hold_kp", "hold_ki", "hold_kd", "hold_deadband", "hold_min_duty",
-      "count_sign", "stop_turns", "measure", "same_setup"];
+    return ["hold_target", "hold_value", "hold_cap", "hold_kp", "hold_ki", "hold_kd", "hold_deadband",
+      "hold_min_duty", "count_sign", "stop_turns", "measure", "same_setup"];
   }
   if (changed === "mode") return ["stop_turns", "measure"];
+  // a value typed for 'move by N counts' never goes out as an absolute angle, nor the other way (B2b r1 P1-2)
+  if (changed === "hold_target") return ["hold_value"];
   return [];
 }
 
@@ -78,10 +80,13 @@ export function runFields(form) {
   const axis = AXES.includes(form.axis) ? form.axis : null;
   if (!axis) problems.push("axis");
   const kind = runKind(form);
-  const duty = num(form.duty);
+  // a hold's duty is its own cap field and may be left out (the back end then takes 0.15, as the CLI does); a duty
+  // run's is the duty field -- one never stands in for the other (B2b r1 P1-1)
+  const duty = num(kind === "hold" ? form.hold_cap : form.duty);
   const seconds = num(form.seconds);
-  // a hold's duty is its cap and may be left out (the back end then takes 0.15, as the CLI does)
-  if ((duty === null && kind !== "hold") || Number.isNaN(duty)) problems.push("duty");
+  if ((duty === null && kind !== "hold") || Number.isNaN(duty)) problems.push(kind === "hold" ? "hold_cap" : "duty");
+  // the wire's own resolution: a duty that rounds to 0 is refused by the back end, said here first
+  if (duty !== null && !Number.isNaN(duty) && Math.round(Math.abs(duty) * 10000) < 1) problems.push("duty_too_small");
   if (seconds === null || Number.isNaN(seconds)) problems.push("seconds");
   const fields = { axis, source: fs.source, mode: kind === "hold" ? "hold" : "duty", seconds,
     bypass: (form.bypass ?? []).filter((n) => fs.bypassOpen[n]),
@@ -94,7 +99,10 @@ export function runFields(form) {
     const cs = num(form.count_sign);
     if (cs !== 1 && cs !== -1) problems.push("count_sign");
     else fields.count_sign = cs;
-    if (form.same_setup === true) fields.same_setup_as_bundle = true;
+    // the bundle's setup mark: a speed check's only, and never beside a setup that contradicts it (B2b r1 P2)
+    if (form.same_setup === true && kind !== "hold" && !["coupled", "lifted"].includes(form.physical_setup)) {
+      fields.same_setup_as_bundle = true;
+    }
   }
   if (kind === "hold") {
     const t = HOLD_TARGETS.includes(form.hold_target) ? form.hold_target : null;
@@ -118,6 +126,7 @@ export function runFields(form) {
   } else if (kind === "distance") {
     const turns = num(form.stop_turns);
     if (Number.isNaN(turns) || turns === null || turns <= 0) problems.push("stop_turns");
+    else if (Math.round(turns * 4096) < 1) problems.push("stop_turns_too_small"); // less than one count
     else fields.stop = { turns };
   } else if (kind === "measure") {
     fields.measure = true;
@@ -148,7 +157,7 @@ export function largePhrase(detail) {
 export function advice(form) {
   const out = [];
   if (fieldState(form).rangeOff) out.push("rangeOff");
-  const duty = num(form.duty);
+  const duty = num(runKind(form) === "hold" ? form.hold_cap : form.duty);
   if (runKind(form) === "distance" && duty !== null && Math.abs(duty) > HIGH_DUTY_DISTANCE) out.push("highDutyDistance");
   return out;
 }
@@ -208,7 +217,18 @@ export function resultView(result) {
       movedAtCut: result.distance.moved_at_cut ?? null,
     } : null,
     measure: result.measure ? { moved: result.measure.moved ?? null, status: result.measure.status ?? null } : null,
-    rest: result.rest ? { result: result.rest.result ?? null, position: result.rest.position ?? null } : null,
+    // the back end's rest position is its cumulative count (bench_session.rest_position)
+    rest: result.rest ? { result: result.rest.result ?? null, cumulative: result.rest.cumulative ?? null,
+      why: result.rest.why ?? null } : null,
+    resultBypass: [...(result.bench_result?.result_bypass ?? result.bypass_mcu ?? [])],
+    previous: result.previous_result ? {
+      kind: result.previous_result.kind ?? null, stopReason: result.previous_result.stop_reason ?? null,
+      target: result.previous_result.target ?? null,
+      holdVerdict: result.previous_result.hold_verdict?.result ?? null,
+    } : null,
+    copyError: result.copy_error ?? null,
+    holdNotes: [...(result.hold?.notes ?? [])],
+    distanceMissing: (result.kind === "distance" && !result.distance) || (result.kind === "measure" && !result.measure),
   };
 }
 
@@ -249,6 +269,7 @@ export class Graph {
       current: [...(b.current_ma ?? [0, 0, 0, 0])], steer: b.steering_rad ?? null, lift: b.lift_m ?? null,
       wheel: [...(b.wheel_count ?? [0, 0])],
       // the run's own count values (null until they are this run's, and across a pair gap: plan 4.4 decision 5)
+      runAxis: run?.axis ?? null,
       holdError: Number.isFinite(run?.error_counts) ? run.error_counts : null,
       deadband: Number.isFinite(run?.deadband) ? run.deadband : null,
       moved: Number.isFinite(run?.moved_counts) ? run.moved_counts : null });
@@ -294,9 +315,10 @@ export class Graph {
       value: axis === "M" ? s.steer : axis === "H" ? s.lift : counts[i],
       duty: s.duty[AXES.indexOf(axis)] / 1e4,
       current: s.current,
-      holdError: s.holdError ?? null,
-      deadband: s.deadband ?? null,
-      moved: s.moved ?? null,
+      // a run's count values belong to its own axis: another axis's graph never shows them (B2b r1 P2)
+      holdError: s.runAxis === axis ? s.holdError ?? null : null,
+      deadband: s.runAxis === axis ? s.deadband ?? null : null,
+      moved: s.runAxis === axis ? s.moved ?? null : null,
     }));
   }
 }

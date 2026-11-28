@@ -503,11 +503,11 @@ test("the result view carries verdicts 2 and 3 and the B2 labels", () => {
   assert.equal(v.holdVerdict.insideShare, 0.97);
   assert.equal(v.distanceVerdict, null);
   const d = resultView({ kind: "distance", verdict: { run_cleanup: { ok: true, why: [], labels: ["보드 기록만(구동 표본 없음)"] } },
-    distance: { result: "reached", stop_counts: 2048, moved_at_cut: 2050 }, rest: { result: "settled_at_100hz", position: 2100 },
+    distance: { result: "reached", stop_counts: 2048, moved_at_cut: 2050 }, rest: { result: "settled_at_100hz", cumulative: 2100 },
     range_mark: "unchecked", late_aborts: ["stop"] });
   assert.equal(d.distanceVerdict.result, "reached");
   assert.deepEqual(d.labels, ["보드 기록만(구동 표본 없음)"]);
-  assert.equal(d.rest.position, 2100);
+  assert.equal(d.rest.cumulative, 2100);
   assert.deepEqual(d.lateAborts, ["stop"]);
   assert.equal(d.rangeMark, "unchecked");
 });
@@ -515,11 +515,63 @@ test("the result view carries verdicts 2 and 3 and the B2 labels", () => {
 test("the graph keeps the run's hold error and breaks on a null", () => {
   const g = new Graph(10000);
   const st = (err) => ({ board: { boot_id: 1, duty_e4: [0, 0, 100, 0], current_ma: [0, 0, 0, 0], steering_rad: 0.1,
-    lift_m: 0, wheel_count: [0, 0] }, run: { error_counts: err, deadband: 12 } });
+    lift_m: 0, wheel_count: [0, 0] }, run: { axis: "M", error_counts: err, deadband: 12 } });
   g.push(0, st(null));
   g.push(10, st(40));
-  g.push(20, st(5));
+  g.push(20, st(null));  // a pair gap in the middle breaks the line
+  g.push(30, st(5));
   const s = g.series("M");
-  assert.deepEqual(s.map((x) => x.holdError), [null, 40, 5]);
+  assert.deepEqual(s.map((x) => x.holdError), [null, 40, null, 5]);
   assert.equal(s[1].deadband, 12);
+  // another axis's graph never shows the M run's error (B2b r1 P2)
+  assert.deepEqual(g.series("H").map((x) => x.holdError), [null, null, null, null]);
+});
+
+
+test("the hold's cap is its own field: a switch to a duty run never sends it as a fixed output", () => {
+  const h = runFields({ ...M, mode: "hold", hold_target: "here", hold_cap: "0.13", duty: "0.4", count_sign: "1" });
+  assert.equal(h.fields.duty, 0.13);
+  const d = runFields({ ...M, mode: "duty", hold_cap: "0.15" });  // back to a duty run: the cap stays in its field
+  assert.ok(d.problems.includes("duty"));
+  assert.equal(d.fields.duty, undefined);
+});
+
+test("a number the browser could not read is a typing error, never an empty field", () => {
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "NaN", count_sign: "1" }).problems.includes("stop_turns"));
+  assert.equal(runKind({ ...M, duty: "0.2", stop_turns: "NaN" }), "distance");  // still a stop run: never a plain one
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "here", hold_kp: "NaN", count_sign: "1" })
+    .problems.includes("hold_kp"));
+});
+
+test("values below the wire's resolution are the page's own problems", () => {
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "0.0001", count_sign: "1" }).problems.includes("stop_turns_too_small"));
+  assert.deepEqual(runFields({ ...M, duty: "0.2", stop_turns: "0.0002", count_sign: "1" }).problems, []);
+  assert.ok(runFields({ ...M, duty: "0.00001" }).problems.includes("duty_too_small"));
+});
+
+test("the bundle's setup mark goes with a speed check only, never beside a contradicting setup", () => {
+  assert.equal(runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "1", same_setup: true })
+    .fields.same_setup_as_bundle, true);
+  assert.equal(runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "1", same_setup: true,
+    physical_setup: "coupled" }).fields.same_setup_as_bundle, undefined);
+  assert.equal(runFields({ ...M, mode: "hold", hold_target: "here", count_sign: "1", same_setup: true })
+    .fields.same_setup_as_bundle, undefined);
+});
+
+test("a hold needs its target picked, and a target change empties the value", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "", count_sign: "1" }).problems.includes("hold_target"));
+  assert.deepEqual(clearedOnChange("hold_target"), ["hold_value"]);
+  assert.ok(clearedOnChange("axis").includes("hold_cap"));
+});
+
+test("the result view: a withheld measure, a missing distance result, the previous hold and the run's bypass", () => {
+  const v = resultView({ kind: "measure", measure: { moved: -256, status: "withheld:no_reference" },
+    bench_result: { result_bypass: ["steer_range"] }, previous_result: { kind: "hold", stop_reason: "end_zero",
+      target: 812, hold_verdict: { result: "undecidable" } }, copy_error: "disk", verdict: { run_cleanup: { ok: true } } });
+  assert.equal(v.measure.status, "withheld:no_reference");
+  assert.deepEqual(v.resultBypass, ["steer_range"]);
+  assert.equal(v.previous.target, 812);
+  assert.equal(v.previous.holdVerdict, "undecidable");
+  assert.equal(v.copyError, "disk");
+  assert.equal(resultView({ kind: "distance", verdict: { run_cleanup: { ok: false } } }).distanceMissing, true);
 });

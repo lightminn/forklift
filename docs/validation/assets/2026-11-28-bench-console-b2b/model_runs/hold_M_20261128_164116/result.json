@@ -1,0 +1,142 @@
+{
+ "t": "bench_result",
+ "request_id": "bench-bench_run-2fe84f6ed91488-2538.900000035763",
+ "run": "hold_M_20261128_164116",
+ "record": "model_runs/hold_M_20261128_164116",
+ "axis": "M",
+ "duty": 0.15,
+ "seconds": 4.0,
+ "closed": "ended",
+ "run_id": 2392630432,
+ "bench_set": {
+  "seq": 7971,
+  "run_id": 2392630432,
+  "bypass": [
+   "steer_range"
+  ],
+  "duty_max_e4": [
+   10000,
+   10000,
+   1500,
+   1500
+  ],
+  "time_ms": [
+   2147483,
+   2147483,
+   2000,
+   2000
+  ],
+  "overrides": true,
+  "mode": 2,
+  "source": 1,
+  "count_sign": 1,
+  "stop_counts": 0
+ },
+ "stop_reason": "end_zero",
+ "aborted": null,
+ "cleanup_confirmed": true,
+ "previous_result": null,
+ "bypass_mcu": [
+  "steer_range"
+ ],
+ "bypass_host": [],
+ "not_for_gate": true,
+ "physical_setup": null,
+ "peak_current_ma": [
+  0,
+  0,
+  0,
+  0
+ ],
+ "final": {
+  "mode": "DISARMED",
+  "duty_e4": [
+   0,
+   0,
+   0,
+   0
+  ]
+ },
+ "kind": "hold",
+ "board_cause": "end_zero",
+ "cleanup": "confirmed",
+ "advisories": [],
+ "range_mark": "not_applicable",
+ "notes": [],
+ "late_aborts": [],
+ "bench_result": {
+  "confirmed": true,
+  "run_id": 2392630432,
+  "stop_reason": "end_zero",
+  "kind": "hold",
+  "axis": "M",
+  "source": 1,
+  "blocked": 0,
+  "distance_confirm": 0,
+  "run_flags": 32,
+  "distance_ref": 0,
+  "cut_position": 48,
+  "end_evidence_age_ms": 0,
+  "result_bypass": [
+   "steer_range"
+  ],
+  "target": 60,
+  "deadband_entries": 1,
+  "measure": {
+   "moved": 48,
+   "status": "confirmed"
+  }
+ },
+ "start": "accepted",
+ "rest": {
+  "result": "settled_at_100hz",
+  "cumulative": 48,
+  "wording": "100 Hz \uad00\uce21\uc5d0\uc11c 0.5 s \ub3d9\uc548 \uc704\uce58 \ubcc0\ud654 \uc5c6\uc74c"
+ },
+ "hold": {
+  "settings": {
+   "target": "rel:60",
+   "kp": 0.5,
+   "ki": 0.0,
+   "kd": 0.02,
+   "deadband": 12,
+   "min_duty": 0.12,
+   "cap": 0.15,
+   "count_sign": 1
+  },
+  "verdict": {
+   "end_error": 12,
+   "settle": {
+    "from_us": 12530445,
+    "to_us": 15870235,
+    "samples": 335,
+    "inside": 335
+   },
+   "result": "met",
+   "why": []
+  },
+  "entries": {
+   "max_lower": 1,
+   "warned": false,
+   "unknown": false,
+   "total": 1,
+   "unknown_ranges": [],
+   "label": null
+  },
+  "pairs": 469,
+  "notes": [
+   "\ub4c0\ud2f0\ub294 \ud38c\uc6e8\uc5b4\uac00 \ub0b8 \uba85\ub839\uac12 \u2014 \uc2e4\uc81c PWM\u00b7\ube0c\ub9ac\uc9c0 \ucd9c\ub825\uc740 \ubbf8\ud655\uc778",
+   "\uc815\uc9c0 \ud3ed \ubbf8\uce21\uc815",
+   "\uad6c\uac04 \uc2dc\uc791 \uad00\uc131 \ud63c\uc785 \ubbf8\ud655\uc778"
+  ]
+ },
+ "verdict": {
+  "run_cleanup": {
+   "ok": true,
+   "why": [],
+   "labels": []
+  }
+ },
+ "record_errors": 0,
+ "record_complete": true
+}
