@@ -341,6 +341,8 @@ def bench_refusal(ask: BenchAsk) -> str | None:
         return "bench-bypass steer_range: the steering axis (M) only"
     if "lift_range" in ask.names and ask.axis != 3:
         return "bench-bypass lift_range: the lift axis (H) only"
+    if ask.mode == 2 and (ask.source != 1 or ask.axis not in (2, 3)):
+        return "hold: the KTH count of M or H"  # named before the source rules below speak of distances
     if ask.source not in (0, 1):
         return "bench source: none or kth (the MT source comes with A1c)"
     if ask.source == 1 and ask.axis not in (2, 3):

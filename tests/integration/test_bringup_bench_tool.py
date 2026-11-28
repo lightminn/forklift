@@ -350,3 +350,237 @@ def test_a_short_distance_run_waits_for_the_boards_result(model):
                                bench_time_max=5.0, stop_kth_turns=1 / 4096, observed="none"), b)
     assert res.get("aborted") != "bench_end_zero_not_queued", res
     assert res["result"] != "refused" and res["distance"]["result"] in ("reached", "missed"), res
+
+
+# ---- bench7 hold runs (plan 4.3 A1b-2b) -----------------------------------------------------------------------------
+
+HOLD_DEFAULTS = dict(hold_kp=0.5, hold_ki=0.0, hold_kd=0.0, hold_deadband=12, hold_min_duty=0.12, count_sign=1)
+
+
+def hargs(**kw):
+    base = dict(axis="M", duty=0.15, bench_bypass="steer_range", observed="none", **HOLD_DEFAULTS)
+    return args(**{**base, **kw})
+
+
+def test_a_here_hold_settles_and_ends_by_its_zero(model):
+    """A here hold: the readiness zero on M (the board refuses L(0) in a hold run), BENCH_HOLDs for the run, the end
+    zero, verdict 2 met, the result named a hold with its own bypass and target (plan 4.3 decisions 9-10)."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(hargs(hold="here", seconds=1.6), b)
+    assert res["result"] == "ok" and res["cleanup_confirmed"], res
+    h = res["hold"]
+    assert h["start"] == "accepted" and h["holds_sent"] > 10, h
+    assert h["verdict"]["result"] == "met", h["verdict"]
+    assert h["settings"]["target"] == "here" and h["settings"]["cap"] == 0.15
+    assert "PWM 출력(브리지 미확인)" in h["notes"]
+    br = res["bench_result"]
+    assert br["kind"] == "hold" and br["stop_reason"] == "end_zero" and br["result_bypass"] == ["steer_range"], br
+    assert "distance" not in br  # a distance verdict on distance results only
+    zeros = [w for w in b.writes if w.kind == "COMMISSION" and w.duty_e4 == 0]
+    assert zeros and all(w.axis == 2 for w in zeros), zeros  # every zero on the run axis
+    assert res["bench_set"]["mode"] == 2 and res["bench_set"]["source"] == 1
+    assert h["entries"]["label"] is None and h["verdict"]["settle"]["samples"] >= 50
+    assert "BENCH_HOLD" in kinds_written(b)
+
+
+def test_a_rel_hold_moves_to_its_target(model):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(hargs(hold="rel:60", seconds=2.5), b)
+    assert res["result"] == "ok", res
+    v = res["hold"]["verdict"]
+    assert v["result"] == "met" and abs(v["end_error"]) <= 12, v
+    first = next(bs for bs in [b.host.bench_state] if bs is not None)
+    assert first.target - res["bench_result"]["cut_position"] == v["end_error"]
+    assert any(s.state.duty_e4[2] > 0 for s in b.samples if s.state.mode == Mode.ARMED)  # it drove toward +60
+
+
+def test_a_pushed_hold_comes_back(mcu_model):  # noqa: F811
+    """here, then the axis pushed away (SIGUSR1) mid-run: the hold drives it back and ends normally."""
+    import io
+    import signal
+    import threading
+
+    from test_bringup_commission_tool import Model, PtyLink
+
+    m = Model(mcu_model, "--bench", "1", "--kth-start-raw", "1000,1000", "--axis-push-steer-rad", "0.08",
+              commission=True)
+    try:
+        b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = BENCH5
+        orig = bringup.CommissionSession.hold_run
+
+        def push_mid(self, seconds, stop=None):
+            threading.Timer(0.6, lambda: m.proc.send_signal(signal.SIGUSR1)).start()
+            return orig(self, seconds, stop)
+
+        bringup.CommissionSession.hold_run = push_mid
+        try:
+            res = bringup.execute(hargs(hold="here", seconds=3.0), b)
+        finally:
+            bringup.CommissionSession.hold_run = orig
+        assert res["result"] == "ok", res
+        assert res["hold"]["verdict"]["result"] == "met", res["hold"]
+        moved = [s.state.duty_e4[2] for s in b.samples if s.state.mode == Mode.ARMED and s.state.duty_e4[2]]
+        assert moved, "the hold never drove back"
+    finally:
+        m.close()
+
+
+def test_a_hold_on_a_stuck_count_stops_and_fails(model):
+    """here at raw 16, then the count reads 0x0000 only: the output is withheld outside the deadband and the board
+    stops the run as kth_zero_suspect within 0.3 s; verdict 2 failed (plan 4.3 decisions 5, 7)."""
+    b = model("--bench", "1", "--kth-start-raw", "16,16", "--kth-zero-at-ms", "M:1500")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(hargs(hold="here", seconds=5.0), b)
+    assert res["bench_result"]["stop_reason"] in ("kth_zero_suspect", "kth_lost"), res
+    assert res["hold"]["verdict"]["result"] == "failed"
+    assert res["result"] == "aborted"
+
+
+@pytest.mark.parametrize(("kw", "why"), [
+    (dict(stop_kth_turns=0.5), "no --stop-kth-turns"),
+    (dict(axis="L", bench_bypass=None), "M or H"),
+    (dict(hold_kp=0.0), "hold-kp"),
+    (dict(hold_deadband=600), "hold-deadband"),
+    (dict(duty=0.2), "duty cap"),
+    (dict(seconds=1.0), "a hold runs"),
+    (dict(hold="abs:5000"), "0..4095"),
+])
+def test_hold_refusals_before_anything(model, kw, why):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(hargs(**{**dict(hold="here", seconds=2.0), **kw}), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert not {"BENCH_SET", "BENCH_ARM", "BENCH_HOLD"} & set(kinds_written(b))
+
+
+def test_the_cli_gate_abandons_a_cancelled_hold_continuation():
+    """The bench CLI's link (plan 4.3 decision 10): a BENCH_HOLD half written, then the session cancelled -> its
+    continuation is refused, the frame abandoned and the poison written; never the rest of the frame."""
+    import os
+    import time
+
+    from real_mcu_link import BenchTtyLink
+
+    from forklift_core.mcu_link.messages import BenchHold
+    from forklift_core.plant.mcu_host import Outgoing
+
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+    written = []
+
+    frame = {}
+
+    def writer(fd, data):
+        if bytes(data) == frame.get("data")[5:] and not frame.get("again"):
+            frame["again"] = True
+            raise BlockingIOError  # the continuation waits (EAGAIN): the session is cancelled meanwhile
+        n = 5 if bytes(data) == frame.get("data") else len(data)  # the frame's first write stops short
+        written.append(bytes(data[:n]))
+        return os.write(fd, data[:n])
+
+    holder = {"host": None, "cancelled": False}
+
+    class Host:
+        auth_epoch = 3
+        events = []
+
+        def next_frame(self, now):
+            return self.q.pop(0) if self.q else None
+
+        def frame_written(self, f, now):
+            self.events.append(("written", f.seq))
+
+        def frame_abandoned(self, f, n, now):
+            self.events.append(("abandoned", f.seq, n))
+
+        def unsent(self, f, now):
+            self.events.append(("unsent", f.seq))
+            self.q.insert(0, f)
+
+        def frame_refused(self, f, now, why):
+            self.events.append(("refused", f.seq))
+
+    host = Host()
+    holder["host"] = host
+    msg = BenchHold(1, 1, 1000, 100, 9, 2, 1, 2, 0, 4096, 0.5, 0.0, 0.0, 12, 1500, 1200, 1)
+    from forklift_core.mcu_link.messages import encode
+
+    data = encode(msg, 7)
+    frame["data"] = bytes(data)
+    host.q = [Outgoing("BENCH_HOLD", 7, data, time.monotonic_ns() + 10**9, 3, True, None)]
+    link = BenchTtyLink(w, gate=lambda f, wr: bringup._cli_gate(holder, f, wr), writer=writer)
+    link.pump_writes(host, time.monotonic_ns())
+    k = next(i for i, x in enumerate(written) if len(x) == 5)  # after the opening's poison, the frame's 5 bytes
+    holder["cancelled"] = True
+    link.pump_writes(host, time.monotonic_ns())
+    assert ("abandoned", 7, 5) in host.events, host.events
+    rest = b"".join(written[k + 1:])
+    assert rest and set(rest[:-1]) <= {0x01} and rest.endswith(b"\x00"), rest  # the poison, never the frame's tail
+    assert data[5:] not in rest
+    os.close(r)
+    os.close(w)
+
+
+def test_the_cli_gate_rules():
+    import time
+    from types import SimpleNamespace
+
+    holder = {"host": SimpleNamespace(auth_epoch=4), "cancelled": False}
+    calls = []
+    now = time.monotonic_ns()
+    hold = SimpleNamespace(kind="BENCH_HOLD", nonzero=True, generation=4, expires_ns=now + 10**9)
+    assert bringup._cli_gate(holder, hold, lambda: calls.append(1)) and calls == [1]
+    assert not bringup._cli_gate(holder, SimpleNamespace(**{**hold.__dict__, "generation": 3}), lambda: calls.append(2))
+    assert not bringup._cli_gate(holder, SimpleNamespace(**{**hold.__dict__, "expires_ns": now - 1}),
+                                 lambda: calls.append(3))
+    zero = SimpleNamespace(kind="COMMISSION", nonzero=False, generation=0, expires_ns=now - 1)
+    holder["cancelled"] = True
+    assert not bringup._cli_gate(holder, hold, lambda: calls.append(4))
+    assert bringup._cli_gate(holder, zero, lambda: calls.append(5))  # a zero always passes (a stop)
+    disarm = SimpleNamespace(kind="DISARM", nonzero=False, generation=0, expires_ns=None)
+    assert bringup._cli_gate(holder, disarm, lambda: calls.append(6))
+    assert calls == [1, 5, 6]
+
+
+def test_a_refused_first_hold_is_written_once_and_closed_with_a_written_zero(mcu_model, monkeypatch):  # noqa: F811
+    """The ARM taken, then M pushed to raw 0 before the first HOLD: the board refuses it (sensor_invalid); exactly one
+    BENCH_HOLD is written, then a written zero on M and the cleanup (plan 4.3 decision 10)."""
+    import io
+    import signal
+
+    from test_bringup_commission_tool import Model, PtyLink
+
+    m = Model(mcu_model, "--bench", "1", "--kth-start-raw", "256,256", "--axis-push-steer-rad", "-0.3926990817",
+              commission=True)
+    try:
+        b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=False, commission=True)
+        b.host.usb_product = BENCH5
+        orig = bringup.CommissionSession.confirm_bench_arm
+
+        def confirm_then_push(self):
+            orig(self)
+            m.proc.send_signal(signal.SIGUSR1)
+
+        monkeypatch.setattr(bringup.CommissionSession, "confirm_bench_arm", confirm_then_push)
+        res = bringup.execute(hargs(hold="here", seconds=2.0), b)
+        assert res["hold"]["start"] == "refused" and res["aborted"] == "bench_start_refused_sensor_invalid", res
+        holds = [w for w in b.writes if w.kind == "BENCH_HOLD"]
+        assert len(holds) == 1, holds
+        later = [w for w in b.writes if w.order > holds[0].order and w.kind == "COMMISSION"]
+        assert later and later[0].duty_e4 == 0 and later[0].axis == 2, later
+    finally:
+        m.close()
+
+
+def test_the_holds_stop_before_the_end_zero(model):
+    """The end timeline (plan 4.3 decision 10): the BENCH_HOLDs end before the end zero, which the board takes as
+    end_zero; no HOLD is written after it."""
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    res = bringup.execute(hargs(hold="here", seconds=1.4), b)
+    assert res["bench_result"]["stop_reason"] == "end_zero", res
+    end = next(w for w in b.writes if w.kind == "COMMISSION" and w.phase == "post_zero")
+    assert not [w for w in b.writes if w.kind == "BENCH_HOLD" and w.order > end.order]
