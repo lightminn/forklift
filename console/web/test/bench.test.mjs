@@ -617,8 +617,17 @@ test("the result view: a withheld measure, a missing distance result, the previo
     { result: null, cumulative: null, why: null, note: "stop" });
   // the words: a reopening is always said, the reason noted first after it, raw note keys never shown
   const words = (res) => restWords(resultView({ ...res, verdict: { run_cleanup: { ok: true } } }).rest, BENCH_TEXT);
-  assert.equal(words({ rest: null, rest_note: "link_reopened" }), BENCH_TEXT.restReopened);
-  assert.equal(words({ rest: null, rest_note: "stop" }), `${BENCH_TEXT.restReopened} · ${BENCH_TEXT.restNote.stop}`);
+  assert.equal(words({ rest: null, rest_note: "link_reopened" }), BENCH_TEXT.restLinkEnd.link_reopened);
+  // the back end's rest null for a loss or a reboot on the same link: each said by its own name (r5 P2)
+  assert.equal(words({ rest: null, rest_note: "link_lost" }), BENCH_TEXT.restLinkEnd.link_lost);
+  assert.equal(words({ rest: null, rest_note: "rebooted" }), BENCH_TEXT.restLinkEnd.rebooted);
+  // a STOP noted first hides which link change it was: said as a link change, the STOP after it
+  assert.equal(words({ rest: null, rest_note: "stop" }),
+    `${BENCH_TEXT.restLinkEnd.changed} · ${BENCH_TEXT.restNote.stop}`);
+  // the panel's own stop and disarm requests are notes in words too (r5 P3)
+  for (const k of ["bench_stop", "bench_disarm"]) {
+    assert.ok(!words({ rest: { result: "settled_at_100hz", cumulative: 1 }, rest_note: k }).includes(k));
+  }
   assert.ok(!words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" }).includes("link_lost"));
   assert.ok(words({ rest: { result: "unconfirmed", why: "no_sample" }, rest_note: "link_lost" })
     .includes(BENCH_TEXT.restNote.link_lost));

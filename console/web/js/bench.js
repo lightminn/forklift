@@ -267,14 +267,18 @@ export function clearView(c) {
 }
 
 // The last GRAPH_WINDOW_MS of bench_state samples (the screen stream; verdicts come from the board's own STATEs).
-// the rest row: the back end sends rest null only when a reopening ended the observation (whatever was noted first,
-// a STOP for one), so that reason is always said; any other note is added after it (B2b r3 P2-3, r4 P2-1)
+// the rest row: the back end sends rest null when the board's link changed during the observation -- a reopening, a
+// loss or a reboot on the same link -- and its note is the first reason noted, which may be one of those or something
+// noted before them (a STOP); the link change is always said, by name when the note names it (B2b r3 P2-3, r4 P2-1,
+// r5 P2)
+const LINK_ENDS = ["reopened", "link_reopened", "link_lost", "rebooted"];
+
 export function restWords(r, T) {
-  const reopenNote = r.note === "reopened" || r.note === "link_reopened";
+  const linkEnd = r.result === null && LINK_ENDS.includes(r.note);
   const head = r.result === "settled_at_100hz" ? T.restSettled
-    : r.result === null ? T.restReopened
+    : r.result === null ? (linkEnd ? T.restLinkEnd[r.note] : T.restLinkEnd.changed)
       : `확인 못 함${r.why ? `(${T.restWhy[r.why] ?? r.why})` : ""}`;
-  const note = r.note && !(r.result === null && reopenNote)
+  const note = r.note && !linkEnd
     ? ` · ${T.restNote[r.note] ?? (String(r.note).startsWith("record_error") ? "관측 중 기록 오류" : r.note)}` : "";
   return head + note;
 }
