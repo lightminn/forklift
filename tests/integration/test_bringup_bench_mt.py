@@ -11,7 +11,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tests" / "integration"))
 
 import bringup  # noqa: E402
-from test_bringup_commission_tool import args, kinds_written, model  # noqa: E402,F401
+from test_bringup_commission_tool import _typed, args, kinds_written, model  # noqa: E402,F401
 from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 
@@ -133,3 +133,16 @@ def test_a_wheel_that_keeps_creeping_is_never_unchanged(model):
     rest = [r for r in rows(b) if r["t"] == "bench_rest_position"]
     assert rest and rest[-1]["result"] == "unconfirmed" and rest[-1]["why"] == "not_settled", rest
 
+
+def test_an_mt_hold_disturbed_and_returned_is_met(model, monkeypatch):
+    """The met vector (plan 4.5 decision 8; the parameters Codex A1c-2 r4 found): the hold settles, then from 15 s a
+    hand turn pushes L for 5 s; the hold's returns are qualified progress, so the end evidence is fresh (< 1 s) and the
+    settling judgement says met. A large wheel run: the operator's typed line is the test's."""
+    _typed(monkeypatch)
+    b = model("--bench", "1", "--hand-turn-wheel", "0", "--hand-turn-revs", "1", "--hand-turn-ms", "15000",
+              "--hand-turn-duration-ms", "5000")
+    res = bringup.execute(args(axis="L", duty=0.25, seconds=20.2, hold="here", count_sign=1, hold_min_duty=0.18,
+                               hold_kp=0.45, hold_deadband=256, observed="none", wheels_lifted=True), b)
+    v2, br = res["hold"]["verdict"], res["bench_result"]
+    assert br["end_evidence_age_ms"] <= 1000, (v2, br)
+    assert v2["result"] == "met", (v2, br)
