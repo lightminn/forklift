@@ -1647,6 +1647,7 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
     idents: list = []  # (boot_id, arm_gen) of each
     session.run_conns = []
+    session.run_pairs = (pairs, idents)  # from the start: the rest observation reads this record (A1c-2)
     keep, accepted_ = _run_recorders(b, pairs, idents, session.run_conns)
     b.host.on_pair, b.host.on_accepted = keep, accepted_
     warned = {"label": None}
