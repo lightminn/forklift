@@ -496,7 +496,7 @@ test("a high duty stop is shown, a negative one too, never refused", () => {
 test("the result view carries verdicts 2 and 3 and the B2 labels", () => {
   const v = resultView({ kind: "hold", closed: "ended", stop_reason: "end_zero", start: "accepted", cleanup: "confirmed",
     record_complete: true, verdict: { run_cleanup: { ok: true, why: [], labels: [] } },
-    hold: { verdict: { result: "met", end_error: 3, settle: { inside_share: 0.97 } }, entries: { label: null },
+    hold: { verdict: { result: "met", end_error: 3, settle: { samples: 100, inside: 97 } }, entries: { label: null },
       settings: { target: "here" } } });
   assert.equal(v.holdVerdict.result, "met");
   assert.equal(v.holdVerdict.endError, 3);

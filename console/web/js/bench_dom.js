@@ -67,7 +67,8 @@ function buildPage() {
           check("bn-measure", T.measureOnly), el("span", { class: "hint", text: `MT 카운트 정지 · ${T.waitA1c}` })),
         el("div", { class: "bn-row", id: "bn-sign-row", hidden: true },
           el("select", { id: "bn-count-sign", "aria-label": T.countSign[""] },
-            ...Object.entries(T.countSign).map(([v, t]) => el("option", { value: v, text: t }))),
+            // an explicit order: an object puts integer-like keys ("1") before "" (the required, empty choice)
+            ...["", "1", "-1"].map((v) => el("option", { value: v, text: T.countSign[v] }))),
           check("bn-same-setup", T.sameSetup),
           el("span", { class: "chip", id: "bn-range-mark", hidden: true })),
         el("div", { class: "hint", id: "bn-sign-hint", hidden: true, text: T.countSignHint }),
@@ -202,7 +203,7 @@ function clearFields(keys) {
     const e = document.getElementById(FIELD_IDS[k]);
     if (!e) continue;
     if (e.type === "checkbox") e.checked = false;
-    else if (e.tagName === "SELECT") e.selectedIndex = 0;
+    else if (e.tagName === "SELECT") e.selectedIndex = Math.max(0, [...e.options].findIndex((o) => o.value === ""));
     else e.value = "";
   }
 }
@@ -321,24 +322,24 @@ function renderResult(m) {
     + `${hv.why.length ? ` · ${hv.why.join(", ")}` : ""}${hv.entries ? ` · ${hv.entries}` : ""}`;
   const distText = dv ? `${T.distanceResult[dv.result] ?? dv.result} · 목표 ${dv.stopCounts ?? "—"} · 차단 때 `
     + `${dv.movedAtCut ?? "—"} 카운트` : v.measure ? `${v.measure.moved} 카운트 (${v.measure.status})` : T.verdictNone;
-  box.replaceChildren(
+  box.replaceChildren(...[
     el("h3", { text: own ? T.result : `${T.result} · 직전 실행(이 탭이 시작한 실행이 아닐 수 있음)` }),
     row(T.verdictRun, `${v.ok ? T.ok : T.notOk}${v.why.length ? ` · ${v.why.join(", ")}` : ""}`),
     row(T.verdictHold, holdText),
     row(v.measure ? T.verdictMeasure : T.verdictDistance, distText),
-    v.rest ? row(T.rest, `${v.rest.position ?? "—"} (${v.rest.result ?? "—"})`) : null,
+    v.rest && v.rest.position !== null ? row(T.rest, `${v.rest.position} (${v.rest.result ?? "—"})`) : null,
     v.labels.length ? row(T.labels, v.labels.join(" · ")) : null,
     v.notes.length ? row("알림", v.notes.map((n) => T.notes[n] ?? n).join(" · ")) : null,
     v.rangeMark ? row("실물 확인", T.rangeMark[v.rangeMark] ?? v.rangeMark) : null,
     row("닫힘", v.closed ?? "—"),
     row("정지 원인", v.stopReason ?? "—"),
-    v.boardCause ? row(T.boardCause, v.boardCause) : null,
+    v.boardCause && v.boardCause !== v.stopReason ? row(T.boardCause, v.boardCause) : null,
     row("중단", [v.aborted, ...v.lateAborts].filter(Boolean).join(", ") || "—"),
-    v.start ? row(T.start, v.start) : null,
+    v.start ? row(T.firstCommand, v.start) : null,
     row("축", v.axis ?? "—"),
     row("최고 전류 mA", v.peakCurrentMa ? v.peakCurrentMa.join(" / ") : "—"),
     v.recordComplete === false ? row(T.recordComplete, "아니오 · 기록 파일의 마지막 줄을 확인하세요") : null,
-    row("기록", v.record ?? "—"));
+    row("기록", v.record ?? "—")].filter(Boolean)); // rows that do not apply are left out, never written as "null"
 }
 
 function drawGraph(m, axis) {

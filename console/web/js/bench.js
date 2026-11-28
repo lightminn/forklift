@@ -197,7 +197,8 @@ export function resultView(result) {
       result: result.hold.verdict?.result ?? null,
       why: [...(result.hold.verdict?.why ?? [])],
       endError: result.hold.verdict?.end_error ?? null,
-      insideShare: result.hold.verdict?.settle?.inside_share ?? null,
+      insideShare: result.hold.verdict?.settle?.samples
+        ? result.hold.verdict.settle.inside / result.hold.verdict.settle.samples : null,
       entries: result.hold.entries?.label ?? null,
       target: result.hold.settings?.target ?? null,
     } : null,

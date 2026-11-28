@@ -451,7 +451,7 @@ export const BENCH_TEXT = {
   rest: "멈춘 자리",
   boardCause: "보드가 끝낸 이유",
   recordComplete: "기록 완료",
-  start: "첫 명령",
+  firstCommand: "첫 명령",
   labels: "참고",
   notes: { brake_end_unseen: "제동 끝을 1 초 동안 보지 못함", result_pair_absent: "결과 표본이 0.15 초 늦음" },
   ok: "정상",
