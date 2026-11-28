@@ -259,9 +259,10 @@ def test_a_bench_stop_before_the_arm_cancels_with_nothing_armed(rig):
 
 @pytest.mark.parametrize("fields,why", [
     (dict(bypass=["kth_invalid"]), "not_yet_a2"),
-    (dict(mode="hold"), "not_yet_a1b"),
+    (dict(mode="hold"), "hold: an object"),
     (dict(axis="L", source="mt"), "not_yet_a1c"),
-    (dict(stop={"turns": 1}), "not_yet_a1b"),
+    (dict(stop={"turns": 1}, count_sign=1), "distance: source kth"),
+    (dict(stop={"counts": 100}), "not_yet_a1c"),
     (dict(power_switch_in_hand="true"), "power_switch_in_hand: true or false"),
     (dict(power_switch_in_hand=False), "power switch"),
     (dict(absent=["L"]), "absent"),

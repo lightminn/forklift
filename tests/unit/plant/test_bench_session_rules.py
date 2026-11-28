@@ -176,3 +176,19 @@ def test_each_failure_names_itself(kw, why):
 ])
 def test_window_stop_by_the_two_bypass_bits(value, kth_invalid_bypass, range_off, stop):
     assert bs.window_stop(value, (0.0, 1.0), kth_invalid_bypass=kth_invalid_bypass, range_off=range_off) == stop
+
+
+# --- B2: the board's own end and a STOPPING latest STATE (plan 4.4 decision 3) ---------------------------------------
+def test_the_boards_own_end_or_a_stopping_state_sends_nothing_until_an_end_pair():
+    link = (7, 1, 3)
+    ready = pair(drive=D.PREP, last_rx=101)  # the zero 101 taken while preparing: normally a DISARM
+    assert bs.stop_action(arm_sent=True, zero_seq=101, zero_link=link, p=ready) == "send_disarm"
+    assert bs.stop_action(arm_sent=True, zero_seq=101, zero_link=link, p=ready, latest_stopping=True) == "wait"
+    assert bs.stop_action(arm_sent=True, zero_seq=None, zero_link=None, p=None, board_end=True) == "wait"
+    lagging = pair(drive=D.DRIVING, last_rx=99)  # the zero not taken yet: normally a resend
+    assert bs.stop_action(arm_sent=True, zero_seq=101, zero_link=link, p=lagging, board_end=True) == "wait"
+    # an end pair still closes first
+    assert bs.stop_action(arm_sent=True, zero_seq=101, zero_link=link, p=pair(Mode.DISARMED),
+                          board_end=True) == "closed"
+    assert bs.stop_action(arm_sent=True, zero_seq=101, zero_link=link, p=pair(Mode.FAULT),
+                          latest_stopping=True) == "closed_latched"
