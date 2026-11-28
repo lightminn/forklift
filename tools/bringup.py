@@ -58,6 +58,7 @@ from forklift_core.live.synthetic import (
 )
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
+    BenchDriveState,
     BenchRunFlag,
     BenchStop,
     Drive,
@@ -283,21 +284,22 @@ class Bench:
             self.emit(row)
             return self.record_errors == errors0
         data = (json.dumps(row, default=str) + "\n").encode("utf-8")
+        n = 0
         try:
-            pos = os.lseek(fd, 0, os.SEEK_END)
-        except OSError:
-            pos = None
-        try:
-            if os.write(fd, data) != len(data):
+            n = os.write(fd, data)
+            if n != len(data):
                 raise OSError("short write")
             os.fsync(fd)
             return True
         except OSError:
-            if pos is not None:
-                try:
-                    os.ftruncate(fd, pos)
-                except OSError:
-                    pass
+            # cut back only our own bytes: with O_APPEND the offset after the write is our row's end; another
+            # writer's row appended after it (the same --out from two processes) is never cut (impl P2-6)
+            try:
+                end = os.lseek(fd, 0, os.SEEK_CUR)
+                if n and os.fstat(fd).st_size == end:
+                    os.ftruncate(fd, end - n)
+            except OSError:
+                pass
             return False
 
     def flush_record(self) -> bool:
@@ -1008,25 +1010,52 @@ class CommissionSession(Session):
         if self.aborted is not None:
             return False
         b.host.drop_frames(("COMMISSION",), "prep_zero_last", keep_arming_zero=True)
+        conn0 = b.conn
         deadline = time.monotonic_ns() + (b.host.cfg.cap_ms + 50) * 1_000_000
+
+        def left() -> float:
+            return max(0.0, (deadline - time.monotonic_ns()) / 1e9)
+
         link = getattr(b.link, "link", None)
         cur = getattr(link, "_cur", None)
-        if cur is not None and getattr(link, "_off", 0) > 0 and cur.kind == "COMMISSION":
-            seq = int(cur.seq) & 0xFFFF  # the one being written is the last: wait for its last byte
-            b.run_until(lambda: any(w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq and w.conn == b.conn
-                                    for w in b.writes), max(0.0, (deadline - time.monotonic_ns()) / 1e9))
-        last = next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and w.conn == b.conn
-                     and not w.duty_e4), None)
+        seen: list = []  # every STATE the host accepts while the last zero's answer is awaited
+        prev_acc = b.host.on_accepted
 
-        def taken() -> bool:
-            st, rx = b.host.state, b.host.state_rx_ns
-            return (last is not None and st is not None and rx is not None and rx >= last.done_ns
-                    and st.boot_id == last.boot_id and st.arm_gen == last.arm_gen
-                    and (int(st.last_rx_seq) & 0xFFFF) == (last.seq & 0xFFFF)
-                    and st.reject_reason == RejectReason.NONE)
+        def on_acc(st, rx):
+            seen.append((st, rx))
+            if prev_acc is not None:
+                prev_acc(st, rx)
 
-        ok = last is not None and (taken() or b.run_until(taken, max(0.0, (deadline - time.monotonic_ns()) / 1e9)))
-        b.emit({"t": "prep_zero_last", "seq": None if last is None else last.seq & 0xFFFF, "accepted": bool(ok)})
+        def zero_write(seq: int):
+            return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq
+                         and w.conn == conn0), None)
+
+        b.host.on_accepted = on_acc
+        try:
+            if cur is not None and getattr(link, "_off", 0) > 0 and cur.kind == "COMMISSION":
+                # the one being written is the last: its seq and connection are fixed now, and it must go out whole
+                # in time -- never an earlier zero taken in its place (Codex B2a-1 impl P1)
+                seq = int(cur.seq) & 0xFFFF
+                b.run_until(lambda: zero_write(seq) is not None, left())
+                last = zero_write(seq)
+            else:
+                last = next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and w.conn == conn0
+                             and not w.duty_e4), None)
+
+            def taken() -> bool:
+                return last is not None and any(
+                    rx >= last.done_ns and rx <= deadline and st.boot_id == last.boot_id
+                    and st.arm_gen == last.arm_gen and (int(st.last_rx_seq) & 0xFFFF) == (last.seq & 0xFFFF)
+                    and st.reject_reason == RejectReason.NONE for st, rx in seen)
+
+            st0, rx0 = b.host.state, b.host.state_rx_ns
+            if st0 is not None and rx0 is not None:
+                seen.append((st0, rx0))  # the latest STATE already in: it may name the last zero
+            ok = last is not None and (taken() or (b.run_until(taken, left()) and taken()))
+        finally:
+            b.host.on_accepted = prev_acc
+        b.emit({"t": "prep_zero_last", "seq": None if last is None else last.seq & 0xFFFF, "accepted": bool(ok),
+                "deadline_ns": deadline})
         if not ok:
             self.aborted = self.aborted or "prep_zero_unconfirmed"
         return bool(ok)
@@ -1185,12 +1214,12 @@ class CommissionSession(Session):
         prev_acc, prev_pair = b.host.on_accepted, b.host.on_pair  # a hold run keeps its own pair record going
 
         def on_acc(st, rx):
-            evidence.append(("state", st, None, rx))
+            evidence.append(("state", st, None, rx, b.conn))
             if prev_acc is not None:
                 prev_acc(st, rx)
 
         def on_pair(st, bs, rx):
-            evidence.append(("pair", st, bs, rx))
+            evidence.append(("pair", st, bs, rx, b.conn))
             if prev_pair is not None:
                 prev_pair(st, bs, rx)
 
@@ -1217,6 +1246,8 @@ class CommissionSession(Session):
         except (TypeError, ValueError):
             q_valid_ms = b.host.cfg.cap_ms
         host_deadline_ns = (echo_rx_ns or time.monotonic_ns()) + q_valid_ms * 1_000_000 + 50_000_000
+        b.emit({"t": "first_frame", "kind": kind, "seq": seq16, "conn": conn0, "echo_rx_ns": echo_rx_ns,
+                "host_deadline_ns": host_deadline_ns})  # fixed now: a replay needs it even if no byte goes out
 
         def write():
             return next((w for w in reversed(b.writes) if w.kind == kind and (w.seq & 0xFFFF) == seq16
@@ -1254,7 +1285,7 @@ class CommissionSession(Session):
         else:
             self.bench_start = "unconfirmed"
             self.aborted = "bench_start_unconfirmed"
-        b.emit({"t": "bench_start", "result": self.bench_start, "seq": seq})
+        b.emit({"t": "bench_start", "result": self.bench_start, "seq": seq, "lim_mcu_us": lim.get("mcu_us")})
         if self.bench_start in ("accepted", "confirmed_by_result"):
             return True
         if b.host.ready:
@@ -1308,6 +1339,8 @@ class CommissionSession(Session):
             b.emit({"t": "stopping_waited", "ms": self.stopping_waited_ms, "observed_end": seen})
             if not seen:
                 self.aborted = self.aborted or "stopping_end_unobserved"
+                # kept apart too: a late board record never turns this into a label (Codex B2a-1 impl P2-1)
+                self.late_failures = [*getattr(self, "late_failures", []), "stopping_end_unobserved"]
         return super().cleanup()
 
     def early_stop(self, state: McuState, at_start: FaultFlag) -> str | None:
@@ -1404,9 +1437,10 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     o_arm = len(b.writes)  # write orders from here on are this run's
     distance_run = getattr(session, "bench_image", False) and session._distance_run()
     kth_run = getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1
+    rec_pairs: list = []
+    rec_idents: list = []
     if kth_run:
-        rec_pairs: list = []
-        b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, [])
+        b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents)
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
         b.emit({"t": "bench_advisory", "advisory": "high_duty_distance_unverified", "duty": duty,
                 "above": bl.HIGH_DUTY_DISTANCE})  # shown and recorded, never refused (lead 2026-11-28)
@@ -1448,8 +1482,6 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             session.hold_duty(0, POST_ZERO_S)
     session.cleanup()
     rest = session.observe_rest() if getattr(session, "bench_image", False) else None
-    if kth_run:
-        b.host.on_pair = b.host.on_accepted = None  # the run's rows end with its rest position
     if getattr(session, "bench_image", False):
         # the board's own first cause decides: a run that ended by expiry, a time limit, a fault or anything but the
         # tool's one zero is not ok, whatever the samples say (A1a-2 P2)
@@ -1505,7 +1537,13 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     bench_out = {}
     if getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1:
         br = session.bench_result() or {}
-        no_drive_sample = on_index is None or b.samples[on_index].state.mode != Mode.ARMED
+        # a driving sample is a DRIVING pair of this run's arming (plan 4.4 B2): an accepting STATE whose pair was
+        # lost, or a first STATE already STOPPING, is no driving sample (Codex B2a-1 impl P2-2)
+        ident = session.run_ident
+        no_drive_sample = not any(
+            mode == Mode.ARMED and (bs_.drive & 0x3) == int(BenchDriveState.DRIVING) and bs_.run_id == session.run_id
+            and (idn is None or ident is None or idn == ident)
+            for (_t, mode, bs_), idn in zip(rec_pairs, rec_idents, strict=True))
         if no_drive_sample and br.get("confirmed") and br.get("run_id") == session.run_id:
             # 100 Hz may miss a short distance run's acceptance and cut: the board's latched result says it drove;
             # the duty and current figures then have no sample (plan 4.2 A1b-1 decision 8)
@@ -1526,10 +1564,13 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         if rest is not None:
             bench_out["rest"] = rest
         bench_out["bench_result"] = br  # the one read the verdicts above were made from (impl r1 P2-4)
+        b.host.on_pair = b.host.on_accepted = None  # the rows end after the result read (impl P2-4)
     if getattr(session, "bench_image", False) and profile is None:
         # verdict ① for every bench7 run, as a hold's (plan 4.4 B2: the bundle reads it, never chk's PASS)
         bench_out["verdict1"] = bench_verdict1(b, session, session.bench_result() or {}, distance=distance_run,
                                                i_arm=i_arm)
+        if result == "board_record_only":
+            bench_out["verdict1"]["labels"].append("보드 기록만(구동 표본 없음)")
         if session.bench_start is not None:
             bench_out["start"] = session.bench_start  # a late board record may have turned it into a label
     if ambiguous is not None:
@@ -1698,6 +1739,7 @@ def bench_verdict1(b: Bench, session: CommissionSession, br: dict, *, distance: 
     A short distance run whose first answer stayed unconfirmed but whose board record of this arming shows it reached
     its distance (reason 8) and then DISARMED keeps that doubt as a label, not an abort (plan 4.4, consistency round
     1 P2-1) -- only that doubt: any other abort stays."""
+    b.flush_record()  # every row so far out of the buffer before the verdict counts the lost ones (impl P2-5)
     last_pair = bench_session.pair_of(b.host.bench_state_of, b.host.bench_state)
     same_arming = (last_pair is not None and session.run_ident is not None
                    and (last_pair.boot_id, last_pair.arm_gen) == session.run_ident)
@@ -1709,7 +1751,7 @@ def bench_verdict1(b: Bench, session: CommissionSession, br: dict, *, distance: 
         b.emit({"t": "cleanup_confirmed_by_board", "run_id": session.run_id})
     labels = []
     if (distance and session.aborted == "bench_start_unconfirmed" and board_end and br.get("confirmed")
-            and br.get("stop_reason") == "distance_reached"
+            and br.get("stop_reason") == "distance_reached" and not getattr(session, "late_failures", ())
             and (i_arm is None or session_abort_reason(b.samples, i_arm) is None)):
         session.aborted = None
         session.bench_start = "unconfirmed_board_record"
@@ -1727,7 +1769,7 @@ def bench_verdict1(b: Bench, session: CommissionSession, br: dict, *, distance: 
         closed="ended" if br.get("confirmed") else "no_drive", stop_reason=br.get("stop_reason"),
         aborted=session.aborted, cleanup_confirmed=bool(session.cleanup_confirmed), last=last_pair,
         record_errors=b.record_errors, unexpected_faults=faults, distance=distance)
-    return {**v, "labels": labels}
+    return {**v, "labels": labels, "record_errors_at": b.record_errors}
 
 
 def _run_pairs(pairs: list, idents: list, ident: tuple | None) -> list:
@@ -3112,6 +3154,12 @@ def execute(args, bench: Bench) -> dict:
         _mark_commission_result(result, names, session.large, session.preflight_product, _absent_of(args))
     elif args.cmd in ("step", "scenario"):
         _mark_absent_result(result, _absent_of(args))
+    bench.flush_record()
+    v1 = result.get("verdict1") if isinstance(result, dict) else None
+    if isinstance(v1, dict) and bench.record_errors > v1.get("record_errors_at", bench.record_errors):
+        # rows lost after verdict 1 was made (a cleanup retried here, Codex B2a-1 impl P2-4): it is not a pass
+        v1["ok"] = False
+        v1["why"] = [*v1.get("why", []), f"record_errors_after_verdict:{bench.record_errors - v1['record_errors_at']}"]
     result["record_errors"] = bench.record_errors
     if args.cmd == "commission":
         # the final row in one write (plan 4.4 B2): its own fate is reported apart from the verdict, which the rows

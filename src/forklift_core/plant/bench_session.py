@@ -188,14 +188,17 @@ def first_answer(evidence, *, seq16: int, run_id: int, write, lim_mcu_us: int, l
     """The answer to a run's one-shot first frame -- a distance run's first non-zero COMMISSION or a hold's first
     BENCH_HOLD (plan 4.3 decision 10, 4.4 B2 decision 3) -- shared by the CLI and the console.
 
-    ``evidence``: ``(kind, STATE, BENCH_STATE or None, received ns)`` the host accepted, kind ``state`` or ``pair``.
+    ``evidence``: ``(kind, STATE, BENCH_STATE or None, received ns[, host connection])`` the host accepted, kind
+    ``state`` or ``pair``; with a connection given on both, a sample of another opening than the write's is not
+    evidence (Codex B2a-1 impl P2-3).
     They are judged in MCU-time order, a STATE before its own pair (the host calls every STATE hook of a read before
     its pair hooks). Only samples of the write's boot and arming, received after its last byte and made after the STATE
     it echoed, count; the first one past either deadline (``lim_mcu_us`` on the MCU clock, ``lim_host_ns`` on the host
     clock) closes the wait unanswered. ``write``: the frame's write record (``done_ns``, ``boot_id``, ``arm_gen``,
     ``echo_mcu_time_us``), None while not written whole -- then only the host deadline closes it.
-    ``stop_zero_done_ns``: once a stop zero was written, a STATE received after it no longer speaks for the first frame
-    (its ``last_rx_seq`` and reject reason may be the zero's); only a pair carrying this run's result does.
+    ``stop_zero_done_ns``: once a stop zero was written, a STATE received at or after it no longer speaks for the
+    first frame (its ``last_rx_seq`` and reject reason may be the zero's; the same receipt time cannot order them);
+    only a pair carrying this run's result does.
 
     Returns ``accepted``, ``refused:<reason>``, ``confirmed_by_result``, ``unconfirmed`` (a deadline passed), or None
     (still waiting). A refusal is a reject reason on a STATE whose ``last_rx_seq`` is still before the first frame: the
@@ -205,8 +208,12 @@ def first_answer(evidence, *, seq16: int, run_id: int, write, lim_mcu_us: int, l
         return "unconfirmed" if now_ns > lim_host_ns else None
     order = sorted(range(len(evidence)),
                    key=lambda i: (evidence[i][1].mcu_time_us, 0 if evidence[i][0] == "state" else 1, i))
+    write_conn = getattr(write, "conn", None)
     for i in order:
-        kind, st, bench, rx = evidence[i]
+        kind, st, bench, rx, *more = evidence[i]
+        conn = more[0] if more else None
+        if conn is not None and write_conn is not None and conn != write_conn:
+            continue
         if not (rx >= write.done_ns and st.boot_id == write.boot_id and st.arm_gen == write.arm_gen
                 and st.mcu_time_us > write.echo_mcu_time_us):
             continue
@@ -216,7 +223,7 @@ def first_answer(evidence, *, seq16: int, run_id: int, write, lim_mcu_us: int, l
             if bench is not None and bench.result_run_id == run_id:
                 return "confirmed_by_result"
             continue
-        if stop_zero_done_ns is not None and rx > stop_zero_done_ns:
+        if stop_zero_done_ns is not None and rx >= stop_zero_done_ns:
             continue
         if (int(st.last_rx_seq) & 0xFFFF) == seq16:
             return "accepted"

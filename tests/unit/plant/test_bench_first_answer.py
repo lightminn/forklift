@@ -113,6 +113,26 @@ def test_after_the_stop_zero_only_a_result_pair_attributes_the_first_frame():
     assert ans([("state", rej, None, 3_000)], now=5_001, stop_zero_done_ns=2_500) == "unconfirmed"
 
 
+def test_a_sample_of_another_opening_is_not_evidence():
+    @dataclass
+    class WC(W):
+        conn: int = 1
+
+    st = St(500, reject_reason=RejectReason.STALE_ECHO)
+    v = bs_.first_answer([("state", st, None, 1_500, 2)], seq16=SEQ, run_id=RUN, write=WC(), lim_mcu_us=10_000,
+                         lim_host_ns=5_000, now_ns=5_001)
+    assert v == "unconfirmed"
+    ok = St(500, last_rx_seq=SEQ)
+    v = bs_.first_answer([("state", ok, None, 1_500, 1)], seq16=SEQ, run_id=RUN, write=WC(), lim_mcu_us=10_000,
+                         lim_host_ns=5_000, now_ns=2_000)
+    assert v == "accepted"
+
+
+def test_a_state_received_with_the_stop_zero_cannot_speak_for_the_first_frame():
+    rej = St(700, reject_reason=RejectReason.STALE_ECHO)
+    assert ans([("state", rej, None, 2_500)], now=5_001, stop_zero_done_ns=2_500) == "unconfirmed"
+
+
 def test_unexpected_faults_leave_out_other_axes_and_a_bypassed_range():
     m_range_off = FaultFlag.STEER_OUT_OF_RANGE | FaultFlag.LIFT_SENSOR_INVALID | FaultFlag.COMMAND_TIMEOUT
     assert bs_.unexpected_faults(m_range_off, 2, ("steer_range",)) == ()

@@ -75,6 +75,50 @@ def test_a_one_count_run_passes_verdict1_with_or_without_a_driving_sample(model)
     assert res["distance"]["result"] == "reached", res
     assert res["result"] in ("ok", "board_record_only"), res
     assert res["verdict1"]["ok"], res["verdict1"]
+    driving = [r for r in record(b) if r["t"] == "bench_pair" and r["mode"] == "ARMED" and (r["drive"] & 3) == 2
+               and r["run_id"] == res["bench_set"]["run_id"]]
+    if res["result"] == "board_record_only":
+        assert not driving and "보드 기록만(구동 표본 없음)" in res["verdict1"]["labels"], res["verdict1"]
+    else:
+        assert driving and res["verdict1"]["labels"] == []
+
+
+def test_the_first_answer_is_recomputed_from_the_record_alone(model):  # noqa: F811
+    """The JSONL alone gives back the first answer the run took (plan 4.4 B2: the host's accepted STATEs and pairs,
+    the first frame's write and its two deadlines)."""
+    from types import SimpleNamespace as NS
+
+    b = bench(model)
+    res = bringup.execute(dist_args(stop_kth_turns=0.02), b)
+    rows = record(b)
+    (ff,) = [r for r in rows if r["t"] == "first_frame"]
+    (start,) = [r for r in rows if r["t"] == "bench_start"]
+    w = next(r for r in rows if r["t"] == "written" and r["kind"] == ff["kind"] and r["seq"] & 0xFFFF == ff["seq"])
+    ev = []
+    for r in rows:
+        if r["t"] == "state_accepted":
+            st = NS(mcu_time_us=r["mcu_time_us"], boot_id=r["boot_id"], arm_gen=r["arm_gen"],
+                    last_rx_seq=r["last_rx_seq"], reject_reason=RejectReason[r["reject_reason"]])
+            ev.append(("state", st, None, r["rx_ns"], r["conn"]))
+        elif r["t"] == "bench_pair":
+            st = NS(mcu_time_us=r["mcu_time_us"], boot_id=r["boot_id"], arm_gen=r["arm_gen"],
+                    last_rx_seq=r["last_rx_seq"], reject_reason=RejectReason.NONE)
+            ev.append(("pair", st, NS(result_run_id=r["result_run_id"]), r["rx_ns"], r["conn"]))
+    v = bench_session.first_answer(ev, seq16=ff["seq"], run_id=res["bench_set"]["run_id"], write=NS(**w),
+                                   lim_mcu_us=start["lim_mcu_us"], lim_host_ns=ff["host_deadline_ns"],
+                                   now_ns=ff["host_deadline_ns"] + 1)
+    assert {"confirmed_by_result": "confirmed_by_result", "accepted": "accepted"}.get(v) == res["start"], (v, res)
+
+
+def test_rows_lost_before_the_verdict_fail_it(model):  # noqa: F811
+    class FlushFails(io.StringIO):
+        def flush(self):
+            raise OSError("disk")
+
+    b = bench(model)
+    b.out = FlushFails()
+    res = bringup.execute(dist_args(seconds=0.8, kth_measure=True), b)
+    assert not res["verdict1"]["ok"] and any(w.startswith("record_errors") for w in res["verdict1"]["why"]), res
 
 
 def test_a_late_board_record_turns_an_unconfirmed_start_into_a_label(model, monkeypatch):  # noqa: F811
@@ -92,7 +136,7 @@ def test_a_late_board_record_turns_an_unconfirmed_start_into_a_label(model, monk
     br = res["bench_result"]
     if br.get("stop_reason") == "distance_reached":
         assert res["aborted"] is None, res
-        assert res["verdict1"]["ok"] and res["verdict1"]["labels"] == ["첫 응답 미확인 — 보드 기록으로 끝 확인"]
+        assert res["verdict1"]["ok"] and "첫 응답 미확인 — 보드 기록으로 끝 확인" in res["verdict1"]["labels"]
         assert res["start"] == "unconfirmed_board_record"
     else:  # the closing zero landed before the count moved: the doubt stays an abort
         assert res["aborted"] == "bench_start_unconfirmed" and not res["verdict1"]["ok"], res
@@ -107,34 +151,27 @@ def test_a_hold_carries_verdict1_at_the_top_too(model):  # noqa: F811
 
 
 def test_a_refused_readiness_zero_sends_no_first_frame(model, monkeypatch):  # noqa: F811
-    """The last readiness zero never shows accepted: no first frame goes out (the refusal after it could not be told
-    from the zero's)."""
-
-    class Refusing:
-        def __init__(self, st):
-            self._st = st
-
-        def __getattr__(self, k):
-            return RejectReason.STALE_ECHO if k == "reject_reason" else getattr(self._st, k)
+    """The last readiness zero never shows accepted (here: no STATE counts as naming it without a reject reason): no
+    first frame goes out -- a refusal after it could not be told from the zero's."""
+    from types import SimpleNamespace as NS
 
     b = bench(model)
     orig = bringup.CommissionSession.confirm_last_prep_zero
 
     def refusing(self):
-        host = self.b.host
-        cls = type(host)
-        prop = cls.state
-        monkeypatch.setattr(cls, "state", property(lambda h: None if prop.fget(h) is None else Refusing(prop.fget(h))))
+        monkeypatch.setattr(bringup, "RejectReason", NS(NONE=object()))
         try:
             return orig(self)
         finally:
-            monkeypatch.setattr(cls, "state", prop)
+            monkeypatch.setattr(bringup, "RejectReason", RejectReason)
 
     monkeypatch.setattr(bringup.CommissionSession, "confirm_last_prep_zero", refusing)
     res = bringup.execute(dist_args(stop_kth_turns=0.02), b)
     assert res["aborted"] == "prep_zero_unconfirmed", res
     assert not [w for w in b.writes if w.kind == "COMMISSION" and w.duty_e4]
     assert not res["verdict1"]["ok"]
+    (last,) = [r for r in record(b) if r["t"] == "prep_zero_last"]
+    assert last["accepted"] is False and last["seq"] is not None
 
 
 def test_the_final_row_is_written_whole_or_cut_back(tmp_path, monkeypatch):
@@ -157,6 +194,21 @@ def test_the_final_row_is_written_whole_or_cut_back(tmp_path, monkeypatch):
         assert b.final_row({"t": "result", "n": 1}) is False
     # the row was cut back: the file keeps the earlier rows only, and the close wrote nothing more
     assert [json.loads(x)["t"] for x in path2.read_text().splitlines()] == ["a"]
+
+
+def test_a_failed_final_row_never_cuts_another_writers_row(tmp_path, monkeypatch):
+    path = tmp_path / "shared.jsonl"
+
+    def other_writer_then_fail(fd):
+        with open(path, "a", encoding="utf-8") as other:
+            other.write(json.dumps({"t": "other"}) + "\n")
+        raise OSError("disk")
+
+    with open(path, "a", encoding="utf-8") as out:
+        b = bringup.Bench(None, out, commission=True)
+        monkeypatch.setattr(bringup.os, "fsync", other_writer_then_fail)
+        assert b.final_row({"t": "result"}) is False
+    assert [json.loads(x)["t"] for x in path.read_text().splitlines()][-1] == "other"
 
 
 def test_an_in_memory_record_takes_the_final_row_as_any_row():
