@@ -269,10 +269,10 @@ def _bench_fields(msg: dict, axis: int) -> dict:
     cs = msg.get("count_sign")
     if kind != "duty":
         # the sign is the operator's, never a default (plan 4.4, independent review P1-2)
-        if isinstance(cs, bool) or cs not in (1, -1):
+        if isinstance(cs, bool) or not isinstance(cs, int) or cs not in (1, -1):
             raise Refused(f"count_sign: 1 or -1, required for a {kind} run")
         out["count_sign"] = int(cs)
-    elif cs is not None and (isinstance(cs, bool) or cs not in (1, -1)):
+    elif cs is not None and (isinstance(cs, bool) or not isinstance(cs, int) or cs not in (1, -1)):
         raise Refused("count_sign: 1 or -1")
     if kind == "hold":
         target = hold.get("target")
@@ -329,8 +329,7 @@ def parse_run(msg: dict) -> Ask:
         raise Refused(f"absent: axis {axis_name} is marked absent -- nothing to drive")
     window = msg.get("window")
     if window is not None:
-        if not (isinstance(window, list) and len(window) == 2 and all(
-                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in window)):
+        if not (isinstance(window, list) and len(window) == 2 and all(_finite(v) for v in window)):
             raise Refused("window: two finite numbers")
         window = (float(window[0]), float(window[1]))
     setup = msg.get("physical_setup")
@@ -445,6 +444,8 @@ class Run:
     late_failures: list = field(default_factory=list)
     labels: list = field(default_factory=list)
     rest_closed: str | None = None
+    arm_rx_conn: int | None = None
+    pair_wait_noted: bool = False
 
 
 @dataclass
@@ -532,6 +533,7 @@ class BenchConsole:
             seq = int(info["seq"]) & 0xFFFF
             self.fate.pop(seq, None)  # a seq queued again after the ring wrapped starts with no fate (round 4 P2-1)
             self.written.pop(seq, None)
+            self.write_info.pop(seq, None)  # nor an earlier write's record (B2a-2 impl P2)
         if info and what in ("written", "dropped", "abandoned"):
             seq = int(info["seq"]) & 0xFFFF
             if what == "written":
@@ -550,9 +552,16 @@ class BenchConsole:
             if what == "written" and info.get("kind") == "COMMISSION" and fields.get("duty_e4"):
                 if self.run is not None and fields.get("axis") == self.run.ask.axis:
                     self.run.nonzero_written = True  # a duty actually went out (no_drive vs result_lost)
+            if what == "written" and info.get("kind") == "BENCH_HOLD" and self.run is not None:
+                self.run.nonzero_written = True  # a hold went out: it may have driven
         r = self.run
         if r is not None and info and what in ("written", "dropped", "abandoned", "event"):
-            self._emit(r, {"t": what, "host_ns": int(self.clock()), **dict(info), **fields})
+            extra = {}
+            w = self.write_info.get(int(info["seq"]) & 0xFFFF) if what == "written" and "seq" in info else None
+            if w is not None:
+                extra = {"done_ns": w.done_ns, "conn": w.conn, "echo_mcu_time_us": w.echo_mcu_time_us,
+                         "valid_ms": w.valid_ms}
+            self._emit(r, {"t": what, "host_ns": int(self.clock()), **dict(info), **fields, **extra})
 
     def _on_state(self, st, received_ns: int) -> None:
         self.new_states.append((st, received_ns))
@@ -577,7 +586,7 @@ class BenchConsole:
         if r is None:
             return
         r.pairs.append((st.mcu_time_us, st.mode, bst))
-        r.idents.append((st.boot_id, st.arm_gen))
+        r.idents.append((st.boot_id, st.arm_gen, bst.conn_gen, self.rx_conn))
         if r.arm_written_ns is None and st.mode == Mode.DISARMED:
             r.pre_run_pair_t = st.mcu_time_us  # the last pair before the ARM (the entry window's zero base)
         if r.first_seq is not None and r.bench_start is None:
@@ -590,7 +599,9 @@ class BenchConsole:
                        "target": bst.target, "distance_ref": bst.distance_ref, "cut_position": bst.cut_position,
                        "stop_reason": bst.stop_reason, "distance_confirm": bst.distance_confirm,
                        "run_flags": bst.run_flags, "deadband_entries": bst.deadband_entries,
-                       "evidence_age_ms": bst.evidence_age_ms, "end_evidence_age_ms": bst.end_evidence_age_ms})
+                       "evidence_age_ms": bst.evidence_age_ms, "end_evidence_age_ms": bst.end_evidence_age_ms,
+                       "result_axis": bst.result_axis, "result_source": bst.result_source,
+                       "result_bypass": bst.result_bypass, "blocked": bst.blocked})
 
     def _emit(self, r: Run, row: dict) -> None:
         try:
@@ -806,11 +817,11 @@ class BenchConsole:
         if f.kind == "BENCH_HOLD" or (f.kind == "COMMISSION" and f.nonzero and r.ask.kind in ("hold", "distance")):
             # the one-shot first frame alone in 'first', the renewals in 'drive', none from T - HANDOVER on
             # (plan 4.4 decision 3; the CLI's gate, round 1 P1-1)
-            if r.phase == "first":
-                return seq == r.first_seq
-            if r.phase != "drive":
-                return False
             if r.send_until_ns is not None and now >= r.send_until_ns:
+                return False
+            if r.phase == "first":
+                return seq == r.first_seq and f.kind == r.first_kind
+            if r.phase != "drive":
                 return False
         return True
 
@@ -968,10 +979,15 @@ class BenchConsole:
             why = self.cancel_reason(r, now)
             if why is not None:
                 self._enter_stop(r, why, now)
-        elif r.phase == "stop" and r.aborted is None:
+        elif r.phase == "stop":
             # a STOP, a lost lease or connection during the run's own end changes nothing that is sent, but the run
-            # was interrupted: it is not a pass (round 4 P2-4)
-            r.aborted = self.cancel_reason(r, now)
+            # was interrupted: it is not a pass (round 4 P2-4); after another abort it is kept apart, so a late board
+            # record never clears it (B2a-2 impl P2)
+            why = self.cancel_reason(r, now)
+            if why is not None and r.aborted is None:
+                r.aborted = why
+            elif why is not None and why != r.aborted and why not in r.late_failures:
+                r.late_failures.append(why)
         if r.phase in ("recover", "set", "arm", "prep", "first"):
             # every sample from the request to the first non-zero is judged (round 3 P2-4; plan 4.4: 'first' too)
             v = self._window_out(r, states)
@@ -979,6 +995,8 @@ class BenchConsole:
                 if r.arm_seq is None:
                     self._refuse(r, f"window_before_drive:{v}", now)
                     return
+                r.window_stop = f"window:{v}"
+                r.late_failures.append(r.window_stop)  # a late board record never clears it
                 self._enter_stop(r, f"window_before_drive:{v}", now)
         if r.phase == "recover":
             self._recover(r, now)
@@ -993,6 +1011,7 @@ class BenchConsole:
         elif r.phase == "drive":
             self._drive(r, now, states)
         if r.phase == "stop":
+            self._zero_written(r)  # its write time first: a STATE received after it never speaks for the first frame
             self._classify_first(r, now)
             self._stop(r, now)
 
@@ -1107,7 +1126,7 @@ class BenchConsole:
             if self._over(r, now, ARM_WAIT_S + NAMED_WAIT_S):
                 self._enter_stop(r, "arm_never_named_the_run", now)
             return
-        r.conn_gen_at_arm, r.arm_ident = p.conn_gen, (p.boot_id, p.arm_gen)
+        r.conn_gen_at_arm, r.arm_ident, r.arm_rx_conn = p.conn_gen, (p.boot_id, p.arm_gen), self.rx_conn
         r.bench_taken = {"seq": r.set_seq, "run_id": r.run_id, "bypass": list(r.ask.bench.names),
                          "duty_max_e4": list(r.ask.bench.duty_max_e4()), "time_ms": list(r.ask.bench.time_ms()),
                          "overrides": r.ask.bench.overrides(), "mode": r.ask.bench.mode, "source": r.ask.bench.source,
@@ -1194,23 +1213,26 @@ class BenchConsole:
                             lim_mcu_us=r.first_lim_mcu_us or 0, lim_host_ns=r.first_host_deadline_ns, now_ns=now,
                             stop_zero_done_ns=r.zero_written_ns)
         if v is None:
+            p = self.pair()
+            if p is not None and p.mode in STOPPED and self._after_arm(r, p):
+                if p.boot_id != r.boot:
+                    v = "result_lost"  # a new boot keeps no record of this run (plan 4.4, round 3 P2-1)
+                elif r.arm_ident is not None and (p.boot_id, p.arm_gen) == r.arm_ident and p.result_run_id == 0:
+                    v = "no_drive_confirmed"  # this arming ended with no run result: the first frame never drove
+        if v is None:
             return None
         r.bench_start = v
-        self._emit(r, {"t": "bench_start", "result": v, "seq": r.first_seq, "lim_mcu_us": r.first_lim_mcu_us})
+        self._emit(r, {"t": "bench_start", "result": v, "seq": r.first_seq, "lim_mcu_us": r.first_lim_mcu_us,
+                       "host_ns": now, "stop_zero_done_ns": r.zero_written_ns})
         if v.startswith("refused:"):
             r.aborted = r.aborted or f"bench_start_refused_{v.split(':', 1)[1]}"
-        elif v == "unconfirmed":
-            r.aborted = r.aborted or "bench_start_unconfirmed"
+        elif v in ("unconfirmed", "result_lost"):
+            r.aborted = r.aborted or f"bench_start_{v}"
+        elif v == "no_drive_confirmed":
+            r.aborted = r.aborted or "bench_start_no_drive"
         return v
 
-    def _first(self, r: Run, now: int, states: list) -> None:
-        v = self._window_out(r, states)
-        if v is not None:
-            # a sample out of the window while the first answer is awaited: stopped before any renewal (r1 P1-1)
-            r.window_stop = f"window:{v}"
-            r.late_failures.append(r.window_stop)
-            self._enter_stop(r, r.window_stop, now)
-            return
+    def _first(self, r: Run, now: int, states: list) -> None:  # noqa: ARG002 -- the window is judged in _step
         ans = self._classify_first(r, now)
         if ans is None:
             if r.send_until_ns is not None and now >= r.send_until_ns:
@@ -1280,6 +1302,13 @@ class BenchConsole:
         self._phase(r, "stop", now)
         self._emit(r, {"t": "stop", "why": why, "host_ns": now})
 
+    def _after_arm_state(self, r: Run, st) -> bool:
+        """A STATE made after the BENCH_ARM's fate was decided (its arming moved on, or past the ARM's acceptance
+        window on the same boot) -- the STATE-only form of ``_after_arm``."""
+        if r.arm_written_ns is None or st.boot_id != r.boot:
+            return False
+        return st.arm_gen != r.arm_prev_gen or st.mcu_time_us > r.arm_echo_us + BOARD_COMMAND_TIMEOUT_MS * 1000
+
     def _after_arm(self, r: Run, p: bs.Pair | None) -> bool:
         """Whether ``p`` can only have been made after the BENCH_ARM's fate was decided (round 2 P1-2): its arming
         generation moved on (the ARM was taken), or on the same boot its MCU time is past the ARM's acceptance window
@@ -1299,7 +1328,8 @@ class BenchConsole:
             w = self.written.get(seq)
             if w is not None and w[0] == "COMMISSION":
                 r.zero_seq, r.zero_written_ns, r.zero_echo_us, r.zero_link = seq, w[1], echo_us, link
-                self._emit(r, {"t": "stop_zero_written", "seq": seq, "host_ns": w[1]})
+                self._emit(r, {"t": "stop_zero_written", "seq": seq, "host_ns": w[1], "echo_us": echo_us,
+                               "link": None if link is None else list(link)})
                 return
 
     def _pending(self, seq: int | None) -> bool:
@@ -1317,8 +1347,11 @@ class BenchConsole:
         if same_arming and r.ended_seen and not r.board_end:
             r.board_end, r.board_cause = True, _stop_name(p.stop_reason)
             self._emit(r, {"t": "board_end", "stop_reason": r.board_cause, "host_ns": now})
-        latest_stopping = (st is not None and r.arm_ident is not None and st.boot_id == r.arm_ident[0]
-                           and st.mode in STOPPING_LIKE and st.mode != Mode.DISARMED)
+        # the latest STATE of the run's boot already out of ARMED (STOPPING, DISARMED, FAULT, ESTOP) after the ARM
+        # went out: no zero, resend or DISARM from an older pair (Codex B2a-2 impl P1-2); closing still waits for an
+        # end pair
+        latest_stopping = (st is not None and arm_sent and st.boot_id == r.boot and st.mode in STOPPING_LIKE
+                           and self._after_arm_state(r, st))
         if r.board_end or latest_stopping:
             # the board is ending the run itself: no stop frame of ours goes out any more -- queued ones leave the
             # queue, a partly written one is refused at the gate (abandoned with the poison) (plan 4.4, r2 P1-1)
@@ -1329,6 +1362,10 @@ class BenchConsole:
                 and now - r.stop_entered_ns > BRAKE_NOTICE_S * 1e9):
             r.brake_notice = True
             self._emit(r, {"t": "brake_end_unseen", "host_ns": now})
+        if (latest_stopping and not r.ended_seen and not r.pair_wait_noted
+                and now - r.stop_entered_ns > bringup.RESULT_PAIR_WAIT_S * 1e9):
+            r.pair_wait_noted = True  # recorded only: nothing is sent for it (plan 4.4, the three waits)
+            self._emit(r, {"t": "result_pair_absent", "after_s": bringup.RESULT_PAIR_WAIT_S, "host_ns": now})
         if r.link_reopened:
             # after a reopening nothing is sent (the board ended its arming at the boundary): wait for the first
             # pair after it to show the stop
@@ -1447,8 +1484,10 @@ class BenchConsole:
         if closed is None:
             if result_seen:
                 closed = "ended"  # the board drove this run and recorded how it ended
-            elif r.nonzero_written:
-                closed = "result_lost"  # a duty went out but the board's record of the run was not read
+            elif r.bench_start == "no_drive_confirmed":
+                closed = "no_drive"  # this arming's end pair carries no run result
+            elif r.nonzero_written or r.bench_start == "result_lost":
+                closed = "result_lost"  # a duty or a hold went out but the board's record of the run was not read
             else:
                 closed = "no_drive"
         st = self.host.state
@@ -1478,7 +1517,9 @@ class BenchConsole:
                   "final": None if p is None else {"mode": p.mode.name, "duty_e4": list(p.duty_e4)},
                   "kind": r.ask.kind, "board_cause": r.board_cause,
                   "cleanup": r.cleanup_state or ("confirmed" if r.cleanup_confirmed else "unconfirmed"),
-                  "advisories": list(r.ask.advisories), "range_mark": r.ask.range_mark, **b2}
+                  "advisories": list(r.ask.advisories), "range_mark": r.ask.range_mark,
+                  "notes": [n for n, on in (("brake_end_unseen", r.brake_notice),
+                                            ("result_pair_absent", r.pair_wait_noted)) if on], **b2}
         result["closed"] = closed
         r.phase = "closed"
         try:
@@ -1515,13 +1556,20 @@ class BenchConsole:
         a, out = r.ask, {}
         if a.kind == "duty":
             return out
-        bst = self.host.bench_state
-        br = ({"confirmed": True, **bringup.result_fields(bst)}
-              if result_seen and bst is not None and bst.result_run_id == r.run_id else {"confirmed": False})
+        ident = r.arm_ident
+        link = (r.conn_gen_at_arm, r.arm_rx_conn)
+
+        def ours(idn) -> bool:
+            # this arming on this host opening and board connection (B2a-2 impl P2: a pair after a reopening is
+            # never joined to the run's)
+            return ident is not None and idn[:2] == ident and idn[2:] == link
+
+        mine = [(t, m, b) for (t, m, b), idn in zip(r.pairs, r.idents, strict=True) if ours(idn)]
+        # the board's result from the run's own record (the host's kept pair may be gone after a loss)
+        res = next((b for _t, _m, b in reversed(mine) if b.result_run_id == r.run_id), None)
+        br = {"confirmed": True, **bringup.result_fields(res)} if res is not None else {"confirmed": False}
         out["bench_result"] = br
         out["start"] = r.bench_start
-        ident = r.arm_ident
-        mine = [(t, m, b) for (t, m, b), idn in zip(r.pairs, r.idents, strict=True) if ident is None or idn == ident]
         driving = any(m == Mode.ARMED and (b.drive & 0x3) == int(BenchDriveState.DRIVING) and b.run_id == r.run_id
                       for _t, m, b in mine)
         rest = [(t, b) for t, m, b in mine if m == Mode.DISARMED and b.axis == a.axis and b.source == a.bench.source]
@@ -1536,6 +1584,7 @@ class BenchConsole:
         if a.kind == "distance" and br.get("confirmed") and not driving:
             r.labels.append("보드 기록만(구동 표본 없음)")
             out["drive_samples"] = 0
+            out["peak_current_ma"] = None  # the readiness and brake currents are no drive observation (plan 4.4)
             if closed in ("no_drive", "result_lost"):
                 out["closed"] = "ended"  # the board's record of this arming says it drove (plan 4.4 decision 4)
         if a.kind == "distance" and br.get("confirmed"):
@@ -1548,7 +1597,8 @@ class BenchConsole:
                                                 cut_position=br.get("cut_position", 0))
         if a.kind == "hold":
             sess = SimpleNamespace(bench=a.bench, run_ident=ident, run_id=r.run_id, pre_run_pair_t=r.pre_run_pair_t)
-            v2, entries, n = bringup._hold_verdict2(sess, r.pairs, r.idents, br)
+            v2, entries, n = bringup._hold_verdict2(sess, [x for x, idn in zip(r.pairs, r.idents, strict=True)
+                                                           if ours(idn)], [ident] * len(mine), br)
             out["hold"] = {"settings": bringup._hold_settings(a.bench), "verdict": v2, "entries": entries, "pairs": n,
                            "notes": ["듀티는 펌웨어가 낸 명령값 — 실제 PWM·브리지 출력은 미확인", "정지 폭 미측정",
                                      "구간 시작 관성 혼입 미확인"]}
@@ -1684,7 +1734,7 @@ class BenchConsole:
                 self._clear_done(c, "not_ready", now, f"after the clear: {st.mode.name}")
 
     # --- the stream ---------------------------------------------------------------------------------------------------
-    def _b2_stream(self, r: Run) -> dict:
+    def _b2_stream(self, r: Run, now: int) -> dict:
         """The run's B2 values for the screen (plan 4.4 decision 5): its kind and marks, and the count values only once
         they are this run's -- this arming's pair after its first frame was answered; null before and across a gap."""
         a = r.ask
@@ -1694,10 +1744,11 @@ class BenchConsole:
         if a.kind == "hold":
             out["deadband"] = a.bench.hold.deadband
         p, bst = self.pair(), self.host.bench_state
+        started = a.kind == "measure" or r.bench_start in ("accepted", "confirmed_by_result")
         own = (p is not None and bst is not None and r.arm_ident is not None and (p.boot_id, p.arm_gen) == r.arm_ident
-               and r.bench_start in ("accepted", "confirmed_by_result") and bst.run_id == r.run_id
-               and self.pair_rx_ns is not None and self.host.state_rx_ns is not None
-               and self.host.state_rx_ns - self.pair_rx_ns <= int(bs.HOLD_GAP_US * 1000))
+               and started and bst.run_id == r.run_id and bst.axis == a.axis and bst.source == a.bench.source
+               and p.drive_state in (BenchDriveState.DRIVING, BenchDriveState.ENDED)
+               and self.pair_rx_ns is not None and now - self.pair_rx_ns <= int(bs.HOLD_GAP_US * 1000) * 2)
         if a.kind in ("hold", "distance", "measure"):
             out["arming"] = list(r.arm_ident) if r.arm_ident else None
         if not own:
@@ -1738,7 +1789,9 @@ class BenchConsole:
             "request_id": r.request_id, "name": r.rec.dir.name, "phase": r.phase, "axis": AXES[r.ask.axis],
             "duty": r.ask.run.duty, "seconds": r.ask.run.seconds, "bypass_asked": list(r.ask.bench.names),
             "bypass_mcu": list(r.bench_taken["bypass"]) if r.bench_taken else [], "bypass_host": [],
-            "advice": self._advice(r.ask), **self._b2_stream(r)}
+            "advice": self._advice(r.ask), **self._b2_stream(r, now),
+            "notes": [n for n, on in (("brake_end_unseen", r.brake_notice), ("result_pair_absent", r.pair_wait_noted))
+                      if on]}
         return {"t": "bench_state", "session_epoch": self.epoch, "mode": a.mode, "control_gen": a.control_gen,
                 "stops": a.stops, "lease": None if lease is None else {
                     "client_id": lease.client_id,

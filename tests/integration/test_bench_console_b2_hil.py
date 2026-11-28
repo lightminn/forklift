@@ -3,14 +3,19 @@
 rest position, the verdicts and the record. The model's plant is synthetic: no real currents or speeds."""
 
 import json
+import os
+import signal
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tests" / "integration"))
 import bench_console  # noqa: E402,F401 -- the console under test (through the rig)
-from test_bench_console_hil import record_rows, rig, written_kinds  # noqa: E402,F401
+from test_bench_console_hil import BENCH5, Browser, Model, PtyDevice, record_rows, rig, written_kinds  # noqa: E402,F401
 from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 
@@ -155,3 +160,225 @@ def test_the_stream_shows_the_runs_own_values_only(rig):  # noqa: F811
     before = [e for ph, e, _v in seen if ph in ("recover", "set", "arm", "prep", "first")]
     assert all(e is None for e in before), seen[:20]
     assert any(e is not None and v for ph, e, v in seen if ph == "drive"), seen
+
+
+# ---- the gaps of plan 4.4 decision 7 on the console path (Codex B2a-2 impl round 1) ---------------------------------
+
+@pytest.fixture
+def mrig(mcu_model, tmp_path):  # noqa: F811
+    """The rig with the model process at hand (SIGUSR1 pushes the axis)."""
+    made = []
+
+    def make(*extra):
+        m = Model(mcu_model, *extra)
+        made.append(m)
+        dev = PtyDevice(m.master, BENCH5)
+        c = bench_console.BenchConsole(dev, runs_root=tmp_path / "runs")
+        dev.attach(c)
+        b = Browser(c)
+
+        def run_until(pred, timeout=5.0):
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                c.cycle()
+                b.pump()
+                if pred():
+                    return True
+                time.sleep(bench_console.CYCLE_S)
+            return False
+
+        assert run_until(lambda: c.not_ready() is None, 5.0), c.not_ready()
+        b.send("lease_request", leased=False, seq=None)
+        assert run_until(lambda: b.lease_id is not None, 2.0)
+        return c, b, run_until, m
+
+    yield make
+    for m in made:
+        m.close()
+
+
+def holds_written(c):
+    return [w for w in c.write_info.values() if w.kind == "BENCH_HOLD"]
+
+
+def test_a_rel_hold_moves_to_its_target(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=2.5, hold={"target": "rel:60"}))
+    assert run_until(lambda: b.results, 8.0), b.replies
+    res = b.results[-1]
+    assert res["hold"]["settings"]["target"] == "rel:60" and res["verdict"]["run_cleanup"]["ok"], res
+    assert res["hold"]["verdict"]["result"] == "met", res["hold"]
+
+
+def test_a_pushed_hold_comes_back(mrig):
+    c, b, run_until, m = mrig("--kth-start-raw", "1000,1000", "--axis-push-steer-rad", "0.3")
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    assert run_until(lambda: len(holds_written(c)) >= 20, 2.0)
+    m.proc.send_signal(signal.SIGUSR1)
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    assert res["kind"] == "hold" and res["stop_reason"] == "end_zero" and res["verdict"]["run_cleanup"]["ok"], res
+
+
+def test_a_refused_first_hold_is_written_once_and_closed_with_a_zero(mrig):
+    """The axis pushed to raw 0 before the first HOLD: the board refuses it (sensor_invalid); exactly one HOLD is
+    written, then the stop rule's zero, never another HOLD."""
+    c, b, run_until, m = mrig("--kth-start-raw", "256,256", "--axis-push-steer-rad", "-0.3926990817")
+    b.send("bench_run", **hold())
+    assert run_until(lambda: c.run is not None and c.run.phase in ("arm", "prep"), 6.0)
+    m.proc.send_signal(signal.SIGUSR1)
+    assert run_until(lambda: b.results, 8.0), b.replies
+    res = b.results[-1]
+    assert res["start"] == "refused:sensor_invalid" and not res["verdict"]["run_cleanup"]["ok"], res
+    assert len(holds_written(c)) == 1
+
+
+def test_a_reversed_sign_distance_stops_without_progress(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **M, duty=0.2, seconds=1.0, stop={"turns": 0.5}, count_sign=-1)
+    assert run_until(lambda: b.results, 8.0), b.replies
+    res = b.results[-1]
+    assert res["stop_reason"] == "no_progress" and res["distance"]["result"] == "stopped:no_progress", res
+    assert not res["verdict"]["run_cleanup"]["ok"]
+
+
+def test_a_lease_lost_mid_hold_stops_it_with_no_hold_after(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=4.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    b.echo = False  # the page stops answering: the lease runs out
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    assert res["aborted"] in ("lease_expired", "lease_lost"), res
+    rows = record_rows(res)
+    stop = next(r for r in rows if r["t"] == "stop")
+    assert not [r for r in rows if r["t"] == "written" and r.get("kind") == "BENCH_HOLD"
+                and r["host_ns"] > stop["host_ns"]]
+
+
+def test_a_clear_during_the_rest_position_is_busy(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **M, duty=0.2, seconds=0.8, measure=True, count_sign=1, source="kth")
+    assert run_until(lambda: c.run is not None and c.run.phase == "rest", 8.0)
+    rid = b.send("clear_faults", cause="test")
+    assert run_until(lambda: rid in b.replies, 1.0)
+    assert b.replies[rid]["t"] == "reject" and "busy_running" in json.dumps(b.replies[rid])
+
+
+def test_a_hold_whose_settings_cannot_be_written_sends_no_hold(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold())
+    assert run_until(lambda: c.run is not None and c.run.phase == "prep", 6.0)
+    real = c.run.rec._f.write
+
+    def broken(row):
+        if '"hold_settings"' in row:
+            raise OSError("disk full")
+        return real(row)
+
+    c.run.rec._f.write = broken
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    assert not holds_written(c) and not res["verdict"]["run_cleanup"]["ok"], res
+
+
+def test_a_pair_row_that_cannot_be_written_cancels_the_hold(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    real = c.run.rec._f.write
+
+    def broken(row):
+        if '"bench_pair"' in row:
+            raise OSError("disk full")
+        return real(row)
+
+    c.run.rec._f.write = broken
+    assert run_until(lambda: b.results, 6.0)
+    res = b.results[-1]
+    assert (res["aborted"] or "").startswith("record_error") and not res["verdict"]["run_cleanup"]["ok"], res
+
+
+def test_a_one_count_distance_passes_with_or_without_a_driving_sample(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **M, duty=0.2, seconds=1.0, stop={"turns": 1 / 4096}, count_sign=1)
+    assert run_until(lambda: b.results, 8.0), b.replies
+    res = b.results[-1]
+    assert res["distance"]["result"] == "reached" and res["verdict"]["run_cleanup"]["ok"], res
+    if res.get("drive_samples") == 0:
+        assert "보드 기록만(구동 표본 없음)" in res["verdict"]["run_cleanup"]["labels"] and res["peak_current_ma"] is None
+
+
+def test_a_copy_that_cannot_be_saved_leaves_the_verdict(rig, monkeypatch):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+
+    def no_copy(self, obj):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(bench_console.RunRecord, "result", no_copy)
+    b.send("bench_run", **M, duty=0.2, seconds=0.8, measure=True, count_sign=1, source="kth")
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    assert res["verdict"]["run_cleanup"]["ok"] and res["record_complete"] and res["copy_error"] == "copy failed"
+    rows = record_rows(res)
+    assert rows[-1]["t"] == "result" and rows[-1]["verdict"]["run_cleanup"]["ok"]
+
+
+def test_a_short_written_hold_then_stop_is_abandoned(rig):  # noqa: F811
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    state = {"seq": None, "calls": 0}
+    real_write = os.write
+
+    def writer(fd, data):
+        cur = c.dev.link._cur
+        if state["seq"] is None and cur is not None and cur.kind == "BENCH_HOLD" and bytes(data) == bytes(cur.data):
+            state["seq"] = int(cur.seq) & 0xFFFF
+            b.c.channels.message(b.conn, b.client, {"t": "stop", "request_id": "S1", "source": "console"})
+            return real_write(fd, data[:-1])  # everything but the delimiter
+        if state["seq"] is not None and state["calls"] < 2 and cur is not None:
+            state["calls"] += 1
+            raise BlockingIOError
+        return real_write(fd, data)
+
+    c.dev.link._write = writer
+    assert run_until(lambda: b.results, 6.0)
+    assert state["seq"] is not None and c.dev.link.abandoned >= 1
+    res = b.results[-1]
+    assert res["aborted"] == "stop", res
+    rows = record_rows(res)
+    assert not any(r.get("t") == "state" and r["last_rx_seq"] == state["seq"] for r in rows)
+
+
+def test_the_first_answer_is_recomputed_from_the_record_alone(rig):  # noqa: F811
+    from types import SimpleNamespace as NS
+
+    from forklift_core.mcu_link.messages import RejectReason
+    from forklift_core.plant import bench_session
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold())
+    assert run_until(lambda: b.results, 8.0)
+    res = b.results[-1]
+    rows = record_rows(res)
+    (ff,) = [r for r in rows if r["t"] == "first_frame"]
+    (start,) = [r for r in rows if r["t"] == "bench_start"]
+    w = next(r for r in rows if r["t"] == "written" and r["kind"] == ff["kind"] and r["seq"] & 0xFFFF == ff["seq"])
+    ev = []
+    for r in rows:
+        if r["t"] == "state":
+            st = NS(mcu_time_us=r["mcu_time_us"], boot_id=r["boot_id"], arm_gen=r["arm_gen"],
+                    last_rx_seq=r["last_rx_seq"], reject_reason=RejectReason[r["reject_reason"]])
+            ev.append(("state", st, None, r["host_ns"], r["conn"]))
+        elif r["t"] == "bench_pair":
+            st = NS(mcu_time_us=r["mcu_time_us"], boot_id=r["boot_id"], arm_gen=r["arm_gen"],
+                    last_rx_seq=r["last_rx_seq"], reject_reason=RejectReason.NONE)
+            ev.append(("pair", st, NS(result_run_id=r["result_run_id"]), r["rx_ns"], r["conn"]))
+    wr = NS(done_ns=w["done_ns"], conn=w["conn"], boot_id=w["boot_id"], arm_gen=w["arm_gen"],
+            echo_mcu_time_us=w["echo_mcu_time_us"])
+    v = bench_session.first_answer(ev, seq16=ff["seq"], run_id=res["run_id"], write=wr, lim_mcu_us=start["lim_mcu_us"],
+                                   lim_host_ns=ff["host_deadline_ns"], now_ns=start["host_ns"],
+                                   stop_zero_done_ns=start["stop_zero_done_ns"])
+    assert v == res["start"], (v, res["start"])
