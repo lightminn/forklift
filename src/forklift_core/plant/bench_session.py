@@ -49,7 +49,8 @@ def seq_reached(last_rx_seq: int, seq: int) -> bool:
 
 
 def stop_action(*, arm_sent: bool, zero_seq: int | None, zero_link: tuple | None, p: Pair | None,
-                arming: bool = False, after_arm: bool = True, after_zero: bool = True) -> str:
+                arming: bool = False, after_arm: bool = True, after_zero: bool = True, board_end: bool = False,
+                latest_stopping: bool = False) -> str:
     """The one stop rule (plan 3, 8th-10th rounds), for ``bench_stop``, the shared STOP, a lost lease or connection:
 
     - ``cancel``: no BENCH_ARM sent yet -- the run is only dropped;
@@ -66,7 +67,12 @@ def stop_action(*, arm_sent: bool, zero_seq: int | None, zero_link: tuple | None
     sample closes. ``after_arm``: ``p`` was received after the BENCH_ARM's last byte; an older sample (a late DISARMED
     pair) never closes the run. ``after_zero``: ``p`` was received after the stop zero's last byte and made after the
     STATE it echoed (Codex B1 design round 2 P1-3): the 16-bit comparison alone cannot tell an old 'prep' pair kept by
-    the host from a new one, so an older sample is never evidence for or against the zero."""
+    the host from a new one, so an older sample is never evidence for or against the zero.
+
+    ``board_end``: this arming's pair carries the run's own result (the board ended it: a distance, a hold's watch, a
+    limit, an expiry); ``latest_stopping``: the latest STATE of the run's boot is STOPPING. Either way the board is
+    stopping by itself -- after the closing samples (DISARMED, FAULT, ESTOP), ``wait``: no zero, no resend, no DISARM
+    from an older ready pair (plan 4.4 B2, Codex plan rounds 2-4)."""
     if not arm_sent:
         return "cancel"
     if p is not None and not after_arm:
@@ -77,6 +83,8 @@ def stop_action(*, arm_sent: bool, zero_seq: int | None, zero_link: tuple | None
         return "closed"
     if p is not None and p.mode in (Mode.FAULT, Mode.ESTOP):
         return "closed_latched"
+    if board_end or latest_stopping:
+        return "wait"
     if zero_seq is None:
         return "send_zero" if p is None or p.mode == Mode.ARMED else "wait"
     if p is None or not after_zero or zero_link is None or (p.boot_id, p.conn_gen, p.arm_gen) != tuple(zero_link):

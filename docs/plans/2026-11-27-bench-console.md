@@ -938,6 +938,12 @@ B2a-1 이 넣은 것:
 - 받아들인 한계(B2a-1 구현 4–5 회차, Codex 동의): 최종 행이 일부만 쓰이면(디스크 부족·파일 크기 제한 등) 그 줄은 잘린 채 남는다(줄바꿈은 덧붙이고, 다음 실행은 새 줄에서 시작). 그 파일 전체를 읽는 기존 판독기(`bringup clock`·`analyze`)는 그 줄에서 멈추므로, 그 기록은 잘린 줄을 손으로 지운 뒤 읽는다. 잘라 되돌리기는 같은 파일의 다른 작성자 행을 지울 수 있어 쓰지 않는다. 같은 `--out` 을 두 프로세스가 동시에 쓰는 경우는 지원하지 않는다(5.1 은 실행마다 새 `$D`).
 - 계획과 다르게 한 것 하나: STATE 행에 `accepted` 칸을 싣는 대신 호스트가 채택한 STATE 마다 `state_accepted` 행을 따로 쓴다(STATE 행은 호스트 검사 전 수신 바이트에서 쓰이므로 그 시점에는 채택 여부를 모른다).
 
+B2a-2 가 넣은 것(콘솔 엔진, `tools/bench_console.py`):
+- 요청: `_bench_fields`(웹 스키마 — 형·배타·명시 부호·`stop.counts` 는 `not_yet_a1c` 먼저·이득 float32), `_finite`(큰 정수), hold 듀티 기본 0.15, 거리 듀티 양자화 비영, 높은 듀티 안내, `range_mark`(상수 `CHECKED_RANGE` 가 비면 '미확인', 요청의 `same_setup_as_bundle` 표시), `_on_request` 의 요청별 예외.
+- 엔진: BENCH_SET 에 원천·부호·거리, hold 의 준비 0 축(교환 뒤 `_restore_zero_axis`), 준비 0 수락을 seq·연결·무장·수신 시각으로(마감 먼저), T 고정과 `send_until_ns`, 단계 `first`(첫 프레임 한 건·`first_frame` 행·창 검사·`first_answer`), hold 갱신, 보드의 자체 끝(`board_end` 행, 정지 프레임 정리), 최신 STATE STOPPING 이면 송신 없음(`stop_action` 의 `board_end`·`latest_stopping`), 짝 없는 0 의 연결 세대는 무장 때 값, 제동 끝 미관측 1 s 알림, 단계 `rest`(취소 없음·사유만 기록·재개봉이면 미확인), `cleanup`·`board_cause` 를 `aborted` 와 따로.
+- 기록·판정: `_on_pair`(수신 순간 연결 번호 `rx_conn` — 링크의 `link_identity` 에서 올림), STATE 행도 `rx_conn`, 판정 ①(거리 `distance=True`, 같은 무장의 최신 STATE 만), ②(`bringup._hold_verdict2` 공유), ③(요청의 `stop_counts`), 늦은 사유 8 라벨·구동 표본 없음 라벨, 최종 행 한 번 쓰기(`record_complete`), `result.json` 은 완료일 때만 사본.
+- 스트림: 종류·안내·표식·`start`, 이 무장의 첫 프레임이 받아진 뒤 짝이 신선할 때만 목표·오차·거리 기준·이동량·진입 횟수(아니면 `null`).
+
 ### B2 계획 검토
 
 - Codex B2 계획 1 회차(4.4·5.1): P1 5(`first` 의 송신 허용과 창 검사, 송신 중단과 첫 답 수집 마감, 보드의 자체 끝 규칙 하나로, `rest` 의 취소 전이·준비 0 축 되돌리는 때, 5.1 의 속도 제외 판정 순서·구속 시험 방법), P2 7(증거 순서·동률과 쓰기 장부, 웹 스키마, 짝 범위, ①③ 입력과 결과 갱신, 기록 오류·스트림 식별자, 완료 조건 2 의 재실행 목록·폼 전환, 5.1 의 커밋·복구 이미지·기록 경로·시간 산정), P3 1(5 절 세대 문구). 반영했다.
