@@ -41,7 +41,7 @@ def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
     assert run["confirmed"] and run["stop_reason"] == "end_zero" and run["run_id"] == taken["run_id"]
     assert b.host.bench_state.mcu_bypass == 0  # the run is over: its bypass ended with its arming
     assert res["not_for_gate"] and "bench:steer_range" in res["bypassed"]
-    assert res["bench"] == {"bypass": ["steer_range"], "duty_max": 0.25, "time_max_s": 5.0}
+    assert res["bench"] == {"bypass": ["steer_range"], "duty_max": 0.25, "time_max_s": 5.0, "source": 0, "units": None}
     (bs,) = [r for r in rows(b) if r["t"] == "bench_set"]
     assert bs["seq"] == taken["seq"]
     assert taken["seq"] != 0  # a fresh boot's last_rx_seq is 0: the BENCH_SET never takes that number (P2)
