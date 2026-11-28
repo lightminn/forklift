@@ -183,8 +183,8 @@ static void hal_read(void *ctx, drive_inputs *in)
             } else {
                 in->wheel_hw[i] = last_ok[i];
             }
-            if (fail) {
-                B.read_fail_ticks--;
+            if (fail && !in->wheel_fresh[i]) {
+                B.read_fail_ticks--; /* only a failure really given (the first read has nothing to repeat) */
             }
         }
     }

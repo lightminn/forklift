@@ -40,7 +40,9 @@ class Model:
             from forklift_core.plant import bench_limits
 
             self.product = bench_limits.read_model_product(self.proc.stdout.fileno())
-            assert bench_limits.bench_image(self.product), self.product
+            if not bench_limits.bench_image(self.product):
+                self.close()  # no child or pty outlives a refused model (Codex A1c-1 r1 P2-5)
+                raise AssertionError(f"the model is not this tool's bench image: {self.product!r}")
 
     def close(self):
         self.proc.send_signal(signal.SIGTERM)

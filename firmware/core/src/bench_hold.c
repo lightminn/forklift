@@ -209,11 +209,13 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
                       h->prev_run_since == t->run_since && h->prev_lo >= t->run_since &&
                       t->lo >= t->run_since + BENCH_HOLD_ELIGIBLE_US;
         bool eligible = timing && e != 0 && (e > 0 ? 1 : -1) == t->run_dir;
-        /* A1c decision 8: a moving entry -- out before, in now, moved the output's way by R or more of error, on the
-           same output interval; the error's own sign is not needed (an exact arrival has none) */
+        /* A1c decision 8: a moving entry -- the previous trusted sample out, this one in, moved the output's way, the
+           error R or more smaller than that previous sample's (never the watch's r), on the same output interval; the
+           error's own sign is not needed (an exact arrival has none) -- Codex A1c-1 r1 P2-3 */
         int32_t moved = bench_kth_diff(t->trust_cum, h->prev_cum);
+        uint32_t prev_a = abs_err(h, h->prev_cum);
         bool moving_entry = in && !h->prev_in && timing && moved != 0 && (moved > 0 ? 1 : -1) == t->run_dir &&
-                            (int64_t)a <= (int64_t)h->r - BENCH_HOLD_R;
+                            (int64_t)a <= (int64_t)prev_a - BENCH_HOLD_R;
         if (moving_entry) {
             h->progress = true;
         }

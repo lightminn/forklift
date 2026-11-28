@@ -98,6 +98,7 @@ static int clr_flt_unsafe;      /* CLR_FLT frames sent with any DRVOFF low */
 static bool nfault_after_clear[DRIVE_CH_COUNT]; /* nFAULT level a CLR_FLT leaves */
 /* bench7: the board's output rule and report (fw/bench_pwm.h) in place of a HAL, when a test turns it on */
 static bool pwm_sim;
+static int32_t wheel_start_off[2]; /* bench8: a wheel's read starts this long after the tick time */
 static bench_pwm_model pwm_m;
 
 static uint16_t kth_frame(double sensor_rad)
@@ -152,7 +153,8 @@ static void tick_msgs(const link_msg *msgs, int count)
     in.now_us += cfg.period_us;
     in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0]); /* wheels idle unless a test moves them */
     in.abs_time_us[0] = in.abs_time_us[1] = in.now_us; /* acquired this tick */
-    in.wheel_start_us[0] = in.wheel_start_us[1] = in.now_us; /* bench8: read at the tick's time */
+    in.wheel_start_us[0] = in.now_us + (uint32_t)wheel_start_off[0]; /* bench8: each wheel's read time */
+    in.wheel_start_us[1] = in.now_us + (uint32_t)wheel_start_off[1];
     if (pwm_sim) { /* an update between every two calls; the bundle began 50 us before this tick */
         in.abs_start_us[0] = in.abs_start_us[1] = in.now_us - 50u;
         in.abs_start_known[0] = in.abs_start_known[1] = true;
@@ -204,6 +206,7 @@ static void reset_world(uint32_t t0)
     spi_mute = false;
     spi_refuse = false;
     pwm_sim = false;
+    wheel_start_off[0] = wheel_start_off[1] = 0;
     bench_pwm_model_init(&pwm_m);
     clr_flt_seen = clr_flt_unsafe = 0;
     in.now_us = t0;
@@ -4082,8 +4085,149 @@ static void mt_hold_failed_read_gives_no_output(void)
     CHECK(out.duty[DRIVE_CH_L] > 0.1f);
 }
 
+/* A jump on the tick of an MT ARM: the wheel stays lost until the next success, so that ARM is refused (Codex A1c-1 r1
+   P2-1); the next tick's success re-bases it. */
+static void mt_arm_on_a_jump_tick_is_refused(void)
+{
+    boot_with(mod_bench);
+    ticks(3);
+    link_bench_set b = bench_defaults(120, DRIVE_CH_L);
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    wstep(0, 3000); /* a jump read in this tick's drive_begin, before the ARM is handled */
+    link_msg arm = bench_arm_msg(11, 120, echo_now());
+    tick_msgs(&arm, 1);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(0)); /* reported, not cleared by a refused ARM */
+    tick(); /* the next success re-bases the wheel */
+    CHECK(mt_arm(121, DRIVE_CH_L, 0, 1, 1500));
+}
+
+/* The failed-read gap is judged on the wheel's own read time, not the tick's (Codex A1c-1 r1 P2-2). */
+static void mt_gap_on_the_read_time(void)
+{
+    boot_with(mod_bench);
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    ticks(3);
+    CHECK(mt_arm(122, DRIVE_CH_L, 400, 1, 1500));
+    cml(DRIVE_CH_L, 0);
+    cml(DRIVE_CH_L, 1000);
+    wstep(0, 3);
+    tick(); /* the last success, read at the tick's time */
+    in.wheel_fresh[0] = false;
+    for (int k = 0; k < 19; k++) {
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED); /* 19 ms of ticks */
+    wheel_start_off[0] = 1300; /* the next tick is 20 ms after the last success, its L read 21.3 ms */
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+}
+
+/* The braking boundary (plan 4.5 decision 4): a loss on the tick the grace ends is still STOPPING -- a fault, the
+   result kept; after DISARMED it only invalidates the rest observation. */
+static void mt_loss_at_and_after_the_brake(void)
+{
+    for (int after = 0; after < 2; after++) {
+        boot_with(mod_bench);
+        ticks(3);
+        CHECK(mt_arm(123 + (uint32_t)after, DRIVE_CH_L, 40, 1, 1500));
+        cml(DRIVE_CH_L, 0);
+        cml(DRIVE_CH_L, 1000);
+        while (d.mode == DRIVE_MODE_ARMED) {
+            wstep(0, 3);
+            tick();
+        }
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        uint64_t until = d.stop_until_us;
+        while (d.time_us + cfg.period_us < until) {
+            tick();
+        }
+        if (after) {
+            tick(); /* the grace ends: DISARMED */
+            CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+        }
+        wstep(0, 3000);
+        tick(); /* after == 0: the tick that reaches stop_until, still STOPPING when the wheels are read */
+        link_bench_state s = bench_state_now();
+        CHECK_EQ_U(s.stop_reason, DRIVE_BENCH_STOP_DISTANCE_REACHED); /* the result is kept either way */
+        if (after) {
+            CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+            CHECK(s.run_flags & DRIVE_BENCH_FLAG_UNCLEAN); /* the live mark: the rest observation is void */
+            CHECK(!(s.run_flags & DRIVE_BENCH_FLAG_RES_UNCLEAN));
+        } else {
+            CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+        }
+    }
+}
+
+/* The board's wheel slew (2.0 /s): a deadband entry's 0 is applied at once, and after a failed read the output rises
+   again from 0 by the slew only (plan 4.5 decision 6). */
+static void mod_bench_board_slew(drive_config *c)
+{
+    mod_bench(c);
+    c->wheel_duty_slew_per_s = 2.0f;
+}
+
+static void mt_hold_on_the_board_slew(void)
+{
+    boot_with(mod_bench_board_slew);
+    pwm_sim = true;
+    in.wheel_report = true;
+    in.wheel_fresh[0] = in.wheel_fresh[1] = true;
+    ticks(3);
+    link_bench_set b = bench_defaults(125, DRIVE_CH_L);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_MT;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 125, echo_now()));
+    hcfg = (link_bench_hold){.boot_id = d.boot_id,
+                             .valid_after_echo_ms = 100,
+                             .run_id = 125,
+                             .axis = DRIVE_CH_L,
+                             .source = DRIVE_BENCH_SOURCE_MT,
+                             .target_kind = BENCH_HOLD_TARGET_REL,
+                             .target_value = 40,
+                             .cpr = 4096,
+                             .kp = 0.5f,
+                             .deadband_counts = 12,
+                             .duty_max_e4 = 1500,
+                             .min_duty_e4 = 1200,
+                             .sign = 1};
+    cml(DRIVE_CH_L, 0);
+    hold();
+    for (int k = 0; k < 80; k++) {
+        tick(); /* the output ramps up at 0.002 a tick */
+    }
+    CHECK(out.duty[DRIVE_CH_L] > 0.1f);
+    in.wheel_fresh[0] = false;
+    tick();
+    CHECK(out.duty[DRIVE_CH_L] == 0.0f); /* the failed read's 0, at once */
+    in.wheel_fresh[0] = true;
+    tick();
+    CHECK(out.duty[DRIVE_CH_L] > 0.0f && out.duty[DRIVE_CH_L] <= 0.0021f); /* back up by the slew only */
+    float u = out.duty[DRIVE_CH_L];
+    for (int k = 0; k < 100 && u > 0.0f; k++) {
+        wstep(0, 1);
+        tick();
+        u = out.duty[DRIVE_CH_L];
+        link_bench_state s = bench_state_now();
+        if (labs((long)s.target - (long)s.cumulative) <= 12) {
+            CHECK(u == 0.0f); /* the deadband's 0 at once, never slewed down */
+            break;
+        }
+    }
+}
+
 static void bench_mt_tests(void)
 {
+    mt_arm_on_a_jump_tick_is_refused();
+    mt_gap_on_the_read_time();
+    mt_loss_at_and_after_the_brake();
+    mt_hold_on_the_board_slew();
     mt_pairs();
     mt_distance_reached();
     mt_distance_wrong_way_and_frozen();

@@ -573,20 +573,27 @@ static void bench_read_wheels(drive *d, const drive_inputs *in)
         bool accepted = false;
         d->mt_bits[i] = 0;
         d->mt_fresh[i] = fresh;
+        /* the read's own time on the 64-bit clock: its signed difference from the tick (decision 8) */
+        int32_t off = (int32_t)(t32 - in->now_us);
+        uint64_t t64 = off >= 0 ? d->time_us + (uint64_t)off
+                                : ((uint64_t)(-(int64_t)off) <= d->time_us ? d->time_us - (uint64_t)(-(int64_t)off) : 0u);
         if (!d->wheel_based[i]) {
             if (fresh) {
+                if (d->wheel_grace[i] && t64 > d->first_tick_us + (uint64_t)c->enc_gap_max_us) {
+                    loss = DRIVE_FAULT_ENCODER_GAP; /* the first success came after the limit (Codex A1c-1 r1 P2-2) */
+                }
                 wheel_enc_rebase(e, hw, t32); /* the first base: no step */
                 d->wheel_based[i] = true;
                 d->wheel_grace[i] = false;
                 d->mt[i].lost = false;
                 restart_wheel_watch(d, i);
-                accepted = true;
-            } else if (d->wheel_grace[i] && d->time_us - d->first_tick_us > (uint64_t)c->enc_gap_max_us) {
+                accepted = loss == 0;
+            } else if (d->wheel_grace[i] && t64 > d->first_tick_us + (uint64_t)c->enc_gap_max_us) {
                 loss = DRIVE_FAULT_ENCODER_GAP; /* no first success within the gap limit (decision 4 (b)) */
                 d->wheel_grace[i] = false;
             }
         } else if (!fresh) {
-            if (!d->mt[i].lost && (uint32_t)(in->now_us - wheel_enc_last_us(e)) > c->enc_gap_max_us) {
+            if (!d->mt[i].lost && (uint32_t)(t32 - wheel_enc_last_us(e)) > c->enc_gap_max_us) {
                 loss = DRIVE_FAULT_ENCODER_GAP; /* at the first tick past the limit, without a new sample */
                 d->mt[i].lost = true;
             }
@@ -617,6 +624,9 @@ static void bench_read_wheels(drive *d, const drive_inputs *in)
             if (drop) {
                 wheel_enc_rebase(e, hw, t32);
                 restart_wheel_watch(d, i);
+                if (loss) {
+                    d->mt[i].lost = true; /* until the next success re-bases it (Codex A1c-1 r1 P2-1) */
+                }
             } else {
                 wheel_enc_update(e, &c->wheel[i], hw, t32);
             }
@@ -641,11 +651,7 @@ static void bench_read_wheels(drive *d, const drive_inputs *in)
             bench_kth *k = &d->mt[i];
             k->have = true;
             k->cum = k->trust_cum = e->count;
-            /* the sample time: the read's start, widened by its signed difference from the tick (decision 8) */
-            int32_t off = (int32_t)(t32 - in->now_us);
-            k->trust_t = off >= 0 ? d->time_us + (uint64_t)off
-                                  : ((uint64_t)(-(int64_t)off) <= d->time_us ? d->time_us - (uint64_t)(-(int64_t)off)
-                                                                             : 0u);
+            k->trust_t = t64; /* the sample time: the read's start */
             d->mt_bits[i] = BENCH_KTH_TRUSTED;
             d->mt_lo[i] = k->trust_t;
             d->mt_lo_known[i] = d->pwm_reported;
@@ -1090,7 +1096,9 @@ static uint8_t bench_mt_distance_step(drive *d, uint64_t dt)
     int64_t e = (int64_t)d->run_sign * d->run_dir;
     int64_t sgn = d->run_stop < 0 ? -1 : 1;
     int64_t mag = sgn * (int64_t)d->run_stop;
-    d->w_timer_us += d->pwm_any[ax] ? dt : 0u; /* the driven time first: a reset below is never undone */
+    /* the driven time first (a reset below is never undone), on the HAL's read-to-read window when it reports (plan
+       4.3 decision 6, Codex A1c-1 r1 P2-4); the command expiry and the output limit stay on the tick's time */
+    d->w_timer_us += d->pwm_any[ax] ? (d->pwm_reported ? d->pwm_window_us : dt) : 0u;
     if (d->mt_bits[w] & BENCH_KTH_TRUSTED) {
         bool interval = d->pwm_reported && d->pwm_run_valid[ax] && d->mt_lo_known[w] &&
                         d->pwm_run_sign[ax] * d->cfg->duty_sign[ax] == d->run_dir &&

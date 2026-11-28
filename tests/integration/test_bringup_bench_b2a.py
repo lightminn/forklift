@@ -29,7 +29,6 @@ def record(b):
 
 def bench(model, *extra):  # noqa: F811
     b = model("--bench", "1", "--kth-start-raw", "1000,1000", *extra)
-    b.host.usb_product = PRODUCT
     return b
 
 

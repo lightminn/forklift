@@ -520,10 +520,34 @@ static void watch_entries_wrap(void)
     CHECK_EQ_U(h.entries, 0);
 }
 
+/* A1c decision 8 (Codex A1c-1 r1 P2-3): a moving entry is judged against the previous trusted sample's error, never
+   the watch's r -- an exact arrival 14 -> 0 is evidence, a one-count slip 13 -> 12 into the band is not */
+static void watch_moving_entry_evidence(void)
+{
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0); /* the interval's first sample: no previous one in it */
+    CHECK_EQ_U(wtick(14, true, true, false), 0);
+    CHECK(h.progress); /* watch 3: the error fell by R or more */
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(h.progress); /* the exact arrival: in from out, moved the output's way, 14 smaller */
+    CHECK_EQ_U(wtick(0, true, true, false), 0);
+    CHECK(!h.progress); /* staying in the band is no evidence */
+
+    wstart(30, 12);
+    drive_on(1);
+    CHECK_EQ_U(wtick(30, true, true, false), 0);
+    CHECK_EQ_U(wtick(13, true, true, false), 0); /* r is now 13 */
+    CHECK_EQ_U(wtick(13, true, true, false), 0);
+    CHECK_EQ_U(wtick(12, true, true, false), 0);
+    CHECK(!h.progress); /* 13 -> 12: in, but only one count smaller than the previous sample */
+}
+
 int main(void)
 {
     targets();
     value_checks();
+    watch_moving_entry_evidence();
     control_order();
     min_duty_only_toward_the_error();
     control_non_finite_resets();

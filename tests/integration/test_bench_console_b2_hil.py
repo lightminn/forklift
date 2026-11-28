@@ -172,7 +172,7 @@ def mrig(mcu_model, tmp_path):  # noqa: F811
     def make(*extra):
         m = Model(mcu_model, *extra)
         made.append(m)
-        dev = PtyDevice(m.master, BENCH5)
+        dev = PtyDevice(m.master, m.product)
         c = bench_console.BenchConsole(dev, runs_root=tmp_path / "runs")
         dev.attach(c)
         b = Browser(c)
