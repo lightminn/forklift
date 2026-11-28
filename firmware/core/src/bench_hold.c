@@ -159,7 +159,8 @@ uint8_t bench_hold_watch(bench_hold *h, const bench_hold_tick *t)
     uint32_t db = h->cfg.deadband_counts;
     uint32_t now_err = abs_err(h, t->last_zero ? t->cum : t->trust_cum); /* tentative when the last frame was 0 */
     /* a reported window covers the unreported ticks since the last report: only what they did not already add counts
-       (Codex A1b-2a rounds 3-4) */
+       (Codex A1b-2a rounds 3-4). The report does not say where in its window a non-zero was, so a window across a
+       reset may add time from before the reset: an earlier stop, accepted (round 5; the board reports every tick). */
     uint64_t wt = t->window_us, wz = t->window_us;
     if (t->reported) {
         wt = wt > h->fb_timer_us ? wt - h->fb_timer_us : 0u;
