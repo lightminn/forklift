@@ -970,8 +970,8 @@ void drive_begin(drive *d, const drive_inputs *in)
         }
         /* the bench image closes an output interval on the HAL's report, not on a requested 0: without an update
            event a 0 preload may be overwritten and the output never stop (plan 4.3 decision 6) */
-        if (d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && d->pwm_applied[d->cm_on_axis] == 0 &&
-            !d->pwm_any[d->cm_on_axis]) {
+        if (d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && d->pwm_reported && d->pwm_applied[d->cm_on_axis] == 0 &&
+            !d->pwm_any[d->cm_on_axis]) { /* no report this tick: the interval stays open (Codex A1b-2a round 2 P1) */
             d->cm_on = false;
             d->cm_on_axis = CM_AXIS_NONE;
         }

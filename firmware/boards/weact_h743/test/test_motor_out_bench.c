@@ -9,9 +9,14 @@
 #include "regmodel.h"
 
 static uint32_t g_now = 1000;
+static bool g_uev_on_clock; /* an update event when the clock is read (between a report's UIF read and its clock) */
 
 uint32_t timebase_now_us(void)
 {
+    if (g_uev_on_clock) {
+        g_uev_on_clock = false;
+        regmodel_uev();
+    }
     return g_now;
 }
 
@@ -126,8 +131,8 @@ static void report_never_misses_an_active_output(void)
         }
         uint32_t x = next();
         o.duty[DRIVE_CH_M] = duties[x % 4u];
-        uint32_t when = (x >> 3) % 6u; /* 0: no update; 1..4: after that write of the call; 5: before the call */
-        if (when == 5u) {
+        uint32_t when = (x >> 3) % 14u; /* 0: none; 1..12: after that write of the call (M's are 9..12); 13: before */
+        if (when == 13u) {
             regmodel_uev();
         } else if (when != 0u) {
             regmodel_uev_after_write((int)when);
@@ -158,9 +163,47 @@ static void report_never_misses_an_active_output(void)
     }
 }
 
+/* an update between the report's UIF read and its clock: the report must not call 0 active before its time --
+   +4000 active, 0 written, the update lands on the clock read; the report says 4000 and the next window is non-zero
+   (with the clock read first the update would read as one before the time; Codex A1b-2a round 1 P1-1, round 2) */
+static void update_between_uif_and_clock(void)
+{
+    regmodel_reset();
+    motor_out_safe_init();
+    motor_out_wake_drivers();
+    regmodel_allow(DRIVE_CH_M, RM_ALLOW_FWD | RM_ALLOW_REV);
+    regmodel_uev();
+    drive_outputs o;
+    memset(&o, 0, sizeof o);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        o.drvoff[ch] = ch != DRIVE_CH_M;
+    }
+    drive_inputs r;
+    o.duty[DRIVE_CH_M] = 0.4f;
+    g_now += 900;
+    motor_out_apply(&o);
+    regmodel_uev();
+    g_now += 100;
+    motor_out_report(&r);
+    CHECK_EQ_I(r.applied_e4[DRIVE_CH_M], 4000);
+    o.duty[DRIVE_CH_M] = 0.0f;
+    g_now += 900;
+    motor_out_apply(&o);
+    g_now += 100;
+    g_uev_on_clock = true;
+    memset(&r, 0, sizeof r);
+    motor_out_report(&r);
+    CHECK_EQ_I(r.applied_e4[DRIVE_CH_M], 4000);
+    g_now += 1000;
+    memset(&r, 0, sizeof r);
+    motor_out_report(&r);
+    CHECK(r.applied_any[DRIVE_CH_M]);
+}
+
 int main(void)
 {
     hal_equals_model();
     report_never_misses_an_active_output();
+    update_between_uif_and_clock();
     return fw_test_failures;
 }

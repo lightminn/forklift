@@ -2002,6 +2002,7 @@ static void mod_bench(drive_config *c)
 {
     mod_commission(c);
     c->bench_build = true;
+    pwm_sim = true; /* the bench board reports its outputs every tick (plan 4.3 decision 6) */
 }
 
 static link_bench_set bench_defaults(uint32_t run_id, uint8_t axis)
@@ -3393,20 +3394,60 @@ static void hold_interval_closes_on_the_report(void)
     tick(); /* 0 active now, but the window held the 1200 */
     CHECK(d.cm_on);
     CHECK_EQ_U(d.cm_on_since_us, since);
+    /* a whole zero window closes the old budget at the tick's start and, in that same tick, a sample outside the
+       deadband opens a new one (Codex A1b-2a round 2) */
     in.applied_any[DRIVE_CH_M] = false;
-    in.abs_start_us[0] = in.now_us + cfg.period_us;
-    tick();
-    CHECK(!d.cm_on);
-    /* a whole zero window closes the old budget at the tick's start; a new request in the same tick opens a new one */
     kraw(0, 1000);
-    in.applied_e4[DRIVE_CH_M] = 0;
-    in.applied_any[DRIVE_CH_M] = false;
     in.abs_start_us[0] = in.now_us + cfg.period_us;
     tick();
     CHECK(out.duty[DRIVE_CH_M] != 0.0f);
     CHECK(d.cm_on);
     CHECK_EQ_U(d.cm_on_since_us, d.time_us);
+    /* a tick without a report never closes it */
+    uint64_t since2 = d.cm_on_since_us;
+    kraw(0, 1095);
+    in.applied_e4[DRIVE_CH_M] = 1200;
+    in.applied_any[DRIVE_CH_M] = true;
+    in.abs_start_us[0] = in.now_us + cfg.period_us;
+    tick(); /* 0 requested */
     in.pwm_report = false;
+    kraw(0, 1000);
+    tick(); /* the report is missing: open still */
+    CHECK(d.cm_on);
+    CHECK_EQ_U(d.cm_on_since_us, since2);
+}
+
+/* the driven time is the HAL's read-to-read window, not the tick: 1020 us windows stop a stall at about 295 ticks
+   (Codex A1b-2a round 2) */
+static void hold_time_is_the_hal_window(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(102, 1000, BENCH_HOLD_TARGET_REL, 100));
+    pwm_sim = false;
+    in.pwm_report = true;
+    in.applied_window_us = 1020;
+    in.applied_e4[DRIVE_CH_M] = 1200;
+    in.applied_any[DRIVE_CH_M] = true;
+    in.abs_start_known[0] = true;
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+        if (n % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK(n >= 292 && n <= 296);
+    in.pwm_report = false;
+}
+
+static void mod_bench_m_reversed(drive_config *c)
+{
+    mod_bench(c);
+    c->duty_sign[DRIVE_CH_M] = -1;
 }
 
 /* progress needs the HAL's report: slow real progress (2 counts every 100 ms) keeps a hold going with the board's
@@ -3414,8 +3455,8 @@ static void hold_interval_closes_on_the_report(void)
    (Codex A1b-2a round 1 P1-2) */
 static void hold_progress_needs_the_report(void)
 {
-    for (int with = 0; with < 2; with++) {
-        boot_with(mod_bench);
+    for (int with = 0; with < 3; with++) {
+        boot_with(with == 2 ? mod_bench_m_reversed : mod_bench); /* 2: M's duty_sign -1 (physical -> request) */
         CHECK(hold_start(99, 1000, BENCH_HOLD_TARGET_REL, 400));
         pwm_sim = with != 0;
         if (!with) {
@@ -3515,6 +3556,7 @@ static void bench_hold_tests(void)
     hold_echo_boundary();
     hold_interval_closes_on_the_report();
     hold_progress_needs_the_report();
+    hold_time_is_the_hal_window();
     hold_blocked_is_its_axis_only();
     hold_entry_on_the_end_tick();
 }

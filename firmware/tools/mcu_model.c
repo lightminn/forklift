@@ -25,7 +25,9 @@
    commissioning model with one axis per arming; the product string ends " lim=lr1 sa1".
   --bench 1: the bench image (bench console plan A1, mcu-link contract 8): an open commissioning model that takes
   BENCH_SET/BENCH_ARM (one run per arming) and sends a BENCH_STATE with every STATE; the board's product string ends
-  " lim=lr1 bench7". The model has no connection changes (no link_conn).
+  " lim=lr1 bench7". The model has no connection changes (no link_conn). The model links the bench core even without
+  --bench, so there a bench frame (0x06-0x08) reaches the core as wrong_build where a non-bench board drops it as an
+  unknown type (rx_errors); the bench types' unknown-ness is held by test_link_nobench, not by this model.
   --kth-start-raw M,H: the KTH raw angles (0..4095) of M and H at their joint zero (each axis's zero offset), so a
   distance run can start on a non-zero frame (bench console plan 4.2 A1b-1b). --kth-zero-at-ms AXIS:MS (AXIS M or
   H): from MS on, that axis's reported KTH frame is 0x0000 (a MISO stuck low) while the plant goes on moving; the
