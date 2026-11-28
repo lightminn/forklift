@@ -1553,7 +1553,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             # 100 Hz may miss a short distance run's acceptance and cut: the board's latched result says it drove;
             # the duty and current figures then have no sample (plan 4.2 A1b-1 decision 8)
             result = "board_record_only"
-            metrics = replace(metrics, valid=False, reason="no_driving_sample")
+            metrics = replace(metrics, valid=False, reason="no_driving_sample", measured_sign="invalid")  # no sign either
         bench_out.update(_kth_verdicts(session, br))
         if session.bench_start is not None:
             bench_out["start"] = session.bench_start

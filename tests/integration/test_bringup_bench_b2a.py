@@ -79,6 +79,7 @@ def test_a_one_count_run_passes_verdict1_with_or_without_a_driving_sample(model)
                and r["run_id"] == res["bench_set"]["run_id"]]
     if res["result"] == "board_record_only":
         assert not driving and "보드 기록만(구동 표본 없음)" in res["verdict1"]["labels"], res["verdict1"]
+        assert res["metrics"]["measured_sign"] == "invalid" and res["verdict"]["sensor_sign_ok"] is None, res
     else:
         assert driving and res["verdict1"]["labels"] == []
 
