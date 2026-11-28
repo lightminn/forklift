@@ -927,6 +927,16 @@ A1b(#666–#669)가 펌웨어 `bench7` 과 CLI 의 hold·거리 실행을 넣었
    - 완료 조건 2(4 절, 공용 파일 `profile.js` 를 건드리므로 총괄 조건): node 시험(bench.js 폼→요청 변환·결과 요약·그래프·폼 전환), 브라우저 재생(벤치 → Isaac 형 → 벤치, 메뉴·DOM·STOP·Escape·벤치 메시지 0 건), 기존 화면 넷의 PR 전후 스크린샷 비교, 그리고 C 때의 (a′) REAL/HIL 직접 주입 MCU 쓰기 0, (a″) ACK 유실 뒤 같은·다른 epoch 의 벤치 요청 폐기·공용 STOP 재전송, 기존 node·콘솔 단위 시험 전부를 그대로 다시 돌린다. 기록은 `docs/validation/` 에 남긴다.
 7. **시험(B2a)**: HIL(pty `mcu_model --bench 1`)로 hold `here` 정착·`rel` 이동·외란 복귀(SIGUSR1)·고착(`--kth-zero-at-ms`, 11)·첫 HOLD 거부 한 건, 거리 도달·잠정·반대 부호 10·첫 비영 거부 한 건, 측정 실행, 실행 중 STOP(hold·거리 각각: HOLD/비영 송신 0 개 뒤 정리), 갱신 끝 뒤 HOLD 0 개(종료 0 뒤에 HOLD 없음), lease 만료 중 hold, 보드의 자체 끝에서 0 송신 0, 정지 위치 단계 중 새 요청 거부, `hold_settings` 기록 실패 → HOLD 0 건, 높은 듀티 안내, 이전 결과(hold)의 '판정 불가', `first_answer` 순수 함수의 단위 시험(CLI 시험 그대로 통과, 동률 규칙 포함). 3 절의 부분 쓰기 시험에 BENCH_HOLD 를 더한다(구분자 직전 short write → STOP → 폐기·독). 1 회차 몫: `first` 에서 등록된 첫 프레임만 송신, 첫 답 대기 중 창 밖 → 첫 갱신 전 정지, 최단 거리 실행(100 ms)에서 종료 0 이 첫 프레임 만료보다 먼저, 보드의 끝 확인 뒤 0·DISARM 0 건과 끝 미확인 STOPPING 의 짝 대기, 자체 끝과 STOP 한 주기, `rest` 중 STOP·lease·재개봉·새 요청, M ARM 직후 STOP·늦은 ARMED 에서 준비 0 축, 웹 스키마 반례(`count_sign 0`·`deadband 12.9`·`source none`+hold·양자화 0 듀티), 구동 중 `bench_pair` 기록 실패 → 취소, `rest` 중 잠정 확인 갱신의 최종 결과, 스트림의 이전 실행 목표 `null`. 2 회차 몫: STOP 0 부분 쓰기 → 자체 끝 짝 → 구분자 0 건, `STOPPING` 동안 0·DISARM 0 건, 정지 0 뒤 seq 랩 반례(결과 짝으로 첫 수락·DISARMED 로 구동 없음), 같은 읽기의 수락 + 끝 짝, 결과만 온 경우의 무관한 거부 사유, 짧은 유효기간 만료, 재개봉 첫 읽기 짝의 연결 번호, `rest` 중 요청 즉시 거부, `stop.turns: true`·`mode: duty` + `hold` 반례. 3 회차 몫: '정지 0 수락 준비 짝 → STOPPING STATE' 한 읽기에서 DISARM 0 건·끝 짝에서 마감·2.5 s 에 `stop_unconfirmed`, 같은 무장 `result_run_id == 0` 만 '구동 없음 확인'(다른 부팅의 빈 결과는 '결과 유실'), 재개봉 첫 읽기 STATE 의 연결 번호.
 
+### B2a 나눔과 B2a-1 구현 기록 (2026-11-28)
+
+B2a 는 A1b 처럼 PR 둘로 나눈다. **B2a-1** = 공용 순수 함수와 CLI 쪽(이 절), **B2a-2** = 콘솔 엔진(결정 2·3·5 의 콘솔 몫, 결정 4 의 콘솔 판정·기록). B2a-1 이 먼저다(B2a-2 가 그 함수를 쓴다).
+
+B2a-1 이 넣은 것:
+- `bench_session.first_answer(evidence, *, seq16, run_id, write, lim_mcu_us, lim_host_ns, now_ns, stop_zero_done_ns)` — 결정 3 의 증거 순서(MCU 시각, STATE 가 자기 짝보다 먼저)·두 마감·정지 0 뒤 귀속·거부는 `last_rx_seq` 가 첫 seq 전일 때만. CLI 의 `_first_nonzero_wait` 가 이것을 쓴다.
+- `bench_session.unexpected_faults(fault_flags, axis, bypass)` — 결정 4 의 예상 상태 비트. CLI(hold·거리·측정·듀티)와 B1 콘솔의 판정 ① 이 함께 쓴다.
+- CLI: `confirm_last_prep_zero`(거리·hold 의 첫 프레임 전, 마지막 준비 0 고정·수락 확인, cap + 50 ms), `bench_verdict1`(모든 bench7 실행의 `verdict1`, 보드의 끝으로 정리 확인, 늦은 사유 8 의 라벨), 거리·측정 실행도 실행 전체의 `bench_pair` 행(수신 시각·호스트 연결·`conn_gen` 포함), `final_row`(최종 행 한 번 쓰기·fsync·실패면 잘라 되돌림 → `record_complete`·`final_record_error`), 결과 JSON `flush=True`.
+- 계획과 다르게 한 것 하나: STATE 행에 `accepted` 칸을 싣는 대신 호스트가 채택한 STATE 마다 `state_accepted` 행을 따로 쓴다(STATE 행은 호스트 검사 전 수신 바이트에서 쓰이므로 그 시점에는 채택 여부를 모른다).
+
 ### B2 계획 검토
 
 - Codex B2 계획 1 회차(4.4·5.1): P1 5(`first` 의 송신 허용과 창 검사, 송신 중단과 첫 답 수집 마감, 보드의 자체 끝 규칙 하나로, `rest` 의 취소 전이·준비 0 축 되돌리는 때, 5.1 의 속도 제외 판정 순서·구속 시험 방법), P2 7(증거 순서·동률과 쓰기 장부, 웹 스키마, 짝 범위, ①③ 입력과 결과 갱신, 기록 오류·스트림 식별자, 완료 조건 2 의 재실행 목록·폼 전환, 5.1 의 커밋·복구 이미지·기록 경로·시간 산정), P3 1(5 절 세대 문구). 반영했다.

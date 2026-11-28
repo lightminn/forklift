@@ -1070,7 +1070,9 @@ class BenchConsole:
             r.aborted = r.aborted or r.window_stop
         faults = []
         if p is not None:
-            faults = [f.name for f in FaultFlag if f in p.fault_flags and f != FaultFlag.COMMAND_TIMEOUT]
+            # the bench's expected status bits left out (plan 4.4 B2, independent review P2-5): a motor-only M's range
+            # bit with its bypass, an unfitted H's sensor bit
+            faults = list(bs.unexpected_faults(p.fault_flags, r.ask.axis, r.ask.bench.names))
         result = {"t": "bench_result", "request_id": r.request_id, "run": r.rec.dir.name,
                   "record": str(r.rec.dir), "axis": AXES[r.ask.axis], "duty": r.ask.run.duty,
                   "seconds": r.ask.run.seconds, "closed": closed, "run_id": r.run_id, "bench_set": r.bench_taken,
