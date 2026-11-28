@@ -995,8 +995,9 @@ class BenchConsole:
             elif why is not None and why != r.aborted and why not in r.late_failures:
                 r.late_failures.append(why)
         if r.phase in ("recover", "set", "arm", "prep", "first"):
-            # every sample from the request to the first non-zero is judged (round 3 P2-4; plan 4.4: 'first' too)
-            v = self._window_out(r, states)
+            # every sample from the request to the first non-zero is judged (round 3 P2-4; plan 4.4: 'first' too --
+            # there the driving samples only: a coast after the board's own end is no window stop, impl r7 P2)
+            v = self._window_out(r, self._driving(r, states) if r.phase == "first" else states)
             if v is not None:
                 if r.arm_seq is None:
                     self._refuse(r, f"window_before_drive:{v}", now)
@@ -1249,12 +1250,18 @@ class BenchConsole:
             return False
         return p.result_run_id == r.run_id and p.drive_state == BenchDriveState.ENDED
 
+    def _driving(self, r: Run, states: list) -> list:
+        """The driving samples of this run's arming: ARMED, its boot and arming generation. The window is judged on
+        these while the run drives, so a coast after the board's own end is never a window stop, whether the end pair
+        comes in the same read or the next (Codex B2a-2 impl rounds 6-7)."""
+        ident = r.arm_ident
+        return [x for x in states if x[0].mode == Mode.ARMED
+                and (ident is None or (x[0].boot_id, x[0].arm_gen) == ident)]
+
     def _drive(self, r: Run, now: int, states: list) -> None:
         a = r.ask
-        v = self._window_out(r, states)
+        v = self._window_out(r, self._driving(r, states))
         if a.kind in ("hold", "distance") and self._ended_by_board(r):
-            # only driving (ARMED) samples: the coast after the board's own end is no window stop (impl r6 P2)
-            v = self._window_out(r, [x for x in states if x[0].mode == Mode.ARMED])
             if v is not None:
                 # a driving sample out of the window before the board's own end in the same read: kept (impl r5 P2)
                 r.window_stop = f"window:{v}"

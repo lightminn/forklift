@@ -560,3 +560,25 @@ def test_the_coast_after_the_boards_end_in_the_same_read_is_no_window_stop(rig, 
     assert r.phase == "stop" and r.window_stop is None and not r.late_failures
     monkeypatch.undo()
     assert run_until(lambda: b.results, 6.0)
+
+
+def test_a_coast_state_before_its_end_pair_is_no_window_stop_either(rig):  # noqa: F811
+    """The coast STATE (STOPPING, out of the window) read before the board's end pair arrives: still no window stop --
+    the window reads driving samples only, whichever read the end pair comes in (impl round 7 P2)."""
+    import dataclasses
+
+    from forklift_core.mcu_link.messages import Mode
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    r = c.run
+    r.ask = dataclasses.replace(r.ask, window=(-0.05, 0.05), range_off=False)
+    st = c.host.state
+    coast = dataclasses.replace(st, mode=Mode.STOPPING, steering_rad=0.06, mcu_time_us=st.mcu_time_us + 2)
+    c._drive(r, c.clock(), [(coast, c.clock())])
+    assert r.window_stop is None and not r.late_failures
+    out = dataclasses.replace(st, steering_rad=0.06, mcu_time_us=st.mcu_time_us + 3)
+    c._drive(r, c.clock(), [(out, c.clock())])  # a driving sample out of the window still stops it
+    assert r.window_stop == "window:0.06"
+    assert run_until(lambda: b.results, 6.0)
