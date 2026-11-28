@@ -18,7 +18,7 @@ from test_bringup_tool import mcu_model  # noqa: E402,F401
 
 from forklift_core.mcu_link.messages import Mode  # noqa: E402
 
-BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench7"
+BENCH5 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 bench8"
 
 
 def rows(b):

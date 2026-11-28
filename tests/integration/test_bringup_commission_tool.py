@@ -31,11 +31,22 @@ class Model:
         tty.setraw(self.slave)
         os.set_blocking(self.master, False)
         argv = [str(exe), "--link", os.ttyname(self.slave)] + (["--commission-build", "1"] if commission else [])
-        self.proc = subprocess.Popen(argv + list(extra))
+        bench = "--bench" in extra and commission
+        self.proc = subprocess.Popen(argv + list(extra), stdout=subprocess.PIPE if bench else None)
+        self.product = None
+        if bench:
+            # the model's own product (bench console plan 4.5 A1c decision 2, independent round 2 P2-5): a host-side
+            # constant alone would let an old model pass
+            from forklift_core.plant import bench_limits
+
+            self.product = bench_limits.read_model_product(self.proc.stdout.fileno())
+            assert bench_limits.bench_image(self.product), self.product
 
     def close(self):
         self.proc.send_signal(signal.SIGTERM)
         self.proc.wait(timeout=5)
+        if self.proc.stdout is not None:
+            self.proc.stdout.close()
         os.close(self.master)
         os.close(self.slave)
 
@@ -47,8 +58,11 @@ def model(mcu_model):  # noqa: F811
     def make(*extra, commission=True, allow_locked=False, initial_seq=None):
         m = Model(mcu_model, *extra, commission=commission)
         made.append(m)
-        return bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=allow_locked, commission=True,
-                             initial_seq=initial_seq)
+        b = bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=allow_locked, commission=True,
+                          initial_seq=initial_seq)
+        if m.product is not None:
+            b.host.usb_product = m.product  # a test may still set another product to see it refused
+        return b
     yield make
     for m in made:
         m.close()

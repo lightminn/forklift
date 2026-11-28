@@ -149,3 +149,7 @@ def test_unexpected_faults_leave_out_other_axes_and_a_bypassed_range():
     # a lift run: steering's bits are the bench's, lift's own range only with its bypass
     assert bs_.unexpected_faults(FaultFlag.STEER_OUT_OF_RANGE | FaultFlag.LIFT_OUT_OF_RANGE, 3, ("lift_range",)) == ()
     assert bs_.unexpected_faults(FaultFlag.LIFT_OUT_OF_RANGE, 3, ()) == ("LIFT_OUT_OF_RANGE",)
+    # bench8 (plan 4.5 A1c decision 4): the wheel gap and jump bits are records only, whichever wheel and run -- R's
+    # gap during an L MT run reads the same shared bit; a loss that faulted the run fails ① by the FAULT mode
+    gaps = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R
+    assert bs_.unexpected_faults(gaps, 0, ()) == () and bs_.unexpected_faults(gaps, 2, ()) == ()

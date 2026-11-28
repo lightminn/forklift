@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The bench console's back end (docs/plans/2026-11-27-bench-console.md 3, 3.1 B1): the operator console served on
-the Jetson for the bench image (``lim=lr1 bench7``), one board writer, the shared lease, STOP and request ledger, and a
+the Jetson for the bench image (``lim=lr1 bench8``), one board writer, the shared lease, STOP and request ledger, and a
 run engine that drives one axis by duty for a time (A1a). Hold, distance stops and the MT source come with B2.
 
 usage: bench_console.py (--device /dev/forklift-mcu [--baud B] | --model PATH) [--host 127.0.0.1] [--port 8765]
@@ -1845,7 +1845,6 @@ def _stop_name(v: int):
     return BenchStop(v).name.lower() if 0 <= v <= max(BenchStop) else v
 
 
-MODEL_PRODUCT = "forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench7"
 
 
 class ModelDevice:
@@ -1868,7 +1867,12 @@ class ModelDevice:
             os.set_blocking(self.master, False)
             # its own session: a terminal Ctrl-C reaches this tool, which then stops the model itself (round 5 P2-1)
             self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), "--commission-build", "1",
-                                          "--bench", "1"], start_new_session=True)
+                                          "--bench", "1"], start_new_session=True, stdout=subprocess.PIPE)
+            # the model's own product, said on its first line within a deadline: an old model says nothing (plan 4.5
+            # A1c decision 2) and is refused here, its child and pty closed below
+            self.product = bl.read_model_product(self.proc.stdout.fileno())
+            if not bl.bench_image(self.product):
+                raise RuntimeError(f"the model is not this tool's bench image: {self.product!r}")
             self.link = BenchTtyLink(self.master, gate=gate)
         except BaseException:
             self.close()  # neither the child nor the pty outlives a failed construction (round 3 P3-1, 4 P3-2)
@@ -1888,8 +1892,8 @@ class ModelDevice:
             return events + host.disconnected(now)  # the host's own disconnected event: one per loss
         if not self.opened:
             self.opened = True
-            events.append(HostEvent("connected", {"path": "model", "product": MODEL_PRODUCT}))
-            events += host.link_identity(MODEL_PRODUCT)
+            events.append(HostEvent("connected", {"path": "model", "product": self.product}))
+            events += host.link_identity(self.product)
         data = self.link.read_available()
         if data:
             events += host.on_bytes(data, time.monotonic_ns())
@@ -1910,6 +1914,9 @@ class ModelDevice:
                 self.proc.wait(timeout=5)
             except Exception:  # noqa: BLE001
                 self.proc.kill()
+                self.proc.wait(timeout=5)
+            if self.proc.stdout is not None:
+                self.proc.stdout.close()  # the product line's pipe (plan 4.5 A1c decision 2)
         for fd in (self.master, self.slave):
             if fd is None:
                 continue

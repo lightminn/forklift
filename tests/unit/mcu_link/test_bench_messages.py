@@ -82,9 +82,29 @@ STATE7 = BenchState(pair_seq=0x0302, run_id=0x00C0FFEE, result_run_id=0x00C0FFEE
                     run_flags=int(BenchRunFlag.RES_HOLD), result_axis=3, result_source=1, deadband_entries=0xFFFE,
                     result_bypass=2)
 
+# bench8 meaning (plan 4.5 A1c): an L MT distance run (count_sign -1, stop -4096), an R MT hold (rel 200, motor shaft
+# CPR 8192), and the L run's result: reached at 70000 from 74096, the MT sample age (raw_angle) 3 ms, H's KTH lost
+# while the L MT run goes on (kth_lost keeps M/H's bits whatever the source), run flags RES_DISTANCE.
+BENCH_SET_0011 = "0403061108efbeaddeefcdab0201010104b8b8b802010302ff0101010bdc051027dc05dc05d00701049bc42003d0070103d007010106f0ffff806c00"
+BENCH_HOLD_0012 = "040307120aefbeadde0302efcdab02010101026404b9b8b805010203c801010102200101023f01010101010101020c08dc05b004016bdc00"
+BENCH_STATE_0404 = "0a038204040304b8b8b804b8b8b801050201020304701101010101010470210104701101020802010101020401010104130b400202010103af5200"
+SET8 = BenchSet(boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000001_00ABCDEF, run_id=0x00B8B8B8, mode=1, axis=0, source=2,
+                count_sign=-1, bypass=0, duty_max_e4=(1500, 10000, 1500, 1500), time_ms=(2000, 2147483, 2000, 2000),
+                stop_counts=-4096)
+HOLD8 = BenchHold(boot_id=0xDEADBEEF, arm_gen=0x0203, echo_mcu_time_us=0x00000001_00ABCDEF, valid_after_echo_ms=100,
+                  run_id=0x00B8B8B9, axis=1, source=2, target_kind=int(BenchHoldTarget.REL), target_value=200,
+                  cpr=8192, kp=0.5, ki=0.0, kd=0.0, deadband_counts=12, duty_max_e4=1500, min_duty_e4=1200, sign=1)
+STATE8 = BenchState(pair_seq=0x0403, run_id=0x00B8B8B8, result_run_id=0x00B8B8B8, axis=0, source=2, count_state=1,
+                    kth_lost=2, raw_angle=3, cumulative=70000, target=0, distance_ref=74096, cut_position=70000,
+                    stop_reason=8, distance_confirm=0, blocked=1, dropped_pairs=0, evidence_age_ms=4,
+                    end_evidence_age_ms=0, mcu_bypass=0, drive=0x13, conn_gen=11,
+                    run_flags=int(BenchRunFlag.RES_DISTANCE), result_axis=0, result_source=2, deadband_entries=0,
+                    result_bypass=0)
+
 GOLDEN = [(SET, 0x000B, BENCH_SET_000B), (ARM, 0x000C, BENCH_ARM_000C), (STATE, 0x0103, BENCH_STATE_0103),
           (SET6, 0x000D, BENCH_SET_000D), (STATE6, 0x0202, BENCH_STATE_0202), (HOLD7, 0x0010, BENCH_HOLD_0010),
-          (STATE7, 0x0303, BENCH_STATE_0303)]
+          (STATE7, 0x0303, BENCH_STATE_0303), (SET8, 0x0011, BENCH_SET_0011), (HOLD8, 0x0012, BENCH_HOLD_0012),
+          (STATE8, 0x0404, BENCH_STATE_0404)]
 
 
 def body_of(wire_hex: str) -> bytes:
