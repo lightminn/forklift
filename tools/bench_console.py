@@ -23,6 +23,7 @@ import json
 import math
 import os
 import secrets
+import struct
 import sys
 import time
 from collections import deque
@@ -137,15 +138,53 @@ def _flag(msg: dict, key: str) -> bool:
     return v
 
 
+def _finite(v) -> bool:
+    """A JSON number that is finite as a float (a huge integer raises in ``math.isfinite``: refused, never raised)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(v) and math.isfinite(float(v))
+    except (OverflowError, ValueError):
+        return False
+
+
 def _num(msg: dict, key: str, *, required: bool) -> float | None:
     v = msg.get(key)
     if v is None:
         if required:
             raise Refused(f"{key}: required")
         return None
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+    if not _finite(v):
         raise Refused(f"{key}: a finite number")
     return float(v)
+
+
+def _f32(v: float) -> float:
+    return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
+# the 5.1 bundle's checked range for a distance or measuring run's speed exclusion (plan 4.4 decision 2): empty until
+# the bundle's results are back -- every such run is 'unchecked' until then. {axis: {"S": ±1, "duty_max": {+1: d,
+# -1: d}, "setup": text}}
+CHECKED_RANGE: dict = {}
+
+
+def range_mark(kind: str, axis: int, duty: float, count_sign: int | None, same_setup: bool) -> str | None:
+    """The checked-range mark (plan 4.4 decision 2, shown and recorded, never refused): distance and measuring runs
+    only, per measured direction."""
+    if kind == "hold":
+        return "not_applicable"  # a hold's gains and settling are checked apart
+    if kind not in ("distance", "measure"):
+        return None
+    c = CHECKED_RANGE.get(AXES[axis])
+    if not c:
+        return "unchecked"
+    lim = (c.get("duty_max") or {}).get(1 if duty > 0 else -1)
+    if lim is None or c.get("excluded"):
+        return "outside" if c.get("excluded") else "unchecked"
+    if count_sign != c.get("S") or abs(duty) > lim or not same_setup:
+        return "outside"
+    return "inside"
 
 
 @dataclass
@@ -160,6 +199,80 @@ class Ask:
     source: str
     physical_setup: str | None
     absent: tuple
+    kind: str = "duty"  # duty | hold | distance | measure (plan 4.4 decision 2)
+    source_wire: str = "none"
+    advisories: tuple = ()
+    range_mark: str | None = None
+
+
+def _bench_fields(msg: dict, axis: int) -> dict:
+    """The B2 request fields checked as a web schema first (plan 4.4 decision 2): what argparse would have done for the
+    CLI -- types, choices, the one shape of ``stop`` and ``hold`` -- and the exclusions, before the CLI's own checks.
+    Returns the Namespace fields and the run's kind."""
+    mode = msg.get("mode", "duty")
+    if mode not in ("duty", "hold"):
+        raise Refused("mode: duty or hold")
+    stop = msg.get("stop")
+    turns = None
+    if stop is not None:
+        if isinstance(stop, dict) and "counts" in stop and "turns" not in stop:
+            raise Refused("not_yet_a1c: a distance in MT counts comes with A1c")
+        if not (isinstance(stop, dict) and set(stop) == {"turns"}):
+            raise Refused("stop: {turns: N}")
+        turns = stop["turns"]
+        if not _finite(turns):
+            raise Refused("stop.turns: a finite number")
+    measure = msg.get("measure", False)
+    if not isinstance(measure, bool):
+        raise Refused("measure: true or false")
+    hold = msg.get("hold")
+    if hold is not None and mode != "hold":
+        raise Refused("hold: only with mode hold")
+    if mode == "hold" and not isinstance(hold, dict):
+        raise Refused("hold: an object {target, kp, ki, kd, deadband, min_duty}")
+    source = msg.get("source", "kth" if axis >= 2 else "none")
+    if mode == "hold" and stop is not None:
+        raise Refused("hold: no stop (a hold ends by time)")
+    if measure and (stop is not None or mode == "hold" or source != "kth"):
+        raise Refused("measure: source kth, a duty run with no stop")
+    kind = "hold" if mode == "hold" else "distance" if stop is not None else "measure" if measure else "duty"
+    if kind != "duty" and source != "kth":
+        raise Refused(f"{kind}: source kth (the KTH count; never silently)")
+    out = {"kth_measure": kind == "measure", "stop_kth_turns": None if turns is None else float(turns), "hold": None,
+           "hold_kp": None, "hold_ki": None, "hold_kd": None, "hold_deadband": None, "hold_min_duty": None,
+           "count_sign": 1}
+    cs = msg.get("count_sign")
+    if kind != "duty":
+        # the sign is the operator's, never a default (plan 4.4, independent review P1-2)
+        if isinstance(cs, bool) or cs not in (1, -1):
+            raise Refused(f"count_sign: 1 or -1, required for a {kind} run")
+        out["count_sign"] = int(cs)
+    elif cs is not None and (isinstance(cs, bool) or cs not in (1, -1)):
+        raise Refused("count_sign: 1 or -1")
+    if kind == "hold":
+        target = hold.get("target")
+        if not isinstance(target, str):
+            raise Refused("hold.target: zero, here, abs:N or rel:N")
+        out["hold"] = target
+        for key, name in (("kp", "hold_kp"), ("ki", "hold_ki"), ("kd", "hold_kd"), ("min_duty", "hold_min_duty")):
+            v = hold.get(key)
+            if v is None:
+                continue
+            if not _finite(v):
+                raise Refused(f"hold.{key}: a finite number")
+            v = float(v)
+            if key in ("kp", "ki", "kd") and (v != 0 and _f32(v) == 0 or not math.isfinite(_f32(v))):
+                raise Refused(f"hold.{key}: {v} does not survive the wire's float32")  # the board would refuse it
+            out[name] = v
+        db = hold.get("deadband")
+        if db is not None:
+            if isinstance(db, bool) or not isinstance(db, int):
+                raise Refused("hold.deadband: an integer count")
+            out["hold_deadband"] = db
+        unknown = set(hold) - {"target", "kp", "ki", "kd", "deadband", "min_duty"}
+        if unknown:
+            raise Refused(f"hold: unknown {sorted(unknown)}")
+    return {**out, "kind": kind}
 
 
 def parse_run(msg: dict) -> Ask:
@@ -169,13 +282,8 @@ def parse_run(msg: dict) -> Ask:
     if axis_name not in tuple(AXES):
         raise Refused("axis: one of L, R, M, H")
     axis = AXES.index(axis_name)
-    mode = msg.get("mode", "duty")
-    if mode == "hold":
-        raise Refused("not_yet_a1b: hold comes with the KTH counter (A1b)")
-    if mode != "duty":
-        raise Refused("mode: duty")
-    if msg.get("stop"):
-        raise Refused("not_yet_a1b: the distance stop comes with A1b/A1c")
+    b2 = _bench_fields(msg, axis)
+    kind = b2.pop("kind")
     source = msg.get("source", "kth" if axis >= 2 else "none")
     if source == "mt":
         raise Refused("not_yet_a1c: the MT source comes with A1c")
@@ -206,15 +314,20 @@ def parse_run(msg: dict) -> Ask:
     large_confirm = msg.get("large_confirm")
     if large_confirm is not None and not isinstance(large_confirm, str):
         raise Refused("large_confirm: text")
+    duty = _num(msg, "duty", required=kind != "hold")
+    if kind == "hold" and duty is None:
+        duty = bringup.HOLD_DUTY_DEFAULT  # the hold's cap, as the CLI's main() fills it
+    if kind == "distance" and round(abs(duty) * 10000) < 1:
+        raise Refused("duty: a distance run needs a non-zero duty on the wire (0.0001 or more)")
     ns = argparse.Namespace(
-        cmd="commission", axis=axis_name, duty=_num(msg, "duty", required=True),
+        cmd="commission", axis=axis_name, duty=duty,
         seconds=_num(msg, "seconds", required=True), window=window, bypass=None,
         bench_bypass=",".join(bypass),  # never None: every run builds its BenchAsk (the same limits for [] and none)
         bench_duty_max=_num(msg, "bench_duty_max", required=False),
         bench_time_max=_num(msg, "bench_time_max", required=False),
         power_switch_in_hand=_flag(msg, "power_switch_in_hand"), wheels_lifted=_flag(msg, "wheels_lifted"),
         vcc_watched=_flag(msg, "vcc_watched"), synthetic=False, single_axis=False, motor_detached=False,
-        sensorless=False, profile_tri=None, scenario=None, limit_s=None, stop_grace_ms=None, disarm_delay_ms=0)
+        sensorless=False, profile_tri=None, scenario=None, limit_s=None, stop_grace_ms=None, disarm_delay_ms=0, **b2)
     try:
         run, _profile, names = bringup._check_commission_args(ns)
         bench = bringup._bench_ask(ns)
@@ -224,7 +337,15 @@ def parse_run(msg: dict) -> Ask:
     if large and large_confirm != bl.confirmation_phrase(run):
         raise Refused(f"large run: large_confirm must be exactly {bl.confirmation_phrase(run)!r}")
     range_off = (axis == 2 and "steer_range" in bench.names) or (axis == 3 and "lift_range" in bench.names)
-    return Ask(axis, run, bench, tuple(names), window, range_off, large, source, setup, tuple(absent))
+    advisories = []
+    if kind == "distance" and abs(duty) > bl.HIGH_DUTY_DISTANCE:
+        advisories.append("high_duty_distance_unverified")  # shown and recorded, never refused (lead 2026-11-28)
+    same_setup = msg.get("same_setup_as_bundle", False)
+    if not isinstance(same_setup, bool):
+        raise Refused("same_setup_as_bundle: true or false")
+    mark = range_mark(kind, axis, duty, b2["count_sign"] if kind != "duty" else None, same_setup)
+    return Ask(axis, run, bench, tuple(names), window, range_off, large, source, setup, tuple(absent), kind=kind,
+               source_wire="kth" if kind != "duty" else "none", advisories=tuple(advisories), range_mark=mark)
 
 
 # --- the run engine ---------------------------------------------------------------------------------------------------
@@ -410,6 +531,8 @@ class BenchConsole:
                 ask = parse_run(msg)
             except Refused as exc:
                 return "bench_refused", {"detail": str(exc)}
+            except Exception as exc:  # noqa: BLE001 -- one request never ends the console (plan 4.4, P1-4)
+                return "bench_refused", {"detail": f"internal: {type(exc).__name__}: {exc}"}
             try:
                 rec = RunRecord(self.runs_root, "duty", AXES[ask.axis])
             except OSError as exc:
