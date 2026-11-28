@@ -298,7 +298,7 @@ def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> d
     out = {"end_error": end_error}
     if abs(end_error) > deadband:
         return {**out, "result": "unmet", "why": ["end_outside"]}
-    run = [(t, m, b) for t, m, b in pairs if b.run_id == run_id]
+    run = [(t, m, b) for t, m, b in pairs if b.run_id == run_id and b.mode == 2]  # this hold run's pairs only
     driving = [i for i, (t, m, b) in enumerate(run) if m == Mode.ARMED and b.drive_state == BenchDriveState.DRIVING]
     if not driving:
         return {"result": "undecidable", "why": ["no_samples"]}
@@ -365,7 +365,8 @@ def entry_window(points, t_now: int) -> dict:
         return {"lower": None, "upper": None, "label": "unknown"}
     t0 = t_now - ENTRY_WINDOW_US
     c_now = points[-1][1]
-    after = next((p for p in points if p[0] > t0), points[-1])
+    virtual_in = len(points[0]) > 2 and points[0][2] and points[0][0] >= t0  # the ARM came after the window start
+    after = (t0, 0) if virtual_in else next((p for p in points if p[0] > t0), points[-1])
     lower = (c_now - after[1]) & 0xFFFF
     before = [p for p in points if p[0] <= t0]
     if before:

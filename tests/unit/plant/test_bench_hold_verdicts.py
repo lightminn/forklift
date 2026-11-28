@@ -156,3 +156,17 @@ def test_entry_points_keep_one_run():
     pts = bs_.entry_points(pairs, RUN)
     w = bs_.entry_window(pts, 600_000)
     assert (w["lower"], w["upper"]) == (8, 8)
+
+
+def test_only_this_hold_runs_pairs_count():
+    """A duty-mode pair of the same run id is never a hold sample (Codex A1b-2b round 1 P3)."""
+    from dataclasses import replace
+
+    duty = [(t, m, replace(b, drive=int(BenchDriveState.DRIVING) | (1 << 4))) for t, m, b in series([5] * 150)]
+    pairs = duty + [ended(1_500_000)]
+    assert verdict(pairs)["result"] == "undecidable"
+
+
+def test_entry_window_with_the_arm_seen_exactly_at_the_window_start():
+    w = bs_.entry_window([(100_000, 0, True), (900_000, 10), (1_100_000, 10)], 1_100_000)
+    assert (w["lower"], w["upper"], w["label"]) == (10, 10, "warn")

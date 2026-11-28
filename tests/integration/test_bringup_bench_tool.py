@@ -354,7 +354,7 @@ def test_a_short_distance_run_waits_for_the_boards_result(model):
 
 # ---- bench7 hold runs (plan 4.3 A1b-2b) -----------------------------------------------------------------------------
 
-HOLD_DEFAULTS = dict(hold_kp=0.5, hold_ki=0.0, hold_kd=0.0, hold_deadband=12, hold_min_duty=0.12, count_sign=1)
+HOLD_DEFAULTS = dict(hold_kp=None, hold_ki=None, hold_kd=None, hold_deadband=None, hold_min_duty=None, count_sign=1)
 
 
 def hargs(**kw):
@@ -381,6 +381,8 @@ def test_a_here_hold_settles_and_ends_by_its_zero(model):
     assert zeros and all(w.axis == 2 for w in zeros), zeros  # every zero on the run axis
     assert res["bench_set"]["mode"] == 2 and res["bench_set"]["source"] == 1
     assert h["entries"]["label"] is None and h["verdict"]["settle"]["samples"] >= 50
+    assert h["verdict1"]["ok"] and h["rest"] is not None
+    assert [r for r in rows(b) if r["t"] == "hold_settings"] and [r for r in rows(b) if r["t"] == "bench_pair"]
     assert "BENCH_HOLD" in kinds_written(b)
 
 
@@ -434,7 +436,7 @@ def test_a_hold_on_a_stuck_count_stops_and_fails(model):
     b = model("--bench", "1", "--kth-start-raw", "16,16", "--kth-zero-at-ms", "M:1500")
     b.host.usb_product = BENCH5
     res = bringup.execute(hargs(hold="here", seconds=5.0), b)
-    assert res["bench_result"]["stop_reason"] in ("kth_zero_suspect", "kth_lost"), res
+    assert res["bench_result"]["stop_reason"] == "kth_zero_suspect", res
     assert res["hold"]["verdict"]["result"] == "failed"
     assert res["result"] == "aborted"
 
@@ -447,6 +449,7 @@ def test_a_hold_on_a_stuck_count_stops_and_fails(model):
     (dict(duty=0.2), "duty cap"),
     (dict(seconds=1.0), "a hold runs"),
     (dict(hold="abs:5000"), "0..4095"),
+    (dict(hold=None, hold_kp=0.6, window=(-1.0, 1.0), bench_bypass=None, duty=0.12, seconds=0.5), "only with --hold"),
 ])
 def test_hold_refusals_before_anything(model, kw, why):
     b = model("--bench", "1")
@@ -584,3 +587,34 @@ def test_the_holds_stop_before_the_end_zero(model):
     assert res["bench_result"]["stop_reason"] == "end_zero", res
     end = next(w for w in b.writes if w.kind == "COMMISSION" and w.phase == "post_zero")
     assert not [w for w in b.writes if w.kind == "BENCH_HOLD" and w.order > end.order]
+
+
+def test_the_cli_link_follows_the_boards_image():
+    """bench7 gets the gated link whatever the run's arguments; another image keeps the plain TtyLink (Codex A1b-2b
+    round 1 P1)."""
+    import os
+
+    from real_mcu_link import BenchTtyLink, TtyLink
+
+    holder = {"host": None, "cancelled": False, "hold_until_ns": None}
+    r, w = os.pipe()
+    try:
+        assert isinstance(bringup._link_factory(holder, lambda fd: BENCH5)(w), BenchTtyLink)
+        other = bringup._link_factory(holder, lambda fd: "forklift-mcu commission OPEN v rec=1 lim=lr1")(w)
+        assert type(other) is TtyLink
+        assert type(bringup._link_factory(holder, lambda fd: None)(w)) is TtyLink
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_the_cli_gate_stops_holds_at_the_renewal_end():
+    import time
+    from types import SimpleNamespace
+
+    now = time.monotonic_ns()
+    holder = {"host": SimpleNamespace(auth_epoch=1), "cancelled": False, "hold_until_ns": now - 1}
+    hold = SimpleNamespace(kind="BENCH_HOLD", nonzero=True, generation=1, expires_ns=now + 10**9)
+    zero = SimpleNamespace(kind="COMMISSION", nonzero=False, generation=1, expires_ns=now + 10**9)
+    assert not bringup._cli_gate(holder, hold, lambda: None)  # past T - HANDOVER_S: never completed before the zero
+    assert bringup._cli_gate(holder, zero, lambda: None)
