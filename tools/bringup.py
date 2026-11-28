@@ -1597,7 +1597,6 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     BENCH_HOLDs for ``seconds``, the end zero, the cleanup; then verdict ② from every pair of the run and the board's
     result, and the last second's deadband entries (shown, never blocking)."""
     b, ask = bench, session.bench
-    h = ask.hold
     pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
     idents: list = []  # (boot_id, arm_gen) of each
     keep, accepted_ = _run_recorders(b, pairs, idents)
@@ -1661,7 +1660,26 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     why = session_abort_reason(b.samples, i_arm)
     if why is not None:
         session.aborted = session.aborted or why
-    pairs = _run_pairs(pairs, idents, session.run_ident)  # this run's boot and arming only
+    session.run_pairs = (pairs, idents)  # execute's end makes verdict 2 again from the same record
+    verdict2, entries, n_pairs = _hold_verdict2(session, pairs, idents, br)
+    verdict1 = bench_verdict1(b, session, br, distance=False)
+    hold_out = {"settings": _hold_settings(ask), "verdict1": verdict1, "rest": rest,
+                "start": session.bench_start, "holds_sent": session.holds_sent, "verdict": verdict2,
+                "entries": entries, "pairs": n_pairs,
+                # what the PWM report is and is not (plan 4.3 decision 6), the stationary noise width not yet measured
+                # (decision 7), the coast within 200 us of a run's start unverified (independent round 3 P2-2)
+                "notes": ["PWM 출력(브리지 미확인)", "정지 폭 미측정", "구간 시작 관성 혼입 미확인"]}
+    result = "ok" if verdict1["ok"] else "aborted"
+    return _final({"result": result, "stop": session.stop_reason, "hold": hold_out, "bench_result": br,
+                   "verdict1": verdict1,
+                   "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
+
+
+def _hold_verdict2(session: CommissionSession, pairs: list, idents: list, br: dict):
+    """A hold's verdict 2 and its deadband-entry summary from the run's recorded pairs and the board's result
+    (plan 4.3 decisions 7 and 9) -- made in the run and again at execute's end, from the same record."""
+    h = session.bench.hold
+    pairs = _run_pairs(list(pairs), list(idents), session.run_ident)  # this run's boot and arming only
     verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id)
                 if br.get("confirmed") else {"result": "undecidable", "why": ["no_result"]})
     pts = _entry_points(session, pairs)
@@ -1684,17 +1702,7 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         entries["label"] = f"데드밴드 반복 진입 미상(최근 1 s 최소 {lo} 회, 무장 기준 없음)"
     else:
         entries["label"] = None
-    verdict1 = bench_verdict1(b, session, br, distance=False)
-    hold_out = {"settings": _hold_settings(ask), "verdict1": verdict1, "rest": rest,
-                "start": session.bench_start, "holds_sent": session.holds_sent, "verdict": verdict2,
-                "entries": entries, "pairs": len(pairs),
-                # what the PWM report is and is not (plan 4.3 decision 6), the stationary noise width not yet measured
-                # (decision 7), the coast within 200 us of a run's start unverified (independent round 3 P2-2)
-                "notes": ["PWM 출력(브리지 미확인)", "정지 폭 미측정", "구간 시작 관성 혼입 미확인"]}
-    result = "ok" if verdict1["ok"] else "aborted"
-    return _final({"result": result, "stop": session.stop_reason, "hold": hold_out, "bench_result": br,
-                   "verdict1": verdict1,
-                   "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
+    return verdict2, entries, len(pairs)
 
 
 def _driving_seen(session: CommissionSession, pairs: list, idents: list) -> bool:
@@ -3218,6 +3226,10 @@ def execute(args, bench: Bench) -> dict:
         if isinstance(result.get("hold"), dict):
             result["hold"]["verdict1"] = again
             result["hold"]["start"] = session.bench_start
+            if session._hold_run() and getattr(session, "run_pairs", None) is not None:
+                # verdict 2 and the entry count from the board's result as finally read (impl round 9 P2)
+                v2, entries, n_pairs = _hold_verdict2(session, *session.run_pairs, br)
+                result["hold"].update(verdict=v2, entries=entries, pairs=n_pairs)
         elif "start" in result:
             result["start"] = session.bench_start
         basis = result.get("result_basis")
