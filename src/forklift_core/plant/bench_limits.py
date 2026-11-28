@@ -201,6 +201,68 @@ def parse_bench_bypass(text: str | None) -> tuple[str, ...]:
     return names
 
 
+# ---- bench7 hold (plan 4.3 A1b-2 decisions 2-3, 10) ----------------------------------------------------------------
+HOLD_TARGETS = {"zero": 0, "abs": 1, "here": 2, "rel": 3}  # BenchHoldTarget
+
+
+def parse_hold_target(text: str) -> tuple[int, int]:
+    """``zero`` | ``here`` | ``abs:V`` (raw 0..4095) | ``rel:N`` (|N| < 2^30 counts) -> (target_kind, target_value)."""
+    word, sep, rest = str(text).strip().partition(":")
+    if word not in HOLD_TARGETS:
+        raise LimitRefused(f"hold: {text!r} is not zero, here, abs:V or rel:N")
+    if word in ("zero", "here"):
+        if sep:
+            raise LimitRefused(f"hold: {word} takes no value")
+        return HOLD_TARGETS[word], 0
+    try:
+        value = int(rest, 10)
+    except ValueError:
+        raise LimitRefused(f"hold: {text!r} needs an integer value") from None
+    if word == "abs" and not 0 <= value <= 4095:
+        raise LimitRefused("hold abs:V: a raw angle 0..4095")
+    if word == "rel" and not -(2**30) < value < 2**30:
+        raise LimitRefused("hold rel:N: |N| < 2^30 counts")
+    return HOLD_TARGETS[word], value
+
+
+@dataclass(frozen=True)
+class HoldAsk:
+    """A hold run's settings (one BENCH_HOLD, sent again unchanged to extend it). The defaults are the 11-27 measured
+    starting values (lead 2026-11-28): cap 0.15, kp 0.5, deadband 12, minimum duty 0.12, ki 0, kd 0 (kd untested)."""
+
+    kind: int
+    value: int
+    kp: float = 0.5
+    ki: float = 0.0
+    kd: float = 0.0
+    deadband: int = 12
+    min_duty: float = 0.12
+    cap: float = 0.15
+
+    @property
+    def duty_max_e4(self) -> int:
+        return int(round(self.cap * 10000))
+
+    @property
+    def min_duty_e4(self) -> int:
+        return int(round(self.min_duty * 10000))
+
+
+def hold_refusal(h: HoldAsk, axis_duty_max_e4: int) -> str | None:
+    """The firmware's value checks (bench_hold_values_ok), refused here before anything is sent."""
+    for name, value, lo, hi, lo_open in (("hold-kp", h.kp, 0.0, 100.0, True), ("hold-ki", h.ki, 0.0, 1000.0, False),
+                                         ("hold-kd", h.kd, 0.0, 10.0, False)):
+        if not math.isfinite(value) or value > hi or value < lo or (lo_open and value <= lo):
+            return f"{name}: {'(' if lo_open else '['}{lo:g}, {hi:g}]"
+    if not isinstance(h.deadband, int) or not 0 <= h.deadband <= 512:
+        return "hold-deadband: 0..512 counts"
+    if not math.isfinite(h.cap) or not 1 <= h.duty_max_e4 <= axis_duty_max_e4:
+        return f"hold duty cap: (0, {axis_duty_max_e4 / 10000:g}] (the run axis's duty limit)"
+    if not math.isfinite(h.min_duty) or h.min_duty_e4 < 0 or h.min_duty_e4 > h.duty_max_e4:
+        return "hold-min-duty: 0 .. the duty cap"
+    return None
+
+
 @dataclass(frozen=True)
 class BenchAsk:
     """One run's BENCH_SET: the bypass names, and the run axis's duty and time limits (the other axes at the image's
@@ -213,6 +275,12 @@ class BenchAsk:
     source: int = 0  # bench6: 1 the run axis's KTH count (M, H)
     stop_counts: int = 0  # bench6: the signed distance stop in counts, 0 none
     count_sign: int = 1  # bench6: the duty sign x the count's direction
+    mode: int = 1  # BenchMode: 1 duty, 2 hold (bench7)
+    hold: HoldAsk | None = None  # bench7: the hold run's settings
+
+    @property
+    def hold_run(self) -> bool:
+        return self.mode == 2
 
     @property
     def bypass(self) -> int:
@@ -273,10 +341,22 @@ def bench_refusal(ask: BenchAsk) -> str | None:
         return "bench-bypass steer_range: the steering axis (M) only"
     if "lift_range" in ask.names and ask.axis != 3:
         return "bench-bypass lift_range: the lift axis (H) only"
+    if ask.mode == 2 and (ask.source != 1 or ask.axis not in (2, 3)):
+        return "hold: the KTH count of M or H"  # named before the source rules below speak of distances
     if ask.source not in (0, 1):
         return "bench source: none or kth (the MT source comes with A1c)"
     if ask.source == 1 and ask.axis not in (2, 3):
         return "stop-kth-turns: the KTH count is M's or H's"
     if ask.stop_counts != 0 and ask.source != 1:
         return "stop-kth-turns: a distance stop needs the KTH source"
+    if ask.mode not in (1, 2):
+        return "bench mode: duty or hold"
+    if ask.hold_run:
+        if ask.source != 1 or ask.axis not in (2, 3):
+            return "hold: the KTH count of M or H"
+        if ask.stop_counts != 0:
+            return "hold: no distance stop"
+        if ask.hold is None:
+            return "hold: no settings"
+        return hold_refusal(ask.hold, ask.duty_max_e4()[ask.axis])
     return None

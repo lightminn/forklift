@@ -5,7 +5,8 @@ BENCH_SET and BENCH_ARM; a plain ARM is refused there; a BENCH_STATE counts only
 import pytest
 
 from forklift_core.mcu_link.build_policy import Client
-from forklift_core.mcu_link.messages import BenchArm, BenchSet, BenchState, LinkDecoder, Mode, StateFlag, encode
+from forklift_core.mcu_link.messages import (BenchArm, BenchHold, BenchSet, BenchState, LinkDecoder, Mode,
+                                            StateFlag, encode)
 from forklift_core.plant import bench_limits as bl
 from forklift_core.plant.mcu_host import McuLinkHost
 
@@ -211,3 +212,58 @@ def test_the_accepted_hooks_see_only_what_the_host_accepted():
     r.host.on_bytes(state(r.t_us) + encode(_bench_state(1), 2), r.now)
     r.host.on_bytes(state(r.t_us - 5_000), r.now)  # older than the accepted one: dropped as out of order
     assert got_states == [t_good] and got_pairs == [5]
+
+
+# ---- bench7 hold (plan 4.3 A1b-2 decision 10) ----------------------------------------------------------------------
+HOLD = bl.HoldAsk(3, -40, kd=0.02)
+HOLD_ASK = bl.BenchAsk(2, (), None, None, source=1, mode=2, hold=HOLD)
+
+
+def _bench_ready(r, zero_axis=2):
+    r.host.commission_zero_axis = zero_axis  # the hold run's readiness zero on its own axis (independent round 2 P1-1)
+    r.feed()
+    assert r.host.bench_set(9, HOLD_ASK, r.now, source=HOLD_ASK.source) is None
+    (bs,) = r.sent()
+    assert bs.mode == 2 and bs.source == 1 and bs.axis == 2
+    r.feed()
+    assert r.host.request_bench_arm(9, r.now) is None
+    r.sent()
+    r.feed(mode=Mode.ARMED, gen=1)
+    (zero,) = r.sent()
+    r.feed(mode=Mode.ARMED, gen=1, flags=CB | StateFlag.ZERO_SEEN)
+    assert r.host.ready
+    return zero
+
+
+def test_a_hold_run_arms_with_its_zero_on_the_run_axis_and_sends_bench_hold():
+    r = bench_rig()
+    zero = _bench_ready(r)
+    assert zero.axis == 2 and zero.duty_e4 == 0
+    assert r.host.request_bench_hold(9, 2, HOLD, -1, r.now + 100 * MS, r.now) is None
+    (h,) = r.sent()
+    assert isinstance(h, BenchHold)
+    assert (h.run_id, h.axis, h.source, h.target_kind, h.target_value, h.cpr) == (9, 2, 1, 3, -40, 4096)
+    assert (h.kp, h.ki) == (0.5, 0.0) and abs(h.kd - 0.02) < 1e-7
+    assert (h.deadband_counts, h.duty_max_e4, h.min_duty_e4, h.sign) == (12, 1500, 1200, -1)
+    assert h.arm_gen == 1 and h.echo_mcu_time_us == r.t_us and 1 <= h.valid_after_echo_ms <= 100
+
+
+def test_a_bench_hold_follows_the_motion_rules():
+    r = bench_rig()
+    assert r.host.request_bench_hold(9, 2, HOLD, 1, r.now + 100 * MS, r.now).reason == "bench_refused: no_state"
+    r = bench_rig()
+    r.feed()
+    assert r.host.request_bench_hold(9, 2, HOLD, 1, r.now + 100 * MS, r.now).reason == "not_authorized"
+    r = bench_rig("forklift-mcu commission OPEN v rec=1 lim=lr1 bench6")
+    r.feed()
+    assert r.host.request_bench_hold(9, 2, HOLD, 1, r.now + 100 * MS, r.now).reason.startswith("bench_refused")
+    # queued, then past its expiry before the write: dropped, never written
+    r = bench_rig()
+    _bench_ready(r)
+    assert r.host.request_bench_hold(9, 2, HOLD, 1, r.now + 5 * MS, r.now) is None
+    r.now += 6 * MS
+    assert r.sent() == []
+    # queued, then the authorization ends (a DISARM): dropped
+    assert r.host.request_bench_hold(9, 2, HOLD, 1, r.now + 100 * MS, r.now) is None
+    r.host.request_disarm(r.now)
+    assert [type(m).__name__ for m in r.sent()] == ["Disarm"]

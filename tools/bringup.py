@@ -57,6 +57,7 @@ from forklift_core.live.synthetic import (
 )
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
+    BenchRunFlag,
     BenchStop,
     Drive,
     FaultFlag,
@@ -109,7 +110,7 @@ from forklift_core.plant.write_log import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
+from real_mcu_link import _BAUDS, BenchTtyLink, ReconnectingLink, TtyLink, open_raw, usb_product_of_fd  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_MAX_S = 3.0
@@ -194,6 +195,7 @@ class Bench:
     # a real device (main sets it): an open commissioning board whose USB product string cannot be read is refused --
     # it could be fw-single, which an L(0) arming zero would fix on L (Codex PR-B P2-1)
     product_required: bool = False
+    gate_holder: dict | None = None  # a bench run's link gate state (main): the cleanup cancels it
     _queued_phase: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -730,6 +732,9 @@ class CommissionSession(Session):
         self._bench_pending: dict | None = None
         self._boot0: int | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
+        self.holds_sent = 0  # BENCH_HOLDs queued (bench7)
+        self.run_ident: tuple | None = None  # (boot_id, arm_gen) of the arming that named this run
+        self.pre_run_pair_t: int | None = None  # the MCU time of the last pair before this run's BENCH_ARM
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
         self.last_expires_ns: int | None = None
@@ -762,8 +767,10 @@ class CommissionSession(Session):
             raise Refused("single-axis: the board is fw-single -- give --single-axis (an older tool would arm on L)")
         if single_image and state.flags & StateFlag.OUTPUTS_LOCKED:
             raise Refused("single-axis: a fw-single product with outputs_locked in STATE: the board disagrees")
-        # the arming's zero COMMISSION fixes this run's axis on fw-single; every other path keeps L(0)
-        self.b.host.commission_zero_axis = self.axis if single_image else 0
+        # the arming's zero COMMISSION fixes this run's axis on fw-single; a hold run's readiness zero is on its own
+        # axis too (the board refuses another axis's, plan 4.3 independent round 2 P1-1); every other path keeps L(0)
+        hold_run = self.bench is not None and self.bench.hold_run
+        self.b.host.commission_zero_axis = self.axis if (single_image or hold_run) else 0
         # the bench image (plan A1a, contract 8): told apart by its exact suffix; any other bench generation is refused
         # for every run, bench values on another image too. On it every run sends its BENCH_SET (the defaults when
         # none was asked) and arms with BENCH_ARM, so no run inherits another's overrides
@@ -825,9 +832,11 @@ class CommissionSession(Session):
             raise Refused("bench: no BENCH_STATE with the board's current STATE on this connection")
         self._link_check(same_link, conn0, disc0)
         prev = b.host.bench_state
+        if b.host.bench_state_of is not None:
+            self.pre_run_pair_t = b.host.bench_state_of.mcu_time_us  # the zero base of the entry window (round 12)
         if prev.result_run_id != 0:
             errors0 = b.record_errors
-            b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, **result_fields(prev)})
+            b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, **recovered_fields(prev)})
             self._prev_result = (b.state.boot_id, prev.result_run_id)  # recorded again right before the BENCH_ARM
             b.flush_record()  # out of this process before the BENCH_ARM can clear the board's copy
             if b.record_errors != errors0:
@@ -866,7 +875,7 @@ class CommissionSession(Session):
         self._bench_pending = {"seq": seq, "run_id": self.run_id, "bypass": list(ask.names),
                                "duty_max_e4": list(ask.duty_max_e4()), "time_ms": list(ask.time_ms()),
                                "overrides": ask.overrides(), "source": ask.source, "stop_counts": ask.stop_counts,
-                               "count_sign": ask.count_sign}
+                               "count_sign": ask.count_sign, "mode": ask.mode}
         b.emit({"t": "bench_set_sent", **self._bench_pending})
 
     def _link_check(self, same_link, conn0: int, disc0: int) -> None:
@@ -894,6 +903,7 @@ class CommissionSession(Session):
 
         if not b.run_until(named, 0.5):
             raise Refused("bench: the board's arming never named this run's BENCH_SET")
+        self.run_ident = (b.host.bench_state_of.boot_id, b.host.bench_state_of.arm_gen)  # this run's boot and arming
         self.bench_taken = self._bench_pending  # the board took it, whatever happens next
         if not b.host.ready:
             b.emit({"t": "bench_set", **self.bench_taken})
@@ -937,7 +947,7 @@ class CommissionSession(Session):
         b, prev = self.b, self.b.host.bench_state
         if self._prev_result is None or prev is None or prev.result_run_id != self._prev_result[1]:
             return True
-        fields = result_fields(prev)
+        fields = recovered_fields(prev)
         if fields == self._prev_final:
             return True
         errors0 = b.record_errors
@@ -952,9 +962,16 @@ class CommissionSession(Session):
     def _distance_run(self) -> bool:
         return self.bench_image and self.bench is not None and self.bench.distance
 
+    def _hold_run(self) -> bool:
+        return self.bench_image and self.bench is not None and self.bench.hold_run
+
+    def _board_run(self) -> bool:
+        """A run the board may end itself (a distance run's 8-12, a hold's 10-12)."""
+        return self._distance_run() or self._hold_run()
+
     def _board_ended_run(self) -> str | None:
-        """The board ended this distance run itself (stop 8-12, contract 8.3): never an authorization revoked."""
-        if not self._distance_run():
+        """The board ended this distance or hold run itself (contract 8.3, 8.7): never an authorization revoked."""
+        if not self._board_run():
             return None
         br = self.bench_result() or {}
         # any first cause of this run: a distance rule, or an expiry after a lost acceptance sample (round 2 P2-3);
@@ -1023,7 +1040,68 @@ class CommissionSession(Session):
             time.sleep(0.01)
         return first
 
-    def _first_nonzero_answered(self, duty_e4: int, bound: int | None) -> bool:
+    def send_hold(self, end_ns: int | None = None) -> int | None:
+        """One BENCH_HOLD (bench7): the run's settings, valid at most the cap and never past ``end_ns``."""
+        ask = self.bench
+        now = time.monotonic_ns()
+        expires = min(self.test_end_ns, now + self.b.host.cfg.cap_ms * 1_000_000)
+        if end_ns is not None:
+            expires = min(expires, end_ns)
+        self.b.last_queued = None
+        blocked = self.b.host.request_bench_hold(self.run_id, self.axis, ask.hold, ask.count_sign, expires, now)
+        if blocked is not None or self.b.last_queued is None:
+            return None
+        seq = self.b.last_queued["seq"]
+        self.holds_sent += 1
+        self.last_expires_ns = expires
+        return seq
+
+    def hold_run(self, seconds: float, stop=None) -> None:
+        """A hold run's drive (plan 4.3 A1b-2 decision 10): the first BENCH_HOLD once (the distance run's one-shot
+        rule), then the same HOLD every cycle with its validity bound by the end T, stopped HANDOVER_S before T so the
+        end zero lands before the commands expire; the board's own end (10-12, a limit, an expiry) ends it at once."""
+        end_ns = time.monotonic_ns() + int(seconds * 1e9)
+        stop_ns = end_ns - int(HANDOVER_S * 1e9)
+        if stop is not None:
+            self.b.cycle()
+            if (reason := stop()) is not None:
+                self.stop_reason = reason
+                return
+        if self.b.gate_holder is not None:
+            self.b.gate_holder["hold_until_ns"] = stop_ns  # a HOLD half written past it is never completed
+        try:
+            self._hold_loop(end_ns, stop_ns, stop)
+        finally:
+            # however the renewals ended (time, a window stop, an abort): the gate closes now, so a HOLD half written is
+            # abandoned, and no queued HOLD outlives them -- the end zero goes out behind nothing of the hold
+            if self.b.gate_holder is not None:
+                self.b.gate_holder["hold_until_ns"] = min(stop_ns, time.monotonic_ns())
+            self.b.host.drop_frames(("BENCH_HOLD",), "hold_end")
+
+    def _hold_loop(self, end_ns: int, stop_ns: int, stop) -> None:
+        if not self._first_nonzero_answered(0, end_ns, send=lambda: self.send_hold(end_ns), kind="BENCH_HOLD"):
+            return
+        if not self.b.host.ready and self.board_ended is None:
+            why = self._abort_reason()
+            if why is not None:
+                self.aborted = why
+                return
+        if stop is not None and (reason := stop()) is not None:
+            self.stop_reason = reason  # the samples seen while the first answer was awaited (as a distance run)
+            return
+        while time.monotonic_ns() < stop_ns and self.board_ended is None:
+            self.send_hold(end_ns)
+            self.b.cycle()
+            why = self._abort_reason()
+            if why is not None:
+                self.aborted = why
+                return
+            if stop is not None and (reason := stop()) is not None:
+                self.stop_reason = reason
+                return
+            time.sleep(0.01)
+
+    def _first_nonzero_answered(self, duty_e4: int, bound: int | None, *, send=None, kind: str = "COMMISSION") -> bool:
         """A distance run's first non-zero COMMISSION goes out once (plan 4.2 A1b-1 decision 3): no other until it
         is accepted or this run's result is latched. The answer is read from the STATEs and pairs the host itself
         accepted (its on_accepted / on_pair hooks), in receipt order, each made before the command's deadline plus
@@ -1035,17 +1113,28 @@ class CommissionSession(Session):
         echo_rx_ns = b.host.state_rx_ns  # the STATE the command echoes was received then (the host-clock bound)
         states: list = []  # (STATE, received ns) the host accepted, in order
         pairs: list = []  # (STATE, BENCH_STATE, received ns) the host accepted, in order
-        b.host.on_accepted = lambda st, rx: states.append((st, rx))
-        b.host.on_pair = lambda st, bs, rx: pairs.append((st, bs, rx))
-        try:
-            return self._first_nonzero_wait(duty_e4, bound, conn0, echo_rx_ns, states, pairs)
-        finally:
-            b.host.on_accepted = None
-            b.host.on_pair = None
+        prev_acc, prev_pair = b.host.on_accepted, b.host.on_pair  # a hold run keeps its own pair record going
 
-    def _first_nonzero_wait(self, duty_e4, bound, conn0, echo_rx_ns, states, pairs) -> bool:
+        def on_acc(st, rx):
+            states.append((st, rx))
+            if prev_acc is not None:
+                prev_acc(st, rx)
+
+        def on_pair(st, bs, rx):
+            pairs.append((st, bs, rx))
+            if prev_pair is not None:
+                prev_pair(st, bs, rx)
+
+        b.host.on_accepted, b.host.on_pair = on_acc, on_pair
+        try:
+            return self._first_nonzero_wait(duty_e4, bound, conn0, echo_rx_ns, states, pairs, send=send, kind=kind)
+        finally:
+            b.host.on_accepted, b.host.on_pair = prev_acc, prev_pair
+
+    def _first_nonzero_wait(self, duty_e4, bound, conn0, echo_rx_ns, states, pairs, *, send=None,
+                            kind: str = "COMMISSION") -> bool:
         b = self.b
-        seq = self.send_duty(duty_e4, bound)
+        seq = self.send_duty(duty_e4, bound) if send is None else send()
         if seq is None:
             self.aborted = "bench_start_not_queued"
             return False
@@ -1061,7 +1150,7 @@ class CommissionSession(Session):
         host_deadline_ns = (echo_rx_ns or time.monotonic_ns()) + q_valid_ms * 1_000_000 + 50_000_000
 
         def write():
-            return next((w for w in reversed(b.writes) if w.kind == "COMMISSION" and (w.seq & 0xFFFF) == seq16
+            return next((w for w in reversed(b.writes) if w.kind == kind and (w.seq & 0xFFFF) == seq16
                          and w.conn == conn0), None)
 
         def judge() -> bool:
@@ -1148,6 +1237,8 @@ class CommissionSession(Session):
         commands are dropped and the STOPPING is let run out first (bounded by ``STOPPING_WAIT_S``)."""
         b = self.b
         b.host.drop_drives("cleanup")
+        if b.gate_holder is not None:
+            b.gate_holder["cancelled"] = True  # no BENCH_HOLD or non-zero COMMISSION continues from here
         # the host's own freshness bound (50 ms), not the observation gap (Codex re-review 3 P2)
         stale = not b.samples or time.monotonic_ns() - b.samples[-1].host_ns > b.host.cfg.state_max_age_s * 1e9
         if stale or b.state.mode == Mode.STOPPING:
@@ -1184,7 +1275,7 @@ class CommissionSession(Session):
     def _abort_reason(self) -> str | None:
         b = self.b
         if not b.host.ready:
-            if self._distance_run():
+            if self._board_run():
                 # the STATE and its BENCH_STATE may come in two reads: the result pair decides (impl r1 P2-2)
                 b.run_until(lambda: self._board_ended_run() is not None, RESULT_PAIR_WAIT_S)
             if (ended := self._board_ended_run()) is not None:
@@ -1200,17 +1291,23 @@ def result_fields(bs) -> dict:
     """The board's result of a run from a BENCH_STATE (contract 8.3, 8.5): every field, and for a KTH run its
     distance or measuring verdict (plan 4.2 A1b-1 decision 7)."""
     stop = BenchStop(bs.stop_reason).name.lower() if bs.stop_reason <= max(BenchStop) else bs.stop_reason
-    out = {"run_id": bs.result_run_id, "stop_reason": stop,
+    kind = ("hold" if bs.run_flags & int(BenchRunFlag.RES_HOLD)
+            else "distance" if bs.run_flags & int(BenchRunFlag.RES_DISTANCE) else "duty")
+    out = {"run_id": bs.result_run_id, "stop_reason": stop, "kind": kind,
            "axis": "LRMH"[bs.result_axis] if bs.result_axis < 4 else None, "source": bs.result_source,
            "blocked": bs.blocked, "distance_confirm": bs.distance_confirm, "run_flags": bs.run_flags,
            "distance_ref": bs.distance_ref, "cut_position": bs.cut_position,
-           "end_evidence_age_ms": bs.end_evidence_age_ms}
+           "end_evidence_age_ms": bs.end_evidence_age_ms,
+           # bench7: the run's own bypass, fixed at its end (the current arming's is mcu_bypass), and a hold's target
+           "result_bypass": sorted(n for n, bit in bl.BENCH_BYPASS_BITS.items() if bs.result_bypass & bit)}
+    if kind == "hold":
+        out.update(target=bs.target, deadband_entries=bs.deadband_entries)
     if bs.result_source == 1:
         # a KTH run: how far its end displacement is trusted, and the distance verdict when the board ended it by a
         # distance rule (the distance asked is not in BENCH_STATE: the verdict's category only)
         out["measure"] = bench_session.measure_verdict(run_flags=bs.run_flags, distance_ref=bs.distance_ref,
                                                        cut_position=bs.cut_position)
-        if stop in BOARD_ENDS:
+        if kind == "distance" and stop in BOARD_ENDS:  # a distance verdict on a distance run's result only
             out["distance"] = bench_session.distance_verdict(
                 stop_reason=stop, confirm=bs.distance_confirm, run_flags=bs.run_flags, stop_counts=None,
                 distance_ref=bs.distance_ref, cut_position=bs.cut_position)
@@ -1391,6 +1488,180 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags],
                    "note": "software evidence only: the direction is the operator's, currents against the bench supply"},
                   session)
+
+
+def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
+    """A bench7 hold run (plan 4.3 A1b-2 decisions 9-10): armed with its readiness zero on its own axis, the
+    BENCH_HOLDs for ``seconds``, the end zero, the cleanup; then verdict ② from every pair of the run and the board's
+    result, and the last second's deadband entries (shown, never blocking)."""
+    b, ask = bench, session.bench
+    h = ask.hold
+    pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
+    idents: list = []  # (boot_id, arm_gen) of each
+
+    def keep(st, bs, rx):  # noqa: ARG001
+        idents.append((st.boot_id, st.arm_gen))
+        pairs.append((st.mcu_time_us, st.mode, bs))
+        # every pair in the record: verdict 2 and the entry window can be recomputed from the JSONL (Codex r1 P2)
+        b.emit({"t": "bench_pair", "mcu_time_us": st.mcu_time_us, "boot_id": st.boot_id, "arm_gen": st.arm_gen,
+                "mode": st.mode.name, "run_id": bs.run_id, "result_run_id": bs.result_run_id, "drive": bs.drive,
+                "count_state": bs.count_state, "raw_angle": bs.raw_angle, "cumulative": bs.cumulative,
+                "target": bs.target, "cut_position": bs.cut_position, "stop_reason": bs.stop_reason,
+                "run_flags": bs.run_flags, "deadband_entries": bs.deadband_entries,
+                "evidence_age_ms": bs.evidence_age_ms, "end_evidence_age_ms": bs.end_evidence_age_ms})
+
+    b.host.on_pair = keep
+    warned = {"label": None}
+    i_arm = len(b.samples)
+    try:
+        session.arm(PRE_ZERO_S + seconds + POST_ZERO_S + 1.0)
+        i_arm = len(b.samples)
+        seen = {"i": len(b.samples) - 1}
+
+        def stop() -> str | None:
+            for smp in b.samples[max(seen["i"], 0):]:
+                if (reason := session.early_stop(smp.state, FaultFlag(0))) is not None:
+                    return reason
+            seen["i"] = len(b.samples)
+            # the last second's deadband entries, shown when they start (decision 7): never a stop
+            pts = _entry_points(session, pairs)
+            if pts:
+                w = bench_session.entry_window(pts, pts[-1][0])
+                if w["label"] in ("warn", "unknown") and w["upper"] is not None and w["label"] != warned["label"]:
+                    warned["label"] = w["label"]
+                    b.emit({"t": "bench_advisory", "advisory": f"deadband_reentry_{w['label']}", **w})
+            return None
+
+        b.phase = "pre_zero"
+        session.hold_duty(0, PRE_ZERO_S)
+        b.phase = "on"
+        if session.aborted is None:
+            # the settings the verdict needs, written before the first HOLD (a process lost after it keeps them)
+            errors0 = b.record_errors
+            b.emit({"t": "hold_settings", "run_id": session.run_id, **_hold_settings(ask)})
+            b.flush_record()
+            if b.record_errors != errors0:
+                session.aborted = "hold_settings_not_recorded"  # verdict 2 needs them: no HOLD without them
+            else:
+                session.hold_run(seconds, stop)
+            if session.board_ended is not None and session.stop_reason is None:
+                session.stop_reason = f"board_{session.board_ended}"
+            if session.stop_reason is None and session.aborted is None:
+                session.stop_reason = "time"
+        b.phase = "post_zero"
+        if session.aborted is None:
+            if session.board_ended is not None:
+                b.run_until(lambda: b.state is not None and b.state.mode != Mode.ARMED, POST_ZERO_S + 0.5)
+            else:
+                session.end_bench_run()
+        session.cleanup()
+        rest = session.observe_rest()  # the position after the brake, apart from the cut (plan 4.2 decision 4)
+        br = session.bench_result()
+        if not br.get("confirmed"):
+            b.run_until(lambda: (session.bench_result() or {}).get("confirmed", False), 0.3)
+            br = session.bench_result()
+        if not br.get("confirmed"):
+            session.aborted = session.aborted or "bench_result_unconfirmed"
+        elif br.get("stop_reason") != "end_zero":
+            session.aborted = session.aborted or f"bench_stop_{br.get('stop_reason')}"
+    finally:
+        b.host.on_pair = None
+    why = session_abort_reason(b.samples, i_arm)
+    if why is not None:
+        session.aborted = session.aborted or why
+    pairs = _run_pairs(pairs, idents, session.run_ident)  # this run's boot and arming only
+    verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id)
+                if br.get("confirmed") else {"result": "undecidable", "why": ["no_result"]})
+    pts = _entry_points(session, pairs)
+    windows = [bench_session.entry_window(pts[: i + 1], p[0]) for i, p in enumerate(pts) if len(p) == 2]
+    entries = {"max_lower": max((w["lower"] or 0 for w in windows), default=0),
+               "warned": any(w["label"] == "warn" for w in windows),
+               "unknown": any(w["label"] == "unknown" and (w["upper"] or 0) >= bench_session.ENTRY_WARN
+                              for w in windows),
+               "total": br.get("deadband_entries")}
+    unk = [w for w in windows if w["label"] == "unknown"]
+    entries["unknown_ranges"] = sorted({(w["lower"], w["upper"]) for w in unk}, key=str)[:10]
+    if entries["warned"]:
+        entries["label"] = f"데드밴드 반복 진입(최근 1 s 최소 {entries['max_lower']} 회)"
+    elif entries["unknown"]:
+        lo = min((w["lower"] or 0) for w in unk)
+        hi = max((w["upper"] or 0) for w in unk if w["upper"] is not None)
+        entries["label"] = f"데드밴드 반복 진입 미상(최근 1 s {lo}–{hi} 회)"
+    elif any(w["upper"] is None for w in unk):
+        lo = max((w["lower"] or 0) for w in unk)
+        entries["label"] = f"데드밴드 반복 진입 미상(최근 1 s 최소 {lo} 회, 무장 기준 없음)"
+    else:
+        entries["label"] = None
+    last_pair = bench_session.pair_of(b.host.bench_state_of, b.host.bench_state)
+    board_end = (last_pair is not None and last_pair.mode == Mode.DISARMED and last_pair.result_run_id == session.run_id
+                 and session.run_ident is not None
+                 and (last_pair.boot_id, last_pair.arm_gen) == session.run_ident)
+    if board_end and session.cleanup_confirmed is not True:
+        # the board's own end (this run's ENDED, then DISARMED) confirms the cleanup without the DISARM's echo (plan 3
+        # verdict 1; Codex A1b-2b round 2 P2)
+        session.cleanup_confirmed = True
+        b.emit({"t": "cleanup_confirmed_by_board", "run_id": session.run_id})
+    latest = b.host.state
+    if (last_pair is not None and latest is not None and session.run_ident is not None
+            and (latest.boot_id, latest.arm_gen) == session.run_ident and latest.mcu_time_us >= last_pair.mcu_time_us):
+        # the end evidence is the pair's; the mode, duty and faults are the latest accepted STATE of the same arming
+        # (a newer STATE whose BENCH_STATE was lost still counts, Codex A1b-2b round 3 P2)
+        last_pair = replace(last_pair, mode=latest.mode, duty_e4=tuple(latest.duty_e4), fault_flags=latest.fault_flags)
+    faults = [] if last_pair is None else [f.name for f in FaultFlag if f in last_pair.fault_flags
+                                          and f != FaultFlag.COMMAND_TIMEOUT]
+    verdict1 = bench_session.run_verdict(
+        closed="ended" if br.get("confirmed") else "no_drive", stop_reason=br.get("stop_reason"),
+        aborted=session.aborted, cleanup_confirmed=bool(session.cleanup_confirmed), last=last_pair,
+        record_errors=b.record_errors, unexpected_faults=tuple(faults))
+    hold_out = {"settings": _hold_settings(ask), "verdict1": verdict1, "rest": rest,
+                "start": session.bench_start, "holds_sent": session.holds_sent, "verdict": verdict2,
+                "entries": entries, "pairs": len(pairs),
+                # what the PWM report is and is not (plan 4.3 decision 6), the stationary noise width not yet measured
+                # (decision 7), the coast within 200 us of a run's start unverified (independent round 3 P2-2)
+                "notes": ["PWM 출력(브리지 미확인)", "정지 폭 미측정", "구간 시작 관성 혼입 미확인"]}
+    result = "ok" if verdict1["ok"] else "aborted"
+    return _final({"result": result, "stop": session.stop_reason, "hold": hold_out, "bench_result": br,
+                   "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
+
+
+def _run_pairs(pairs: list, idents: list, ident: tuple | None) -> list:
+    """The pairs of this run's boot and arming (the one confirm_bench_arm saw name it), and any earlier pair of that
+    boot under another arming (the entry window's zero base)."""
+    if ident is None:
+        return pairs
+    # another arming's pair keeps only its time (the zero base): never its run id or count (Codex A1b-2b round 4 P3)
+    return [p if idn == ident else (p[0], p[1], _NoRun()) for p, idn in zip(pairs, idents)
+            if idn == ident or idn[0] == ident[0]]
+
+
+def recovered_fields(bs) -> dict:
+    """A recovered result (the previous run's, read before a new ARM): ``result_fields``, and for a hold only the
+    board's result -- no settings or samples for verdict 2 (decision 9)."""
+    fields = result_fields(bs)
+    if fields.get("kind") == "hold":
+        fields["hold_verdict"] = {"result": "undecidable", "why": ["판정 불가(설정·표본 없음)"]}
+    return fields
+
+
+def _hold_settings(ask: bl.BenchAsk) -> dict:
+    h = ask.hold
+    return {"target": args_target(h), "kp": h.kp, "ki": h.ki, "kd": h.kd, "deadband": h.deadband,
+            "min_duty": h.min_duty, "cap": h.cap, "count_sign": ask.count_sign}
+
+
+def args_target(h: bl.HoldAsk) -> str:
+    name = {v: k for k, v in bl.HOLD_TARGETS.items()}[h.kind]
+    return name if name in ("zero", "here") else f"{name}:{h.value}"
+
+
+def _entry_points(session: CommissionSession, pairs: list) -> list:
+    pre = [(session.pre_run_pair_t, Mode.DISARMED, _NoRun())] if session.pre_run_pair_t is not None else []
+    return bench_session.entry_points(pre + pairs, session.run_id)
+
+
+class _NoRun:
+    run_id = 0
+    deadband_entries = 0
 
 
 LIMIT_SCENARIOS = ("limit_disarm", "hold_disarm")  # drive to the MCU's own time limit: locked boards and the model
@@ -1923,7 +2194,8 @@ def main(argv=None) -> int:
                             "first boot and kth read; steer or wheels absent makes the run no gate evidence "
                             "(partial-parts plan 2026-11-25)")
     cm.add_argument("--axis", choices=tuple(AXES), required=True)
-    cm.add_argument("--duty", type=float, required=True)
+    cm.add_argument("--duty", type=float,
+                    help="the duty (required); with --hold the hold's duty cap, default 0.15 (plan 4.3 A1b-2)")
     cm.add_argument("--seconds", type=float)
     cm.add_argument("--scenario", choices=COMMISSION_SCENARIOS)
     cm.add_argument("--limit-s", type=float, default=2.0)
@@ -1953,6 +2225,17 @@ def main(argv=None) -> int:
     cm.add_argument("--kth-measure", action="store_true",
                     help="bench image (bench7): steering/lift only -- measure the run by the KTH count without a "
                          "distance stop (the end displacement and how far it is trusted)")
+    cm.add_argument("--hold", metavar="TARGET",
+                    help="bench image (bench7): hold steering/lift at zero | here | abs:V (raw 0..4095) | rel:N "
+                         "(counts) for --seconds, closed loop on the KTH count; --duty is the cap (plan 4.3 A1b-2)")
+    cm.add_argument("--hold-kp", type=float, help="hold: duty per rad (default 0.5, the 11-27 measured start)")
+    cm.add_argument("--hold-ki", type=float, help="hold: duty per rad*s (default 0)")
+    cm.add_argument("--hold-kd", type=float,
+                    help="hold: duty per rad/s (default 0; untested on hardware -- the bench bundle compares 0 and "
+                         "0.02 on shaking)")
+    cm.add_argument("--hold-deadband", type=int, help="hold: counts, |error| <= this gives output 0 (default 12)")
+    cm.add_argument("--hold-min-duty", type=float,
+                    help="hold: the least duty toward the error outside the deadband (default 0.12)")
     cm.add_argument("--count-sign", type=int, choices=(1, -1), default=1,
                     help="bench image: +1 when a positive duty raises the KTH count, -1 when it lowers it")
     cm.add_argument("--sensorless", action="store_true",
@@ -1994,6 +2277,10 @@ def main(argv=None) -> int:
                        help="read a record with a bypassed protection or unknown run conditions (its pass fields stay "
                             "empty, design 2026-11-25 1.2)")
     args = ap.parse_args(argv)
+    if args.cmd == "commission" and args.duty is None:
+        if getattr(args, "hold", None) is None:
+            ap.error("the following arguments are required: --duty")
+        args.duty = HOLD_DUTY_DEFAULT  # the hold's cap (plan 4.3 A1b-2 decision 10)
     kabsent: list = []
     if args.cmd in ("kth", "clock", "analyze"):
         # one read of the file for every check and the judgement (Codex S 2nd P2: no second read that a new run
@@ -2073,8 +2360,14 @@ def main(argv=None) -> int:
     # COMMISSION's validity is counted from when its STATE was really read -- a late read no longer stretches the
     # MCU deadline past the approved end
     # one executor per MCU device, listeners included (real safety wiring design 8.1)
+    gate_holder: dict = {"host": None, "cancelled": False, "hold_until_ns": None}
+    link_kw = {}
+    if args.cmd == "commission":
+        # one read of the opened node's product string picks the link and tells the host (Codex A1b-2b round 2 P2)
+        link_kw = {"link_factory": _link_factory(gate_holder), "product_reader": _product_of_opening(gate_holder)}
     link = ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns, exclusive=True,
-                            opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]))
+                            opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]),
+                            **link_kw)
     markers = None
     if getattr(args, "markers", False):
         # an asked-for marker input that cannot work (no terminal) is said out loud and in the record, not left to
@@ -2112,6 +2405,8 @@ def main(argv=None) -> int:
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission",
                       product_required=_product_required(synthetic),
                       initial_seq=random.randrange(1, 0x10000) if args.cmd == "clear-faults" else None)
+        gate_holder["host"] = bench.host
+        bench.gate_holder = gate_holder
         try:
             if args.cmd in ("record", "cpr"):
                 bench.run_until(lambda: False, args.seconds,
@@ -2142,12 +2437,71 @@ def main(argv=None) -> int:
     return 0
 
 
+HOLD_DUTY_DEFAULT = 0.15  # the hold's cap without --duty (11-27 measured start, lead 2026-11-28)
+HOLD_SECONDS_MAX = 60.0  # a hold run's length (its continuous output stays under the run's time limit on the board)
+
+
+def _bench_args_given(args) -> bool:
+    given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max", "stop_kth_turns",
+                                              "hold")]
+    return any(v is not None for v in given) or bool(getattr(args, "kth_measure", False))
+
+
+def _link_factory(holder: dict, product_reader=usb_product_of_fd):
+    """The commissioning tool's link per opening, by the opened board's image (plan 4.3 A1b-2 decision 10, Codex
+    A1b-2b round 1 P1): the bench7 image gets the gated ``BenchTtyLink`` whatever the run's arguments; every other
+    image keeps the plain ``TtyLink``."""
+    def make(fd: int):
+        product = product_reader(fd)
+        holder["opening"] = (fd, product)  # the host is told this same value (_product_of_opening)
+        if bl.bench_image(product):
+            return BenchTtyLink(fd, gate=lambda f, write: _cli_gate(holder, f, write))
+        return TtyLink(fd)
+    return make
+
+
+def _product_of_opening(holder: dict, product_reader=usb_product_of_fd):
+    """ReconnectingLink's product reader: the value the link factory read for this fd (never a second read that could
+    differ from the one that chose the link)."""
+    def read(fd: int):
+        opening = holder.get("opening")
+        if opening is not None and opening[0] == fd:
+            return opening[1]
+        return product_reader(fd)
+    return read
+
+
+def _cli_gate(holder: dict, f, write) -> bool:
+    """The bench CLI's send boundary (plan 4.3 A1b-2 decision 10, 2nd/3rd round P1-4): a BENCH_HOLD or a non-zero
+    COMMISSION -- its first byte and every continuation -- only while the session is not cancelled, under the
+    authorization generation it was made under, before its deadline; everything else (zeros, DISARM, the bench
+    SET/ARM) passes."""
+    host = holder.get("host")
+    now = time.monotonic_ns()
+    if getattr(f, "kind", None) == "BENCH_HOLD" or (getattr(f, "kind", None) == "COMMISSION" and f.nonzero):
+        if (holder.get("cancelled") or host is None or f.generation != host.auth_epoch
+                or (f.expires_ns is not None and f.expires_ns <= now)):
+            return False
+    if getattr(f, "kind", None) == "BENCH_HOLD" and holder.get("hold_until_ns") is not None \
+            and now >= holder["hold_until_ns"]:
+        return False  # past the hold's own renewal stop (T - HANDOVER_S): never completed before the end zero
+    write()
+    return True
+
+
+HOLD_ARGS = ("hold_kp", "hold_ki", "hold_kd", "hold_deadband", "hold_min_duty")
+HOLD_ARG_DEFAULTS = {"hold_kp": 0.5, "hold_ki": 0.0, "hold_kd": 0.0, "hold_deadband": 12, "hold_min_duty": 0.12}
+
+
 def _bench_ask(args) -> bl.BenchAsk | None:
     """The run's BENCH_SET (plan A1a), or None when no bench argument was given (a bench board then gets its
     defaults)."""
-    given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max", "stop_kth_turns")]
-    if all(v is None for v in given) and not getattr(args, "kth_measure", False):
+    if getattr(args, "hold", None) is None and any(getattr(args, k, None) is not None for k in HOLD_ARGS):
+        raise Refused("--hold-*: only with --hold (an open-loop run takes no hold settings)")
+    if not _bench_args_given(args):
         return None
+    if getattr(args, "hold", None) is not None:
+        return _hold_ask(args)
     try:
         names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
     except bl.LimitRefused as exc:
@@ -2168,6 +2522,33 @@ def _bench_ask(args) -> bl.BenchAsk | None:
         source = 1  # measuring only (no distance stop)
     ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
                       getattr(args, "bench_time_max", None), source=source, stop_counts=stop, count_sign=count_sign)
+    if (why := bl.bench_refusal(ask)) is not None:
+        raise Refused(why)
+    return ask
+
+
+def _hold_ask(args) -> bl.BenchAsk:
+    """A hold run's BENCH_SET and BENCH_HOLD settings (plan 4.3 A1b-2 decision 10): steering or lift, the KTH
+    source, no distance; --duty is the cap."""
+    if getattr(args, "stop_kth_turns", None) is not None or getattr(args, "kth_measure", False):
+        raise Refused("hold: no --stop-kth-turns or --kth-measure (a hold measures by its own count)")
+    try:
+        names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
+        kind, value = bl.parse_hold_target(args.hold)
+    except bl.LimitRefused as exc:
+        raise Refused(str(exc)) from None
+    for k in ("bench_duty_max", "bench_time_max", "hold_kp", "hold_ki", "hold_kd", "hold_min_duty", "duty"):
+        v = getattr(args, k, None)
+        if v is not None and not math.isfinite(v):
+            raise Refused(f"{k.replace('_', '-')}: a finite number")
+    if not args.duty > 0:
+        raise Refused("hold: --duty is the hold's duty cap, a positive number (the controller picks the sign)")
+    v = {k: (HOLD_ARG_DEFAULTS[k] if getattr(args, k, None) is None else getattr(args, k)) for k in HOLD_ARGS}
+    hold = bl.HoldAsk(kind, value, kp=float(v["hold_kp"]), ki=float(v["hold_ki"]), kd=float(v["hold_kd"]),
+                      deadband=int(v["hold_deadband"]), min_duty=float(v["hold_min_duty"]), cap=float(args.duty))
+    ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
+                      getattr(args, "bench_time_max", None), source=1, count_sign=int(args.count_sign or 1), mode=2,
+                      hold=hold)
     if (why := bl.bench_refusal(ask)) is not None:
         raise Refused(why)
     return ask
@@ -2288,7 +2669,12 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
                  else bl.BENCH_DEFAULT_TIME_MS[axis] / 1000.0) - bl.TIME_MARGIN_S
         if not 0 < abs(ask.duty) <= duty_lim + 1e-12:
             raise Refused(f"duty must be nonzero and within +-{duty_lim:g} (the bench run's limit)")
-        if not COMMISSION_HOLD_MIN_S <= seconds <= t_lim:
+        if bench.hold_run:
+            # a hold's length is not its continuous output (the board's time limit judges that): 1.2 s for the
+            # settling verdict, at most HOLD_SECONDS_MAX
+            if not 1.2 <= seconds <= HOLD_SECONDS_MAX:
+                raise Refused(f"seconds: a hold runs 1.2 .. {HOLD_SECONDS_MAX:g} s")
+        elif not COMMISSION_HOLD_MIN_S <= seconds <= t_lim:
             raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {t_lim:g}] (the bench run's time limit less "
                           f"{bl.TIME_MARGIN_S} s)")
         if (abs(ask.duty) > bl.VCC_WATCH_ABOVE + 1e-12 and not getattr(args, "vcc_watched", False)
@@ -2543,6 +2929,12 @@ def execute(args, bench: Bench) -> dict:
                     "stop_distance_mm": args.stop_distance_mm}))
                 result.update(conditions, cmd="commission", axis=args.axis, power_switch_in_hand=True,
                               board_product=session.preflight_product)
+            elif session.bench is not None and session.bench.hold_run:
+                result = run_hold(bench, session, args.seconds)
+                result.update(conditions, cmd="commission", axis=args.axis, power_switch_in_hand=True,
+                              board_product=session.preflight_product)
+                if session.bench_taken is not None:
+                    result["bench_set"] = session.bench_taken
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
                 result.update(conditions, board_product=session.preflight_product)

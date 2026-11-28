@@ -814,6 +814,12 @@ A1b-1(#666·#667) 위에 hold 를 더한다. 1 절의 BENCH_HOLD·목표·감시
     - 결과: 판정 ①, `hold_verdict`, 정지 위치.
     - 기본값은 11-27 실측 권장 시작값이다(총괄): 상한 0.15·kp 0.5·데드밴드 12·최소 듀티 0.12·ki 0·kd 0(미시험). 같은 값을 B2 화면 기본값으로 쓴다.
     - **모형 끝까지 시험의 자리**(Codex A1b-2a 구현 1 회차 P2 답): `mcu_model` 로 0x07 을 보내는 시험(`here` 외란 뒤 복귀·정상 끝, `zero` 유지, 고착 주입)은 A1b-2b 에 둔다. 호스트의 송신 규칙(`_MOTION` 큐 폐기, `BenchTtyLink` 이어쓰기 검사, 첫 HOLD 한 건 규칙)을 거치지 않은 날 프레임으로 시험하면 그 규칙이 빠진 경로를 고정하게 되기 때문이다. A1b-2a 의 같은 동작은 코어 시험(`test_drive.c` bench_hold_tests, 보드 규칙을 쓰는 `pwm_sim` 하네스)과 모형의 출력 규칙(`mcu_model.c`)으로 덮는다.
+    - **A1b-2b 구현에서 정한 것**(Codex 2b 구현 1–4 회차):
+      - CLI 링크는 실행 인자가 아니라 연 보드의 제품 문자열(한 번 읽은 값으로 링크·호스트 둘 다)로 고른다. bench7 이면 기본 듀티 실행도 `BenchTtyLink` 다. 다른 이미지는 `TtyLink` 그대로다.
+      - 갱신이 어떻게 끝나든 HOLD 게이트를 닫고 큐의 HOLD 를 버린 뒤 종료 0 을 보낸다.
+      - 판정 ① 은 `run_verdict`(보드의 끝 = 그 무장의 ENDED 뒤 DISARMED 짝도 정리 확인, 같은 무장의 최신 STATE 결함)다.
+      - 짝마다 `bench_pair` 행과 첫 HOLD 전 `hold_settings` 행을 남긴다(기록 실패면 HOLD 없음). 회수한 hold 결과는 '판정 불가(설정·표본 없음)' 이다.
+      - `--hold-*` 는 `--hold` 와만 받는다. hold 실행의 길이는 1.2–60 s 다(연속 출력은 보드의 시간 상한이 본다).
     - **PR 나눔**(총괄 동의 2026-11-28): A1b-2a = 펌웨어(bench7·`BENCH_HOLD`·제어·감시·HAL 보고·KTH 묶음 시각)·코덱·계약·고정 벡터·모형, A1b-2b = 호스트(`mcu_host.request_bench_hold`·CLI `--hold`·`hold_verdict`·경계 진입 1 s 창·준비 0 축·끝 타임라인). 콘솔 hold 칸은 B2.
 11. **시험.**
     - 독립 검토 4 회차 몫: `kp 0.001`·db 12·신뢰 오차 13 고정(CCR 0 반올림) → 300 ms `no_progress`, 데드밴드 안·실제 출력 0 구간은 시간 안 쌓임, 단발 2.5 ms 틱의 `command_timeout`·지연 계수 +1·래치 없음, M 실행의 `L(0)` 응답 `bad_value`·뒤 M HOLD 응답 `zero_first`.

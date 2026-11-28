@@ -262,6 +262,127 @@ def rest_position(samples) -> dict:
             "wording": "100 Hz 관측에서 0.5 s 동안 위치 변화 없음"}
 
 
+# ---- bench7 hold (plan 4.3 A1b-2 decisions 7 and 9) ------------------------------------------------------------------
+HOLD_GAP_US = 15_000  # 1.5 x the 10 ms STATE period: 11-14 ms jitter joins, one lost pair (20 ms) breaks
+HOLD_SETTLE_US = 1_000_000
+HOLD_SETTLE_MIN = 50
+HOLD_INSIDE_RATIO = 0.8
+HOLD_TAIL_US = 200_000
+HOLD_EVIDENCE_MS = 100
+
+
+def _inside(b, deadband: int) -> bool:
+    return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle != 0  # a tentative 0 is never inside
+
+
+def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> dict:
+    """Verdict ② of a hold run (decision 9): failure, then hold-back, then the settling judgement.
+
+    ``pairs``: (mcu_time_us, Mode, BenchState) of the run in receipt order; ``result``: the board's result
+    (``result_fields``: stop_reason name, run_flags, end_evidence_age_ms, target, cut_position); ``deadband``: the
+    run's first accepted HOLD's (None when only the board's result was recovered)."""
+    if deadband is None:
+        return {"result": "undecidable", "why": ["no_settings"]}
+    flags = BenchRunFlag(int(result.get("run_flags") or 0) & 0x7F)
+    stop = result.get("stop_reason")
+    if stop != "end_zero":
+        return {"result": "failed", "why": [f"stop_reason:{stop}"]}
+    if BenchRunFlag.RES_UNCLEAN in flags:
+        return {"result": "failed", "why": ["continuity"]}
+    age = result.get("end_evidence_age_ms")
+    if age is None or int(age) > HOLD_EVIDENCE_MS:
+        return {"result": "held", "why": ["0 프레임만 — 고착과 구별 불가"]}
+    if BenchRunFlag.RES_TENTATIVE in flags:
+        return {"result": "held", "why": ["tentative_end"]}
+    end_error = counts_diff(int(result["target"]), int(result["cut_position"]))
+    out = {"end_error": end_error}
+    if abs(end_error) > deadband:
+        return {**out, "result": "unmet", "why": ["end_outside"]}
+    run = [(t, m, b) for t, m, b in pairs if b.run_id == run_id and b.mode == 2]  # this hold run's pairs only
+    driving = [i for i, (t, m, b) in enumerate(run) if m == Mode.ARMED and b.drive_state == BenchDriveState.DRIVING]
+    if not driving:
+        return {"result": "undecidable", "why": ["no_samples"]}
+    last = driving[-1]
+    t_last = run[last][0]
+    end = next(((t, b) for t, m, b in run[last + 1:]
+                if b.drive_state == BenchDriveState.ENDED and b.result_run_id == run_id), None)
+    if end is None or end[0] - t_last > HOLD_GAP_US:
+        return {**out, "result": "unmet", "why": ["end_gap"]}
+    seg = [last]  # back from the last driving pair, the contiguous driving segment
+    for i in range(last - 1, -1, -1):
+        t, m, b = run[i]
+        if not (m == Mode.ARMED and b.drive_state == BenchDriveState.DRIVING) or run[seg[-1]][0] - t > HOLD_GAP_US:
+            break
+        seg.append(i)
+    seg.reverse()
+    first_in = next((i for i in seg if _inside(run[i][2], deadband)), None)
+    if first_in is None:
+        return {**out, "result": "unmet", "why": ["never_inside"]}
+    settled = [i for i in seg if i >= first_in]
+    t0 = run[first_in][0]
+    inside = sum(1 for i in settled if _inside(run[i][2], deadband))
+    out["settle"] = {"from_us": t0, "to_us": t_last, "samples": len(settled), "inside": inside}
+    why = []
+    if t_last - t0 < HOLD_SETTLE_US:
+        why.append("settle_short")
+    if len(settled) < HOLD_SETTLE_MIN:
+        why.append("settle_few")
+    if inside < HOLD_INSIDE_RATIO * len(settled):
+        why.append("settle_ratio")
+    if any(not _inside(run[i][2], deadband) for i in settled if run[i][0] >= t_last - HOLD_TAIL_US):
+        why.append("tail_outside")
+    if why:
+        return {**out, "result": "unmet", "why": why}
+    return {**out, "result": "met", "why": []}
+
+
+ENTRY_WINDOW_US = 1_000_000
+ENTRY_WARN = 10
+ENTRY_GAP_MAX_US = 65_000_000  # a 16-bit count at <= 1 kHz cannot wrap within this
+
+
+def entry_points(pairs, run_id: int) -> list:
+    """The run's (mcu_time_us, deadband_entries) points from (mcu_time_us, Mode, BenchState) pairs of one boot and
+    connection, with a zero point (virtual) at the last pair before the run when one was seen: the count starts at 0
+    at the ARM, which came after it (rounds 11-12)."""
+    pts, before = [], None
+    for t, m, b in pairs:
+        if b.run_id == run_id and (m in (Mode.ARMED, Mode.STOPPING) or pts):
+            if not pts and before is not None:
+                pts.append((before, 0, True))
+            pts.append((t, int(b.deadband_entries)))
+        elif not pts:
+            before = t
+    return pts
+
+
+def entry_window(points, t_now: int) -> dict:
+    """The last second's deadband entries from the run's modular count (decision 7, rounds 10-12): lower =
+    C(now) - C(first point after the window start), upper = C(now) - C(last point at or before it); a zero point
+    (virtual) stands for every time up to it. ``label``: ``warn`` (lower >= 10), ``unknown`` (upper >= 10 > lower, or
+    no base, or a gap over 65 s), else ``none``. Never blocks anything."""
+    if not points:
+        return {"lower": None, "upper": None, "label": "unknown"}
+    t0 = t_now - ENTRY_WINDOW_US
+    c_now = points[-1][1]
+    virtual_in = len(points[0]) > 2 and points[0][2] and points[0][0] >= t0  # the ARM came after the window start
+    after = (t0, 0) if virtual_in else next((p for p in points if p[0] > t0), points[-1])
+    lower = (c_now - after[1]) & 0xFFFF
+    before = [p for p in points if p[0] <= t0]
+    if before:
+        base = before[-1]
+    elif len(points[0]) > 2 and points[0][2]:
+        base = (t0, 0)  # the ARM came after the window start: the count was 0 there
+    else:
+        return {"lower": lower, "upper": None, "label": "unknown"}
+    span = [p for p in points if p[0] >= base[0]]
+    if any(b[0] - a[0] > ENTRY_GAP_MAX_US for a, b in zip(span, span[1:])):
+        return {"lower": lower, "upper": None, "label": "unknown"}
+    upper = (c_now - base[1]) & 0xFFFF
+    label = "warn" if lower >= ENTRY_WARN else ("unknown" if upper >= ENTRY_WARN else "none")
+    return {"lower": lower, "upper": upper, "label": label}
+
+
 __all__ = ["DISTANCE_ENDS", "ClearBinding", "Pair", "after_boundary", "counts_diff", "distance_verdict",
-           "measure_verdict", "pair_of", "reopen_action", "rest_position", "run_verdict", "seq_reached",
-           "stop_action", "window_stop"]
+           "entry_points", "entry_window", "hold_verdict", "measure_verdict", "pair_of", "reopen_action",
+           "rest_position", "run_verdict", "seq_reached", "stop_action", "window_stop"]
