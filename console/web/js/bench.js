@@ -231,8 +231,11 @@ export function resultView(result) {
     } : null,
     measure: result.measure ? { moved: result.measure.moved ?? null, status: result.measure.status ?? null } : null,
     // the back end's rest position is its cumulative count (bench_session.rest_position)
-    rest: result.rest ? { result: result.rest.result ?? null, cumulative: result.rest.cumulative ?? null,
-      why: result.rest.why ?? null, note: result.rest.note ?? null } : null,
+    // the rest position, or only the back end's note when it was never confirmed (a reopening sends rest: null and
+    // rest_note at the top level -- B2b r3 P2-3)
+    rest: result.rest || result.rest_note ? { result: result.rest?.result ?? null,
+      cumulative: result.rest?.cumulative ?? null, why: result.rest?.why ?? null,
+      note: result.rest_note ?? result.rest?.note ?? null } : null,
     resultBypass: [...(result.bench_result?.result_bypass ?? result.bypass_mcu ?? [])],
     previous: result.previous_result ? {
       kind: result.previous_result.kind ?? null, stopReason: result.previous_result.stop_reason ?? null,
@@ -264,6 +267,17 @@ export function clearView(c) {
 }
 
 // The last GRAPH_WINDOW_MS of bench_state samples (the screen stream; verdicts come from the board's own STATEs).
+// The distinct targets a graph window draws, in the order they appear (a gap or an unconfirmed target skipped): the
+// legend names each, so a later run's target never relabels an earlier run's dashed line (B2b r3 P2-2)
+export function targetsInWindow(series) {
+  const out = [];
+  for (const s of series) {
+    if (s.target == null || !Number.isFinite(s.target)) continue;
+    if (out.at(-1) !== s.target) out.push(s.target);
+  }
+  return out;
+}
+
 export class Graph {
   constructor(windowMs = GRAPH_WINDOW_MS) {
     this.windowMs = windowMs;
@@ -325,7 +339,9 @@ export class Graph {
       prev = c;
       return total;
     });
-    return this.samples.map((s, i) => (s.gap ? { t: s.t, value: null, duty: null, current: [null, null, null, null] } : {
+    // a board gap carries no value of any kind: every field null, never undefined (B2b r3 P2-1)
+    return this.samples.map((s, i) => (s.gap ? { t: s.t, value: null, duty: null, current: [null, null, null, null],
+      holdError: null, target: null, deadband: null, moved: null } : {
       t: s.t,
       value: axis === "M" ? s.steer : axis === "H" ? s.lift : counts[i],
       duty: s.duty[AXES.indexOf(axis)] / 1e4,

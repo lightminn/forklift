@@ -4,7 +4,7 @@
 // STOP is the shared one (pressStop): the bench screen adds only its own requests.
 
 import { AXES, BYPASS, DEFAULT_SOURCE, HOLD_TARGETS, advice, bypassChips, clearView, clearedOnChange, fieldState,
-  largePhrase, rangeMarkBefore, resultView, runKind } from "./bench.js";
+  largePhrase, rangeMarkBefore, resultView, runKind, targetsInWindow } from "./bench.js";
 import { BENCH_TEXT as T, benchDetailText } from "./profile.js";
 
 const VIEW = "bench";
@@ -202,6 +202,14 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
   }
 }
 
+// the previous run's hold verdict and its reasons, the label once when a reason already says it (B2b r3 P3)
+function previousHold(p) {
+  if (!p.holdVerdict) return "";
+  const label = T.holdResult[p.holdVerdict] ?? p.holdVerdict;
+  if (p.holdWhy.some((w) => String(w).startsWith(label))) return ` · ${p.holdWhy.join(", ")}`;
+  return ` · ${label}${p.holdWhy.length ? `(${p.holdWhy.join(", ")})` : ""}`;
+}
+
 const FIELD_IDS = { duty: "bn-duty", hold_target: "bn-hold-target", hold_value: "bn-hold-value", hold_cap: "bn-hold-cap",
   hold_kp: "bn-hold-kp",
   hold_ki: "bn-hold-ki", hold_kd: "bn-hold-kd", hold_deadband: "bn-hold-db", hold_min_duty: "bn-hold-min",
@@ -351,13 +359,15 @@ function renderResult(m) {
     row(v.measure || v.kind === "measure" ? T.verdictMeasure : T.verdictDistance, distText),
     v.rest ? row(T.rest, `${v.rest.cumulative !== null ? `누계 ${v.rest.cumulative} 카운트 · ` : ""}`
       + `${v.rest.result === "settled_at_100hz" ? T.restSettled
-        : `확인 못 함${v.rest.why ? `(${T.restWhy[v.rest.why] ?? v.rest.why})` : ""}`}`) : null,
+        : v.rest.result === null && v.rest.note === "reopened" ? T.restNote.reopened
+          : `확인 못 함${v.rest.why ? `(${T.restWhy[v.rest.why] ?? v.rest.why})` : ""}`}`
+      + `${v.rest.note && !(v.rest.result === null && v.rest.note === "reopened")
+        ? ` · ${T.restNote[v.rest.note] ?? v.rest.note}` : ""}`) : null,
     v.holdNotes.length ? row("메모", v.holdNotes.join(" · ")) : null,
     v.resultBypass.length ? row(T.runBypass, v.resultBypass.map((n) => T.bypass[n] ?? n).join(", ")) : null,
     v.previous ? row(T.previousRun, `${v.previous.kind ?? "—"} · ${v.previous.stopReason ?? "—"}`
       + `${v.previous.target !== null ? ` · 목표 ${v.previous.target}` : ""}`
-      + `${v.previous.holdVerdict ? ` · ${T.holdResult[v.previous.holdVerdict] ?? v.previous.holdVerdict}` : ""}`
-      + `${v.previous.holdWhy.length ? `(${v.previous.holdWhy.join(", ")})` : ""}`) : null,
+      + `${previousHold(v.previous)}`) : null,
     v.advisories.length ? row("안내", v.advisories.map((a) => (a === "high_duty_distance_unverified"
       ? T.advice.highDutyDistance : a)).join(" · ")) : null,
     v.copyError ? row(T.copyError, v.copyError) : null,
@@ -411,13 +421,14 @@ function drawGraph(m, axis) {
     const emax = Math.max(20, ...errs.map((e) => Math.abs(e)));
     // the target itself on the error's scale is the zero line: drawn dashed so 'at the target' reads at a glance
     ctx.setLineDash([4, 4]);
-    line(ser.map((s) => [s.t, s.target === null ? null : 0]), 4, half - 8, -emax, emax, col("muted", "#999"));
+    line(ser.map((s) => [s.t, s.target == null ? null : 0]), 4, half - 8, -emax, emax, col("muted", "#999"));
     ctx.setLineDash([]);
     line(ser.map((s) => [s.t, s.holdError]), 4, half - 8, -emax, emax, col("lidar", "#c8f"));
     ctx.fillStyle = col("muted", "#999");
     ctx.font = "11px sans-serif";
-    const tg = ser.map((s) => s.target).filter((x) => x !== null).at(-1);
-    ctx.fillText(`목표까지 오차 ±${emax} 카운트 · 점선 = 목표${tg !== undefined ? ` ${tg}` : ""}`, W - 250, 14);
+    // every target the window draws, in order: a later run's target never relabels an earlier run's line (r3 P2-2)
+    const tgs = targetsInWindow(ser);
+    ctx.fillText(`목표까지 오차 ±${emax} 카운트 · 점선 = 목표${tgs.length ? ` ${tgs.join(" → ")}` : ""}`, W - 250, 14);
   }
   const cur = ser.flatMap((s) => s.current).filter((c) => c !== null);
   const cmax = Math.max(1, ...cur.map((c) => Math.abs(c)));

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSession } from "../js/protocol.js";
-import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
+import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, targetsInWindow, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
   resultView, runFields, wheelDelta } from "../js/bench.js";
 
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
@@ -528,6 +528,22 @@ test("the graph keeps the run's hold error and breaks on a null", () => {
   assert.deepEqual(g.series("H").map((x) => x.holdError), [null, null, null, null]);
 });
 
+test("a board gap's sample is null in every field and the legend names each run's target (B2b r3 P2-1, P2-2)", () => {
+  const g = new Graph(100000);
+  const st = (err, target) => ({ board: { boot_id: 1, duty_e4: [0, 0, 100, 0], current_ma: [0, 0, 0, 0],
+    steering_rad: 0.1, lift_m: 0, wheel_count: [0, 0] }, run: { axis: "M", error_counts: err, target, deadband: 12 } });
+  g.push(0, st(3, 60));
+  g.push(10, { board: null });  // the board lost: no target, no error -- never undefined
+  g.push(20, st(2, 60));
+  g.push(30, st(null, null));  // the next run, its target not confirmed yet
+  g.push(40, st(-8, 120));
+  const s = g.series("M");
+  assert.deepEqual(s.map((x) => x.target), [60, null, 60, null, 120]);
+  assert.deepEqual(s.map((x) => x.holdError), [3, null, 2, null, -8]);
+  assert.deepEqual(targetsInWindow(s), [60, 120]);  // the earlier run's line keeps its own number
+  assert.deepEqual(targetsInWindow(s.slice(0, 4)), [60]);  // an unconfirmed target adds nothing
+});
+
 
 test("the hold's cap is its own field: a switch to a duty run never sends it as a fixed output", () => {
   const h = runFields({ ...M, mode: "hold", hold_target: "here", hold_cap: "0.13", duty: "0.4", count_sign: "1" });
@@ -584,6 +600,12 @@ test("the result view: a withheld measure, a missing distance result, the previo
   ["판정 불가(설정·표본 없음)"]);
   assert.deepEqual(resultView({ rest: { result: "unconfirmed", why: "no_sample" }, verdict: { run_cleanup: { ok: true } } })
     .rest, { result: "unconfirmed", cumulative: null, why: "no_sample", note: null });
+  // a reopening during the rest position: the back end sends rest null and the note at the top level (r3 P2-3)
+  assert.deepEqual(resultView({ rest: null, rest_note: "reopened", verdict: { run_cleanup: { ok: true } } }).rest,
+    { result: null, cumulative: null, why: null, note: "reopened" });
+  assert.equal(resultView({ rest: { result: "settled_at_100hz", cumulative: 9 }, rest_note: "stop",
+    verdict: { run_cleanup: { ok: true } } }).rest.note, "stop");
+  assert.equal(resultView({ verdict: { run_cleanup: { ok: true } } }).rest, null);
   assert.equal(v.copyError, "disk");
   assert.equal(resultView({ kind: "distance", verdict: { run_cleanup: { ok: false } } }).distanceMissing, true);
 });
