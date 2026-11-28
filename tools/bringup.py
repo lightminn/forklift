@@ -3140,6 +3140,8 @@ def execute(args, bench: Bench) -> dict:
                         # cleanup in execute()'s finally retries (Codex PR-2a re-review 7 P3)
                         session.cleanup_confirmed = False
                         session.aborted = session.aborted or "exception"
+                        # kept apart: a later board record never turns an interrupted run into a pass (impl r5 P2-1)
+                        session.late_failures = [*getattr(session, "late_failures", []), "cleanup_interrupted"]
                         result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
                         result["result"] = "aborted"
                 # still no confirmed stop: nobody is asked to look at a wheel that may not have stopped
@@ -3220,6 +3222,13 @@ def execute(args, bench: Bench) -> dict:
             basis = "board_record_only"
             if "보드 기록만(구동 표본 없음)" not in again["labels"]:
                 again["labels"].append("보드 기록만(구동 표본 없음)")
+            if isinstance(result.get("metrics"), dict):
+                # as the run's own board-record path: no figure and no sign from samples that never drove (r5 P2-2)
+                result["metrics"].update(valid=False, reason="no_driving_sample", measured_sign="invalid")
+                m = result["metrics"]
+                if isinstance(result.get("verdict"), dict) and result["verdict"].get("note") != "sensorless":
+                    result["verdict"] = sign_verdict(m.get("duty_e4"), "invalid", result.get("observed", "unknown"),
+                                                     duty_sign_in_build=m.get("duty_sign_in_build"))
         if basis is not None:
             result.update({k: v for k, v in _final({"result": basis}, session).items() if k != "result_basis"})
         if not again["ok"] and result.get("result") == "ok":

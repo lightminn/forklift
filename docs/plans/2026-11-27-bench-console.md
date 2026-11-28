@@ -935,7 +935,7 @@ B2a-1 이 넣은 것:
 - `bench_session.first_answer(evidence, *, seq16, run_id, write, lim_mcu_us, lim_host_ns, now_ns, stop_zero_done_ns)` — 결정 3 의 증거 순서(MCU 시각, STATE 가 자기 짝보다 먼저)·두 마감·정지 0 뒤 귀속·거부는 `last_rx_seq` 가 첫 seq 전일 때만. CLI 의 `_first_nonzero_wait` 가 이것을 쓴다.
 - `bench_session.unexpected_faults(fault_flags, axis, bypass)` — 결정 4 의 예상 상태 비트. CLI(hold·거리·측정·듀티)와 B1 콘솔의 판정 ① 이 함께 쓴다.
 - CLI: `confirm_last_prep_zero`(거리·hold 의 첫 프레임 전, 마지막 준비 0 고정·수락 확인, cap + 50 ms), `bench_verdict1`(모든 bench7 실행의 `verdict1`, 보드의 끝으로 정리 확인, 늦은 사유 8 의 라벨), 거리·측정 실행도 실행 전체의 `bench_pair` 행(수신 시각·호스트 연결·`conn_gen` 포함), `final_row`(최종 행 한 번 쓰기·fsync, 실패해도 잘라 되돌리지 않음 → `record_complete`·`final_record_error`), `verdict1` 은 `execute` 끝(정리 재시도 뒤)에서 다시 만들고 실패면 `result` 도 `aborted`, 기록 훅은 그때까지 유지, 결과 JSON `flush=True`.
-- 받아들인 한계(B2a-1 구현 4 회차): 최종 행을 쓰다 디스크가 차서 일부만 쓰이면 그 줄은 잘린 채 남는다(줄바꿈은 덧붙이고, 다음 실행은 새 줄에서 시작). 그 파일 전체를 읽는 기존 판독기(`bringup clock`·`analyze`)는 그 줄에서 멈추므로, 그 기록은 잘린 줄을 손으로 지운 뒤 읽는다. 잘라 되돌리기는 같은 파일의 다른 작성자 행을 지울 수 있어 쓰지 않는다. 같은 `--out` 을 두 프로세스가 동시에 쓰는 경우는 지원하지 않는다(5.1 은 실행마다 새 `$D`).
+- 받아들인 한계(B2a-1 구현 4–5 회차, Codex 동의): 최종 행이 일부만 쓰이면(디스크 부족·파일 크기 제한 등) 그 줄은 잘린 채 남는다(줄바꿈은 덧붙이고, 다음 실행은 새 줄에서 시작). 그 파일 전체를 읽는 기존 판독기(`bringup clock`·`analyze`)는 그 줄에서 멈추므로, 그 기록은 잘린 줄을 손으로 지운 뒤 읽는다. 잘라 되돌리기는 같은 파일의 다른 작성자 행을 지울 수 있어 쓰지 않는다. 같은 `--out` 을 두 프로세스가 동시에 쓰는 경우는 지원하지 않는다(5.1 은 실행마다 새 `$D`).
 - 계획과 다르게 한 것 하나: STATE 행에 `accepted` 칸을 싣는 대신 호스트가 채택한 STATE 마다 `state_accepted` 행을 따로 쓴다(STATE 행은 호스트 검사 전 수신 바이트에서 쓰이므로 그 시점에는 채택 여부를 모른다).
 
 ### B2 계획 검토
