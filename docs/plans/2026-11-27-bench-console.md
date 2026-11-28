@@ -977,63 +977,88 @@ B2b 가 넣은 것(화면, `console/web/js/bench.js`·`bench_dom.js`·`profile.j
 
 ## 4.5 A1c 구현 결정 — MT 원천(L·R 의 hold·거리 정지) (2026-11-28)
 
-A1b(#666–#669)와 B2(#670–#672)가 KTH 원천(M·H)의 hold·거리 실행을 CLI·콘솔까지 열었다. A1c 는 0.1 절의 MT 원천(L·R 바퀴 모터축 증분 카운트)을 같은 틀에 넣는다. 1 절 계약(원천 일반화·MT 단위·진행 감시·증거 시효)을 그대로 따르고, 아래는 코드에서 정할 것만 적는다. **실물 MT 는 미장착**이라 검증은 펌웨어 호스트 시험과 `mcu_model` 의 엔코더 모형(`--encoder-sign-flip`·`--encoder-frozen`·`--hand-turn-wheel`)으로만 한다.
+A1b(#666–#669)와 B2(#670–#672)가 KTH 원천(M·H)의 hold·거리 실행을 CLI·콘솔까지 열었다. A1c 는 0.1 절의 MT 원천(L·R 바퀴 모터축 증분 카운트)을 같은 틀에 넣는다. 1 절 계약(원천 일반화·MT 단위·진행 감시·증거 시효)을 그대로 따르고, 아래는 코드에서 정할 것만 적는다. **실물 MT 는 미장착**이라 검증은 펌웨어 호스트 시험과 `mcu_model` 의 엔코더 모형(`--encoder-sign-flip`·`--encoder-frozen`·`--hand-turn-wheel`, 아래에서 더하는 읽기 실패 주입)으로만 한다. **KTH 경로는 바꾸지 않는다**(A1b·B2 시험이 그대로 통과).
 
 1. **PR 나눔.**
-   - A1c-1 = 펌웨어(원천 일반화·MT 짝 검사·MT hold·MT 거리), 코덱·계약 8 절·고정 벡터, 호스트 게이트의 세대 판별, `mcu_model` 과 펌웨어 호스트 시험.
-   - A1c-2 = CLI(`tools/bringup.py commission`)의 MT 실행과 공유 판정(`bench_session`)의 MT 규칙, 모형 HIL 시험.
+   - A1c-1 = 펌웨어(원천 일반화·MT 짝 검사·MT 표본·MT hold·MT 거리), 보드 HAL 의 엔코더 읽기 성공 표시, 코덱·계약 8 절·고정 벡터, 세대 판별(보드·모형·호스트 게이트를 함께, 결정 2), `mcu_model`, 펌웨어 호스트 시험. 이 PR 에서 기존 KTH CLI·콘솔 경로가 bench8 보드·모형으로 그대로 도는지 HIL 로 확인한다.
+   - A1c-2 = CLI(`tools/bringup.py commission`)의 MT 실행과 공유 판정(`bench_session`)의 MT 규칙, CPR 로더, 모형 HIL 시험.
    - A1c-3 = 콘솔 백엔드(`tools/bench_console.py`)와 화면의 MT 칸, 기존 화면 무변경 재생(완료 조건 2).
-   - 순서는 1 → 2 → 3. A1c-1 머지 뒤에도 호스트는 MT 요청을 보내지 않는다(A1c-2 전까지 CLI·콘솔은 지금처럼 `not_yet_a1c`).
+   - 순서는 1 → 2 → 3. A1c-1 머지 뒤에도 CLI·콘솔은 MT 요청을 보내지 않는다(A1c-2 전까지 `not_yet_a1c`).
 
-2. **세대 `bench8`(기능 판별).** wire 배치(필드·크기)는 bench7 그대로다. 바뀌는 것은 뜻이다: BENCH_SET·BENCH_HOLD 의 `source = 2`(MT)를 L·R 에서 받고, MT 의 `stop_counts` 와 hold 를 받는다. bench7 보드는 같은 바이트를 `bad_value` 로 거부하므로 위험은 없지만, A1b-2 와 같이 세대를 올려 호스트가 기능을 USB 제품 문자열로 판별하게 한다(`lim=lr1 bench8`, `BENCH_SUFFIX` 정확 일치, bench7 폴백 없음). 고정 벡터는 `bench8` 로 새로 만들고 MT 짝·MT hold 벡터를 더한다. 운영 v3·진단 이미지는 바뀌지 않는다(`test_link_nobench` 그대로).
+2. **세대 `bench8`(기능 판별).** wire 배치(필드·크기)는 bench7 그대로이고 뜻이 바뀐다: BENCH_SET·BENCH_HOLD 의 `source = 2`(MT)를 L·R 에서 받고, MT 의 `stop_counts`·hold 를 받으며, 정지 사유 `mt_no_sample`(13, 결정 4)이 생긴다. bench7 보드는 같은 바이트를 `bad_value` 로 거부하므로 위험은 없지만, A1b-2 와 같이 세대를 올려 호스트가 USB 제품 문자열로 기능을 판별한다(`lim=lr1 bench8`, `BENCH_SUFFIX` 정확 일치, bench7 폴백 없음).
+   - **모형도 자기 세대를 말한다**(Codex A1c 계획 1 회차 P2-6): 지금 콘솔의 `--model` 은 호스트 상수 `MODEL_PRODUCT`(…`bench7`)를 스스로 붙인다. 상수만 바꾸면 옛 `mcu_model` 실행 파일에도 bench8 을 붙이게 된다. 그래서 `mcu_model --bench 1` 이 시작할 때 자기 제품 문자열을 한 줄로 내고(빌드 상수), 호스트는 그것을 읽어 게이트에 넣는다. 옛 모형(문자열 없음·bench7)은 ARM 전에 거부된다. 시험: bench8 보드·모형은 KTH CLI·콘솔 경로가 그대로, bench7 보드·모형은 ARM 전 거부.
+   - 고정 벡터는 `bench8` 로 새로 만들고 MT 짝·MT hold·`mt_no_sample` 벡터를 더한다. 운영 v3·진단 이미지는 바뀌지 않는다(`test_link_nobench` 그대로).
 
-3. **원천과 축의 짝.** 펌웨어는 `kth ↔ M·H`, `mt ↔ L·R` 만 받는다(BENCH_SET·BENCH_HOLD 모두, 다르면 `bad_value`). `source = none` 은 어느 축이든 듀티 구동만. **MT 듀티 측정(정지·hold 없음)** 도 받는다: KTH 측정 실행처럼 BENCH_STATE 에 그 축의 카운트를 싣는다.
+3. **원천과 축의 짝.** 펌웨어는 `kth ↔ M·H`, `mt ↔ L·R` 만 받는다(BENCH_SET·BENCH_HOLD 모두, 다르면 `bad_value`). `source = none` 은 어느 축이든 듀티 구동만. **MT 측정 실행**(듀티·정지·hold 없음)도 받는다: KTH 측정 실행처럼 BENCH_STATE 에 그 축의 카운트를 싣는다.
 
-4. **카운트 보기(count view) 하나로 일반화.** 거리·hold·결과·증거 코드는 지금 `bench_kth` 를 직접 읽는다. 이것을 실행 축의 '카운트 보기'로 바꾼다. 필드: `have`, `lost`, `losses`, `cum`, `trust_cum`, `trusted_new`(이 틱의 신뢰 표본), `last_zero`, `trust_raw`, `trust_t`, `lo_known`·`lo`(표본 취득 하한).
-   - KTH: 지금 값 그대로(동작 변화 없음 — A1b 시험이 그대로 통과해야 한다).
-   - MT: 그 쪽 `d->wheel[i].count`(STATE `wheel_count_left/right` 와 같은 값, 엔코더 부호 적용 뒤, 모듈러 32 비트). 매 틱 LPTIM 을 읽으므로 `trusted_new` 는 그 틱 읽기가 버려지지 않았을 때 늘 참, `last_zero` 는 늘 거짓, `trust_raw` 는 0(목표 `zero`·`abs` 가 없으므로 쓰지 않음), `trust_t` 와 `lo` 는 그 틱 시각(HAL 이 LPTIM 을 읽은 시각 = `now_us`), `lo_known` 은 HAL 출력 보고가 있을 때(KTH 와 같은 조건, 4.3 결정 6).
-   - **MT 손실은 고장이다**: 엔코더 `gap`·`jump` 는 지금도 모든 모드에서 `enter_fault` 로 가고(그 틱 `read_sensors`, 벤치 판단보다 먼저), 그래서 MT 실행은 정지 사유 `fault`(고장 비트로 원인)로 끝난다. MT 에는 `kth_lost`·`kth_zero_suspect` 가 없다. `losses` 는 MT 에서 고장 수가 아니라 0 고정이다(고장이면 이미 끝나므로 UNCLEAN 표식이 필요 없음).
-   - ARM·첫 HOLD 의 '유효한 카운트' 조건(`have && !lost && !zs_wait`)은 MT 에서 '그 쪽 엔코더가 초기화됨'(부팅 첫 틱 뒤 늘 참)이다.
+4. **MT 표본(1 회차 P1-1).** 보드 HAL 은 LPTIM 안정 읽기가 실패하면 직전 값을 돌려주고 실패를 알리지 않는다(`encoder.c` `encoder_read`). 그래서 '매 틱 새 표본'으로 둘 수 없다.
+   - **HAL 이 바퀴별 읽기 성공과 읽기 시작 시각을 넘긴다**(벤치 빌드만, `drive_inputs` 에 `wheel_fresh[2]`·`wheel_start_us[2]` — 읽기 직전 HAL 시각 = 표본 취득 하한). 모형·plant·HIL 은 늘 성공(모형에는 읽기 실패 주입 인자를 더한다: 바퀴·시작 ms·틱 수).
+   - MT 카운트 보기: 신뢰 표본은 **읽기에 성공한 틱**의 그 쪽 `d->wheel[i].count`(STATE `wheel_count_left/right` 와 같은 값, 엔코더 부호 적용 뒤, 모듈러 32 비트). 실패 틱은 표본이 아니다: D 항의 속도, 데드밴드 진입 세기, hold 진행 자격, 거리 진행·증거 어디에도 들어가지 않는다. `lo` 는 그 표본의 `wheel_start_us`(64 비트로 넓힘), `lo_known` 은 HAL 출력 보고가 있을 때(4.3 결정 6 과 같은 조건). 진행 자격의 200 µs(`BENCH_HOLD_ELIGIBLE_US`)는 MT 에도 같은 값을 쓴다 — KTH 의 내부 지연 몫이 MT 에는 없으므로 보수적 여유다(P3).
+   - 같은 카운트를 다시 읽는 데 성공한 틱은 정상 표본이다(정지 중 MT).
+   - 실행 중 그 쪽 읽기 성공이 감시 시간(0.3 s) 동안 한 번도 없으면 정지 사유 `mt_no_sample`(13)이다. 공용 감시의 '신뢰 표본 없이 만료 → `kth_zero_suspect`' 갈래로 떨어지지 않게 원천별로 나눈다. `kth_zero_suspect`·`kth_lost` 는 MT 에 없다.
+   - 코어의 오도메트리 `gap`·`jump` 판단은 바꾸지 않는다(운영 이미지와 같은 동작). 읽기 실패가 길면 `gap` 은 걸리지 않지만 MT 실행은 `mt_no_sample` 로 선다.
 
-5. **MT hold.**
+5. **MT 연속성 손실(1 회차 P1-4).** 엔코더 `gap`·`jump` 는 지금도 모든 모드에서 `enter_fault` 로 간다(그 틱 `read_sensors`, 벤치 판단·명령보다 먼저; 부팅 첫 틱의 늦은 `gap` 만 예외). `wheel_enc_rebase` 는 누적값을 둔 채 그 걸음을 버리므로, 그 뒤 카운트는 실제 위치와 어긋난다.
+   - 그 쪽 바퀴의 걸음을 버린 일(`gap`·`jump`)마다 그 바퀴의 **MT 손실 수**(부팅 이후, 모듈러)를 올린다. 실행의 UNCLEAN·결과의 `RES_UNCLEAN` 은 KTH 와 같은 규칙(ARM 때 손실 수와 비교)이다. 버린 틱에 `bench_end` 가 부르기 전에 손실 수가 먼저 오른다(같은 `read_sensors` 안에서 `enter_fault` 앞).
+   - 공용 측정 판정(`measure_verdict`)은 `RES_UNCLEAN` 이면 `withheld:continuity` 라 잘린 변위를 `confirmed` 로 내지 않는다. **정상 절단 뒤**의 손실은 고정된 결과를 바꾸지 않고(결과 칸은 끝 전이에 고정), 살아 있는 UNCLEAN 표식으로 멈춘 자리 관측만 무효로 한다(결정 9).
+   - 시험: 절단과 `jump` 가 같은 틱, 절단 뒤 `jump`·CLEAR 가 관측창 안에 오는 경우, 측정 실행 도중 `jump`.
+
+6. **MT hold.**
    - 목표는 `here`·`rel:±N` 만(0.1 절). `zero`·`abs` 는 펌웨어·호스트 모두 `bad_value`.
-   - CPR: BENCH_HOLD 의 `cpr` 칸. KTH 는 4,096 이 아니면 거부(지금 그대로), MT 는 1–65,535(0 거부). hold 의 이득 단위(rad 당 듀티)는 실린 CPR 로 바꾼다 — `bench_hold` 의 고정 `BENCH_HOLD_CPR` 대신 첫 HOLD 의 `cfg.cpr` 를 쓴다. MT 의 rad 는 **모터축** rad 다(0.1 절, 바퀴는 80 배 느림).
-   - 범위 검사: KTH 의 조향·승강 범위 검사(`steer.valid`·`out_of_range`)는 MT 에 없다. 바퀴는 범위가 없다.
-   - L·R 출력은 지금처럼 시운전 경로의 바퀴 듀티 기울기 제한(`wheel_duty_slew_per_s`)을 거친다. 진행 감시와 귀속은 HAL 이 보고한 실제 적용 출력으로 하므로 판정은 그대로지만, 반전이 느려 오버슈트가 KTH 보다 클 수 있다(모형 시험에서 정착 확인).
-   - 진행 감시는 4.3 결정 7 그대로(오차 크기 개선 R = 2, 0.3 s). MT 에서 `kth_zero_suspect` 갈래(0x0000-only 시간)는 생기지 않는다.
-   - 기본값은 KTH 와 같은 숫자(상한 0.15, kp 0.5 /rad, 데드밴드 12 카운트, 최소 출력 0.12, ki 0, kd 0)로 두고 '실물 MT 미장착 — 미검증'으로 표시한다. 모터축 12 카운트 = 0.018 rad = 바퀴 0.013°.
+   - CPR: BENCH_HOLD 의 `cpr` 칸. KTH 는 4,096 이 아니면 거부(지금 그대로), MT 는 1–65,535(0 거부). hold 의 이득 단위(rad 당 듀티)와 D 항의 속도 환산은 첫 HOLD 의 `cfg.cpr` 를 쓴다(지금 `bench_hold.c` 의 고정 `BENCH_HOLD_CPR` 사용처 둘을 바꾼다). MT 의 rad 는 **모터축** rad 다(0.1 절).
+   - 범위 검사: KTH 의 조향·승강 범위 검사는 MT 에 없다(바퀴는 범위가 없음).
+   - **바퀴 기울기 제한(1 회차 P1-2):** 시운전 경로는 L·R 출력에 `wheel_duty_slew_per_s`(보드 2.0 /s)를 건다. 그대로면 데드밴드 진입으로 hold 가 0 을 내도 +0.12 에서 0 까지 60 ms 동안 계속 밀어 4.3 결정의 '데드밴드 안 출력 0' 이 깨진다. 그래서 **벤치 hold 실행의 L·R 출력은 0 쪽으로의 변화(크기 감소·0)는 바로 쓰고, 0 에서 멀어지는 변화(크기 증가·부호 반전 뒤 증가)만 기울기 제한을 거친다.** STOPPING 이 바퀴 듀티를 바로 0 으로 두는 것과 같은 쪽이다. 거리·듀티 실행은 지금 그대로. 시험은 보드 값(2.0 /s) 설정의 펌웨어 호스트 시험으로 한다(모형의 1,000 /s 는 이 반례를 가림): 데드밴드 진입 틱의 출력 0, 반전.
+   - 진행 감시는 4.3 결정 7 그대로(오차 크기 개선 R = 2, 0.3 s).
+   - 기본값은 KTH 와 같은 숫자(상한 0.15, kp 0.5 /rad, 데드밴드 12 카운트, 최소 출력 0.12, ki 0, kd 0)이고 '실물 MT 미장착 — 미검증'으로 표시한다. 모터축 12 카운트 = 0.018 rad = 바퀴 0.013°.
+   - hold 길이 1.2–60 s 검사는 L·R 에도 같다(1 회차 P2-5).
 
-6. **MT 거리 정지.** `bench_run_step` 의 규칙 그대로(기준 카운트는 첫 비영 구동 직전 틱, 목표 통과 → `distance_reached`, 기대 방향 반대로 128 카운트 → `no_progress`, 귀속 출력 R = 2 진행 감시 0.3 s → `no_progress`). MT 에는 잠정 래치(`distance_provisional`)가 없다 — 0x0000 잠정 표본이 없으므로 MT 거리 결과는 `distance_reached` 또는 다른 끝 사유뿐이고 `distance_confirm` 은 쓰지 않는다. 시험: LPTIM 16 비트 `65535↔0`, 모듈러 누적 `0x7fffffff↔0x80000000`, L·R 양방향, 역극성(`--encoder-sign-flip`, 즉시 반대 128 → `no_progress`), 고정(`--encoder-frozen`, 0.3 s → `no_progress`), 반범위 밖 목표 거부(지금 규칙), 도중 엔코더 `jump`(→ `fault`).
+7. **MT 거리 정지(1 회차 P2-1).** 기준 카운트는 첫 비영 구동 직전 틱, 목표 통과 → `distance_reached`, 기대 방향 반대로 128 카운트 → `no_progress`, R = 2 진행 감시 0.3 s → `no_progress`, 읽기 성공 없음 → `mt_no_sample`.
+   - **출력 귀속은 HAL 의 실제 적용 출력**(4.3 결정 6 의 보고: `applied_any`·한 부호의 연속 구간·`run_since`, 진행 자격은 hold 와 같은 200 µs 규칙)으로 한다. 지금 KTH 거리 감시는 코어가 쓴 `d->out.duty` 를 보는데, KTH 경로는 바꾸지 않으므로 MT 경로만 HAL 귀속이다.
+   - **같은 틱의 순서:** 그 틱 표본의 진행(기준점 이동)과 증거 갱신을 먼저 하고, 그다음 목표 통과를 래치한다. 그래서 `0→3`·목표 +2 처럼 첫 자격 표본이 곧바로 목표를 넘어도 증거가 남는다. 목표 1 카운트는 증거 없이도 그 틱에 끊는다(증거는 판정 ③ 의 근거가 아님, 시험으로 고정).
+   - MT 에는 잠정 래치(`distance_provisional`)가 없다(0x0000 잠정 표본이 없음). `distance_confirm` 은 쓰지 않는다.
+   - 시험: LPTIM 16 비트 `65535↔0`, 모듈러 누적 `0x7fffffff↔0x80000000`, L·R 양방향, 역극성(`--encoder-sign-flip`), 고정(`--encoder-frozen`), 읽기 실패 0.3 s(`mt_no_sample`), 반범위 밖 목표 거부(지금 규칙), 도중 `jump`(→ `fault`·UNCLEAN), 목표 1 카운트.
 
-7. **MT 증거와 나이.** 1 절대로 MT 의 증거는 '마지막 기대 방향 진행'의 MCU 시각이다. 이렇게 정한다:
-   - 거리 실행: 진행 감시가 기준점을 옮긴 틱(귀속 출력의 기대 방향으로 R = 2).
-   - hold 실행: hold 감시가 되돌린 틱(오차 크기 개선 R = 2).
-   - 측정 실행(정지 없음)·듀티 실행: 증거 없음(나이 `0xFFFF`, 판정에 쓰지 않음).
-   - 끝 전이에서 나이를 결과 칸에 고정(지금 그대로). 호스트의 hold '목표 충족' 문턱은 KTH 0.1 s, **MT 1 s**(1 절). 그래서 1 s 넘게 정착한 MT hold 는 '판정 보류(증거 나이 x s)'가 정상이다 — 화면은 'MT 는 멈춰 있으면 읽기가 살아 있는지 확인할 수 없음'을 덧붙인다.
+8. **MT 증거와 나이(1 회차 P1-3·P2-2).** 1 절대로 MT 의 증거는 '마지막 기대 방향 진행'의 MCU 시각이다.
+   - 거리 실행: 결정 7 의 자격 있는 기준점 이동(기대 방향 R = 2)이 일어난 표본의 시각.
+   - hold 실행: **자격 있는(4.3 결정 7 의 eligible) 표본이 오차를 R = 2 이상 줄인** 경우만 — 감시의 ③, 그리고 자격 있는 움직임으로 데드밴드에 들어온 ①. 데드밴드 안에 그냥 있는 표본(①의 나머지), 출력 없는 진입, 같은 카운트, 읽기 실패는 증거를 갱신하지 않는다. 그래서 `--encoder-frozen` 의 `here` 는 증거가 없다.
+   - 측정·듀티 실행: 증거 없음(나이 `0xFFFF`).
+   - 끝 전이에서 나이를 결과 칸에 고정(지금 그대로). 호스트의 hold '목표 충족' 문턱은 KTH 0.1 s, **MT 1 s**(1 절). 그래서 정착한 뒤 1 s 넘게 그대로 선 MT hold 는 '판정 보류'가 통상이다(무외란 `here` 는 처음부터 증거 없음). 화면·기록은 보류 사유와 함께 '데드밴드 안 관측 x s' 를 보여 주고 'MT 는 멈춰 있으면 읽기가 살아 있는지 확인할 수 없음'을 덧붙인다. `met` 이 나는 벡터: 정착 → 외란(모형 `--hand-turn-wheel`) → 종료 0.2–1 s 전에 복귀.
+   - 호스트 판정의 '데드밴드 안' 표본(`_inside`)은 원천별로 본다: KTH 는 지금(`raw_angle ≠ 0`), MT 는 읽기 성공한 VALID 표본.
 
-8. **MT 멈춘 자리(정지 뒤 관측).** `rest_position` 은 KTH 의 비영 재기준(`raw_angle ≠ 0`)과 증거 나이 0.1 s 를 요구한다. MT 는 정지 중 카운트가 생기지 않고 LPTIM 안정 읽기 실패도 같은 값을 돌려주므로 둘 다 성립하지 않는다. 그래서 MT 는 따로 판정한다: 실행 축의 카운트가 100 Hz 표본으로 0.5 s 동안 그대로이고 표본 간격·실행 id·연속성 조건(지금 그대로)을 지키면 `unchanged_at_100hz`(KTH 의 `settled_at_100hz` 와 다른 이름, '읽기 신선도는 확인 못 함'). 그 밖은 지금처럼 `unconfirmed`.
+9. **MT 멈춘 자리(1 회차 P2-3).** `rest_position` 은 KTH 의 비영 재기준과 증거 나이 0.1 s 를 요구한다. MT 는 정지 중 카운트가 생기지 않으므로 따로 판정한다.
+   - 관측 표본은 그 실행의 부팅·무장·연결·`run_id`·축·원천이 모두 같은 DISARMED 짝만.
+   - 관측창의 **모든** 표본이 VALID 이고 살아 있는 UNCLEAN 이 없으며, 같은 카운트, 이웃 표본 간격이 양수이고 15 ms 이하, 그 구간이 연속 0.5 s 이상이면 `unchanged_at_100hz`(KTH 의 `settled_at_100hz` 와 다른 이름, '읽기 신선도는 확인 못 함'). 그 밖은 `unconfirmed`(사유 지금 그대로 + `continuity`).
+   - 관측 예산: KTH 는 DISARMED 뒤 0.6 s 그대로, **MT 는 1.0 s**(바퀴 관성으로 남은 이동이 0.1 s 를 넘어도 0.5 s 정착 구간이 들어가게). 시험: 카운트 그대로, 관성으로 관측창 부족, 관측창 안 손실.
 
-9. **BENCH_STATE 의 MT 값.** `source = 2` 일 때 `count_state` 는 VALID(엔코더 초기화 뒤), `raw_angle` 0, `cumulative` 는 그 쪽 바퀴 카운트(모듈러를 부호 있는 32 비트로), `target`·`distance_ref`·`cut_position` 은 같은 카운트 공간, `kth_lost` 0. 결과 회수(`result_axis`·`result_source`)는 지금 그대로라 'M·KTH → L·MT' 처럼 축·원천이 바뀌어도 이전 결과를 이전 축·단위로 읽는다(1 절 시험 시나리오를 MT 쪽으로도).
+10. **BENCH_STATE 의 MT 값.** `source = 2` 일 때 `count_state` 는 VALID(엔코더 초기화 뒤, 실행의 MT 손실이 있으면 결정 5 의 UNCLEAN), `raw_angle` 0, `cumulative` 는 그 쪽 바퀴 카운트(모듈러를 부호 있는 32 비트로), `target`·`distance_ref`·`cut_position` 은 같은 카운트 공간. **`kth_lost` 는 원천과 상관없이 M·H 의 손실 두 비트를 지금처럼 싣는다**(1 회차 P2-7: MT 손실은 여기에 싣지 않음). 시험: H 손실 중 L·MT 실행 — H 비트는 남고 MT 실행 판정에는 영향 없음. 결과 회수(`result_axis`·`result_source`)는 지금 그대로라 'M·KTH → L·MT' 처럼 바뀌어도 이전 결과를 이전 축·단위로 읽는다.
 
-10. **호스트의 CPR 과 단위(A1c-2·3).**
-    - MT 의 카운트/회전은 `config/real/vehicle.yaml` 의 `wheel_counts.<쪽>.motor_counts_per_rev` 만 쓴다(0.1 절 단일 출처; L·R 각자). 그 쪽이 `counts_per_wheel_rev` 형식이면 MT 의 `N 회전` 정지와 MT hold 는 거부(`no_motor_cpr`), `N 카운트` 정지·듀티·측정은 된다. 시험: L/R CPR 이 다른 설정, 한쪽만 `counts_per_wheel_rev`.
-    - 바퀴 회전은 표시용 파생값: 카운트 ÷ (모터 CPR × 감속비) 또는 ÷ `counts_per_wheel_rev`. 독립 기대값: 4,096 카운트 = 모터축 1 회전 = 바퀴 1/80 회전.
-    - `stop: {counts: N}` 을 연다(KTH·MT 모두, `not_yet_a1c` 해제). `turns` 와 배타.
-    - 축의 기본 원천: L·R → `mt`(0.1 절). 지금 화면·CLI 의 L·R 기본(없음)에서 바뀌므로, **원천 `mt`·듀티·정지 없음·`measure` 없음** 요청은 B1 의 KTH 와 같이 원천 없음 실행으로 읽는다(측정은 `measure: true` 일 때만 — 4.4 결정 2 의 B1 호환 규칙을 MT 에도).
+11. **호스트의 CPR 과 요청(A1c-2·3, 1 회차 P1-5·P2-4·P2-5·P2-6).**
+    - **CPR 출처:** MT 의 카운트/회전은 `config/real/vehicle.yaml` 의 `wheel_counts.<쪽>.motor_counts_per_rev` 만 쓴다(0.1 절, L·R 각자). 지금 `RealVehicleConfig` 는 바퀴당 환산값만 남기므로, 벤치용 로더가 원래 항목을 읽어 모터축 CPR 을 보존한다. MT `N 회전` 정지와 MT hold 는 그 값이 정수 1–65,535 일 때만 받고, 그 쪽이 `counts_per_wheel_rev` 형식이거나 정수가 아니거나 범위 밖이면 `no_motor_cpr` 로 거부한다. `N 카운트` 정지·듀티·측정은 된다. 쓴 CPR·원천은 첫 HOLD 와 기록에 고정한다. `McuHost.request_bench_hold` 는 지금 KTH·4,096 을 직접 넣으므로 원천·CPR 을 받게 한다. 시험: L/R CPR 이 다른 설정, 한쪽만 `counts_per_wheel_rev`, 바퀴당 327,680 이 같은 `4096 × 80` 과 `8192 × 40`(모터축 CPR 보존 확인), 같은 오차의 출력 비(최소 출력·포화를 피한 값), D 항 속도 환산.
+    - 바퀴 회전은 표시용 파생값: 카운트 ÷ (모터 CPR × 감속비) 또는 ÷ `counts_per_wheel_rev`. 독립 기대값: 4,096 카운트 = 모터축 1 회전 = 바퀴 1/80 회전. 모형의 `--hand-turn-revs 1` 은 **바퀴** 1 회전(기본 설정 327,680 카운트)이다.
+    - **거리 요청:** `stop: {counts: N}`(콘솔)·`--stop-counts N`(CLI)을 연다(KTH·MT 모두). N 은 양의 정수 크기 1…2³¹−1, 부호는 `count_sign × sign(duty)` 로 붙인다(지금 `turns` 와 같은 규칙), 0 은 wire 에서 '거리 정지 없음'이라 거부, 듀티는 wire 에서 비영(지금 규칙). `stop: {turns}`·`--stop-turns N` 은 원천에 따라 KTH 센서축·MT 모터축 회전. **기존 `--stop-kth-turns` 는 KTH 에 고정**한다(L·R 에서는 지금처럼 거부 — 별칭으로 만들면 지금 거부되는 `--axis L --stop-kth-turns 1` 이 MT 로 구동됨). 잘못된 정지 요청은 ARM 전에 거부(시험).
+    - **측정 요청:** 콘솔은 `measure: true`(지금 그대로, 원천 `mt` 도), CLI 는 원천을 따르는 `--measure` 를 더하고 `--kth-measure` 는 KTH 고정으로 둔다.
+    - **B1 호환:** 축의 기본 원천이 L·R → `mt` 로 바뀌므로(0.1 절), 정지·hold·`measure: true` 가 모두 없는 원천 `mt` 듀티 요청은 B1 의 KTH 와 같이 원천 없음 실행으로 읽는다(4.4 결정 2 의 B1 호환 규칙). 그 밖의 조합은 이 규칙을 타지 않는다.
+    - **CLI 의 KTH 전용 조건:** `observe_rest`, 개루프 짝 기록, 최종 판정 재계산이 `source == 1` 로 묶여 있다. MT 를 넣는다(멈춘 자리는 결정 9 의 MT 규칙).
+    - **판정 ①과 엔코더 비트:** 시운전 빌드는 `ENCODER_STUCK`·`ENCODER_POLARITY` 를 보고만 하고, CLI·콘솔은 구동 중 이 비트를 보면 조기 정지한다(CLI `--bypass enc_stuck,enc_polarity` 로 끌 수 있음). MT 실행에서도 그대로 두되, 그 우회를 켠 실행에서는 해당 비트를 판정 ①의 예상 밖 고장에서 뺀다(범위 우회와 같은 규칙, 기록에 우회 표시). 우회는 막지 않는다(0.2 절 원칙 — 보드의 진행 감시가 여전히 세운다). 시험: 보드 감시가 먼저 끝낸 경우와 호스트 비트가 먼저 들어온 경우, 실제로 비트가 래치된 실행의 ①.
     - 확인 범위 표시: MT 는 '해당 없음(실물 MT 미장착)'.
-    - CLI: `--stop-turns`(원천에 따라 KTH 센서축·MT 모터축)·`--stop-counts`·`--source mt`, 기존 `--stop-kth-turns` 는 그대로 받는다(같은 뜻). hold 는 `--hold-*` 그대로(축 L·R 이면 원천 MT).
-    - 판정 ①: MT 축 실행에서 래치된 `ENCODER_STUCK`·`ENCODER_POLARITY`(시운전 빌드는 보고만)는 지금처럼 예상 밖 고장으로 센다(A2 의 `enc_stuck`·`enc_polarity` 우회 전까지).
 
-11. **화면(A1c-3).** L·R 에서 원천 `MT` 를 고르면 위치 유지 칸이 열리고 목표는 '지금 자리'·'지금 자리에서 ±N 카운트' 둘만. 'N 바퀴에서 정지' 는 MT 에서 '모터축 N 회전' 으로 이름이 바뀌고 옆에 바퀴 회전 파생값. 'N 카운트에서 정지' 칸을 더한다(KTH·MT). 결과의 멈춘 자리는 MT 면 '0.5 초 동안 카운트 그대로(MT 는 읽기 신선도 확인 못 함)'.
+12. **화면(A1c-3).** L·R 에서 원천 `MT` 를 고르면 위치 유지 칸이 열리고 목표는 '지금 자리'·'지금 자리에서 ±N 카운트' 둘만. 'N 바퀴에서 정지' 는 MT 에서 '모터축 N 회전' 으로 이름이 바뀌고 옆에 바퀴 회전 파생값. 'N 카운트에서 정지' 칸을 더한다(KTH·MT). 결과의 멈춘 자리는 MT 면 '0.5 초 동안 카운트 그대로(MT 는 읽기 신선도 확인 못 함)', hold 보류는 결정 8 의 말.
 
-12. **시험(완료 조건).**
-    - 펌웨어 호스트: 짝 거부 넷(L·KTH, M·MT, H·MT, R·KTH), MT hold `here`·`rel` 정착과 오버슈트→정착, `zero`·`abs` 거부, CPR 0 거부·CPR 이 이득에 들어가는지(같은 오차에 CPR 4,096 과 8,192 의 출력 비), MT 거리 6 번의 시험, MT 측정, 결과 회수(축·원천 바뀜), KTH 경로 무변화(A1b 시험 전부).
+13. **시험(완료 조건).**
+    - 펌웨어 호스트: 짝 거부 넷(L·KTH, M·MT, H·MT, R·KTH), MT hold `here`·`rel` 정착과 오버슈트→정착, `zero`·`abs` 거부, CPR 0 거부, 결정 6 의 기울기 제한, 결정 4 의 읽기 실패(D 항·진입·자격·증거에서 빠짐, 0.3 s → `mt_no_sample`), 결정 5 의 손실, 결정 7 의 거리 시험, 결정 8 의 증거(얼린 `here` 는 증거 없음), MT 측정, 결과 회수(축·원천 바뀜), KTH 경로 무변화(A1b 시험 전부).
     - 코덱: bench8 고정 벡터(Python·C 같은 바이트).
-    - 모형 HIL(A1c-2): L·R MT 거리 도달·역극성·고정, MT hold 정착(증거 나이 → 1 s 넘으면 보류), 멈춘 자리 `unchanged_at_100hz`, CPR 설정 두 가지.
+    - 모형 HIL(A1c-1 은 KTH 경로의 bench8 동작과 구세대 거부, A1c-2 는 MT): L·R MT 거리 도달·역극성·고정·읽기 실패, MT hold 정착(1 s 넘으면 보류)과 `met` 벡터, 멈춘 자리 `unchanged_at_100hz`·관성 부족, CPR 설정들.
     - 콘솔(A1c-3): MT 요청 검증·실행·스트림, 화면 Node 시험, 브라우저 재생(기존 네 화면 무변경).
     - 각 PR 최종 트리에서 ws1 전체 pytest 와 재생 게이트.
 
-13. **실보드.** 실물 MT 미장착이라 5.1 묶음에 넣지 않는다. bench8 굽기는 5.1 의 bench7 굽기를 대신한다(같은 이미지에 MT 가 더해질 뿐). MT 장착 날 확인할 것: 카운트/회전(4,096)·부호·정지 검출·hold 기본값.
+14. **실보드.** 실물 MT 미장착이라 5.1 묶음에 넣지 않는다. bench8 굽기는 5.1 의 bench7 굽기를 대신한다(같은 이미지에 MT 가 더해질 뿐, KTH 시험은 그대로). MT 장착 날 확인할 것: 카운트/회전(4,096)·부호·정지 검출·hold 기본값·읽기 실패 빈도.
+
+### A1c 계획 검토
+
+| 검토 | 지적 | 반영 |
+|---|---|---|
+| 원자료 재계산(Claude) | `vehicle.yaml` 좌우 `motor_counts_per_rev 4096`·`gear_ratio 80.0` → 바퀴 1 회전 327,680 카운트, 모터축 12 카운트 = 0.0184 rad = 바퀴 0.0132° | 계획 수치와 일치 |
+| Codex 적대적 1 회차 | P1 5: LPTIM 읽기 실패가 직전 값을 새 표본처럼 넘김, 바퀴 기울기 제한이 데드밴드 출력 0 을 깸, hold 감시의 데드밴드 되돌림을 증거로 쓰면 얼린 `here` 도 충족, 걸음을 버린 `jump` 뒤 잘린 변위가 `confirmed`, `--stop-kth-turns` 별칭이 지금 거부되는 L 요청을 구동. P2 7: 거리 감시의 출력 귀속·교차 틱 증거, 정상 정착 MT hold 의 통상 보류와 `_inside`, MT 멈춘 자리의 전 표본 연속성·관측 예산, CPR 로더·`request_bench_hold` 의 KTH 고정, CLI 의 KTH 전용 조건·hold 길이·엔코더 비트, 모형 세대·MT 측정 옵션, `kth_lost` 뜻. P3 1: 200 µs 근거 | 결정 4(읽기 성공·시작 시각, `mt_no_sample`), 6(0 쪽 변화는 바로), 8(자격 있는 개선만 증거, 보류 문구·`met` 벡터·`_inside`), 5(MT 손실 수·UNCLEAN), 11(`--stop-kth-turns` KTH 고정·`stop.counts` 규칙·CPR 로더·`request_bench_hold`·CLI 조건·엔코더 우회의 ①), 7(HAL 귀속·같은 틱 순서·1 카운트), 9(전 표본·1.0 s 예산), 2(모형 제품 문자열), 10(`kth_lost` 그대로) |
 
 ## 5. 미검증으로 남는 것
 
