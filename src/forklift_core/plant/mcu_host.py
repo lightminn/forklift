@@ -741,8 +741,9 @@ class McuLinkHost:
             return blocked
         s = self._state
         try:
-            msg = BenchHold(s.boot_id, s.arm_gen, s.mcu_time_us, valid, int(run_id), int(axis), int(BenchSource.KTH),
-                            int(hold.kind), int(hold.value), 4096, float(hold.kp), float(hold.ki), float(hold.kd),
+            # the run's source and CPR (bench8, plan 4.5 A1c decision 11): KTH 4096, MT the wheel's motor shaft CPR
+            msg = BenchHold(s.boot_id, s.arm_gen, s.mcu_time_us, valid, int(run_id), int(axis), int(hold.source),
+                            int(hold.kind), int(hold.value), int(hold.cpr), float(hold.kp), float(hold.ki), float(hold.kd),
                             int(hold.deadband), hold.duty_max_e4, hold.min_duty_e4, int(sign))
         except ValueError as exc:
             return Blocked(f"bad_value: {exc}")

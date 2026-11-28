@@ -1304,11 +1304,15 @@ class CommissionSession(Session):
                                         and w.conn == conn0 for w in b.writes), 0.2)
         return False
 
-    def observe_rest(self, seconds: float = REST_OBSERVE_S) -> dict | None:
+    def observe_rest(self, seconds: float | None = None) -> dict | None:
         """After DISARMED, the run axis's position at 100 Hz (plan 4.2 A1b-1 decision 4): settled only when the count
-        stayed whole and did not change for 0.5 s with fresh evidence; else the last value, unconfirmed."""
-        if not (self.bench_image and self.bench is not None and self.bench.source == 1):
+        stayed whole and did not change for 0.5 s with fresh evidence; else the last value, unconfirmed. An MT run
+        observes 1.0 s and is judged by the MT rule (plan 4.5 A1c decision 9)."""
+        if not (self.bench_image and self.bench is not None and self.bench.source in (bl.KTH_SOURCE, bl.MT_SOURCE)):
             return None
+        mt = self.bench.source == bl.MT_SOURCE
+        if seconds is None:
+            seconds = bench_session.REST_OBSERVE_MT_S if mt else REST_OBSERVE_S
         b, seen, end = self.b, [], time.monotonic() + seconds
         last = None
         while time.monotonic() < end:
@@ -1318,7 +1322,7 @@ class CommissionSession(Session):
                 seen.append((st.mcu_time_us, bs))
                 last = bs
             time.sleep(0.005)
-        out = bench_session.rest_position(seen)
+        out = bench_session.rest_position(seen, source=self.bench.source)
         b.emit({"t": "bench_rest_position", **out})
         return out
 
@@ -1395,12 +1399,13 @@ def result_fields(bs) -> dict:
            "result_bypass": sorted(n for n, bit in bl.BENCH_BYPASS_BITS.items() if bs.result_bypass & bit)}
     if kind == "hold":
         out.update(target=bs.target, deadband_entries=bs.deadband_entries)
-    if bs.result_source == 1:
-        # a KTH run: how far its end displacement is trusted, and the distance verdict when the board ended it by a
-        # distance rule (the distance asked is not in BENCH_STATE: the verdict's category only)
+    if bs.result_source in (bl.KTH_SOURCE, bl.MT_SOURCE):
+        # a measured run: how far its end displacement is trusted, and the distance verdict (the distance asked is
+        # not in BENCH_STATE: the verdict's category only). Counts only -- this recovery knows no run's units (plan
+        # 4.5 A1c decision 11: a board-only recovery shows counts)
         out["measure"] = bench_session.measure_verdict(run_flags=bs.run_flags, distance_ref=bs.distance_ref,
                                                        cut_position=bs.cut_position)
-        if kind == "distance" and stop in BOARD_ENDS:  # a distance verdict on a distance run's result only
+        if kind == "distance":  # every distance result, a fault's too (Codex plan round 4 P2-3)
             out["distance"] = bench_session.distance_verdict(
                 stop_reason=stop, confirm=bs.distance_confirm, run_flags=bs.run_flags, stop_counts=None,
                 distance_ref=bs.distance_ref, cut_position=bs.cut_position)
@@ -1444,12 +1449,25 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
 
     o_arm = len(b.writes)  # write orders from here on are this run's
     distance_run = getattr(session, "bench_image", False) and session._distance_run()
-    kth_run = getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1
+    kth_run = (getattr(session, "bench_image", False) and session.bench is not None
+               and session.bench.source in (bl.KTH_SOURCE, bl.MT_SOURCE))  # a measured run: KTH or MT
     rec_pairs: list = []
     rec_idents: list = []
     session.run_pairs = (rec_pairs, rec_idents)  # execute's end reads the same record (its cleanup retry's pairs too)
     if kth_run:
         b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents)
+    if kth_run and session.bench.source == bl.MT_SOURCE:
+        # an MT run's counts are not yet a verified wheel motion (plan 4.5 A1c decisions 7, 11, 14): shown and recorded
+        units = session.bench.units or {}
+        b.emit({"t": "bench_advisory", "advisory": "mt_signal_unverified",
+                "units_measured": bool(units.get("measured")), "motor_cpr": units.get("motor_cpr")})
+        print("advisory: MT counts -- a count crossing, not a verified wheel motion (MT not fitted on the board yet); "
+              f"motor shaft CPR {units.get('motor_cpr')} from vehicle.yaml"
+              f"{'' if units.get('measured') else ' (an estimate, not measured)'}", file=sys.stderr)
+        if session.bench.count_sign == -1:
+            b.emit({"t": "bench_advisory", "advisory": "count_sign_against_board_encoder_sign"})
+            print("advisory: count-sign -1 declares the board's encoder sign opposite to the duty -- check the "
+                  "vehicle's encoder sign setting", file=sys.stderr)
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
         b.emit({"t": "bench_advisory", "advisory": "high_duty_distance_unverified", "duty": duty,
                 "above": bl.HIGH_DUTY_DISTANCE})  # shown and recorded, never refused (lead 2026-11-28)
@@ -1544,7 +1562,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         faults |= smp.state.fault_flags
     result = "no_acceptance" if on_index is None else ("ok" if metrics.valid else "invalid_measurement")
     bench_out = {}
-    if getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1:
+    if (getattr(session, "bench_image", False) and session.bench is not None
+            and session.bench.source in (bl.KTH_SOURCE, bl.MT_SOURCE)):
         br = session.bench_result() or {}
         # a driving sample is a DRIVING pair of this run's arming (plan 4.4 B2): an accepting STATE whose pair was
         # lost, or a first STATE already STOPPING, is no driving sample (Codex B2a-1 impl P2-2)
@@ -1680,7 +1699,7 @@ def _hold_verdict2(session: CommissionSession, pairs: list, idents: list, br: di
     (plan 4.3 decisions 7 and 9) -- made in the run and again at execute's end, from the same record."""
     h = session.bench.hold
     pairs = _run_pairs(list(pairs), list(idents), session.run_ident)  # this run's boot and arming only
-    verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id)
+    verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id, source=h.source)
                 if br.get("confirmed") else {"result": "undecidable", "why": ["no_result"]})
     pts = _entry_points(session, pairs)
     windows = [bench_session.entry_window(pts[: i + 1], p[0]) for i, p in enumerate(pts) if len(p) == 2]
@@ -1743,7 +1762,9 @@ def _run_recorders(b: Bench, pairs: list, idents: list):
                 "target": bs.target, "distance_ref": bs.distance_ref, "cut_position": bs.cut_position,
                 "stop_reason": bs.stop_reason, "distance_confirm": bs.distance_confirm, "run_flags": bs.run_flags,
                 "deadband_entries": bs.deadband_entries, "evidence_age_ms": bs.evidence_age_ms,
-                "end_evidence_age_ms": bs.end_evidence_age_ms})
+                "end_evidence_age_ms": bs.end_evidence_age_ms,
+                # the result's own axis and source (plan 4.5 A1c decision 11): a later SET may change axis/source
+                "result_axis": bs.result_axis, "result_source": bs.result_source})
 
     def accepted_(st, rx):
         b.emit({"t": "state_accepted", "rx_ns": rx, "conn": b.conn, "mcu_time_us": st.mcu_time_us,
@@ -2396,6 +2417,20 @@ def main(argv=None) -> int:
     cm.add_argument("--stop-kth-turns", type=float,
                     help="bench image (bench7): steering/lift only -- the board cuts the output after this many KTH "
                          "sensor turns in the duty's direction (plan 4.2 A1b-1)")
+    cm.add_argument("--stop-turns", type=float,
+                    help="bench image (bench8): the board cuts the output after this many turns of the run source's "
+                         "shaft in the duty's direction -- KTH sensor turns on steering/lift, MT MOTOR SHAFT turns on "
+                         "L/R (vehicle.yaml motor_counts_per_rev; a wheel turn is that x the gear ratio, and the "
+                         "model's --hand-turn-revs counts wheel turns) (plan 4.5 A1c)")
+    cm.add_argument("--stop-counts", type=int,
+                    help="bench image (bench8): the distance stop in counts of the run's source, a positive whole "
+                         "number (its sign comes from the duty and --count-sign)")
+    cm.add_argument("--measure", action="store_true",
+                    help="bench image (bench8): measure the run by its axis's source (KTH on M/H, MT on L/R) without a "
+                         "distance stop")
+    cm.add_argument("--source", choices=("kth", "mt"),
+                    help="bench image (bench8): the measured source of a distance, measuring or hold run; by default "
+                         "M/H kth, L/R mt")
     cm.add_argument("--kth-measure", action="store_true",
                     help="bench image (bench7): steering/lift only -- measure the run by the KTH count without a "
                          "distance stop (the end displacement and how far it is trusted)")
@@ -2410,8 +2445,9 @@ def main(argv=None) -> int:
     cm.add_argument("--hold-deadband", type=int, help="hold: counts, |error| <= this gives output 0 (default 12)")
     cm.add_argument("--hold-min-duty", type=float,
                     help="hold: the least duty toward the error outside the deadband (default 0.12)")
-    cm.add_argument("--count-sign", type=int, choices=(1, -1), default=1,
-                    help="bench image: +1 when a positive duty raises the KTH count, -1 when it lowers it")
+    cm.add_argument("--count-sign", type=int, choices=(1, -1), default=None,
+                    help="bench image: +1 when a positive duty raises the source's count, -1 when it lowers it; "
+                         "default +1 for KTH, REQUIRED for an MT run (L/R signs are unconfirmed, plan 4.5 A1c)")
     cm.add_argument("--sensorless", action="store_true",
                     help="fw-single steering/lift with no KTH window (instead of --window): output and stop only")
     cm.add_argument("--wheels-lifted", action="store_true",
@@ -2636,8 +2672,39 @@ HOLD_SECONDS_MAX = 60.0  # a hold run's length (its continuous output stays unde
 
 def _bench_args_given(args) -> bool:
     given = [getattr(args, k, None) for k in ("bench_bypass", "bench_duty_max", "bench_time_max", "stop_kth_turns",
-                                              "hold")]
-    return any(v is not None for v in given) or bool(getattr(args, "kth_measure", False))
+                                              "hold", "stop_turns", "stop_counts", "source")]
+    return (any(v is not None for v in given) or bool(getattr(args, "kth_measure", False))
+            or bool(getattr(args, "measure", False)))
+
+
+VEHICLE_YAML = None  # tests may point it elsewhere; None is config/real/vehicle.yaml
+
+
+def _mt_units(axis: int) -> bl.MtUnits:
+    """The run wheel's MT units from the one source (plan 0.1, 4.5 A1c decision 11)."""
+    path = VEHICLE_YAML or (REPO / "config" / "real" / "vehicle.yaml")
+    try:
+        return bl.mt_units(path)[axis]
+    except (OSError, ValueError, KeyError) as exc:
+        raise Refused(f"mt units: {path}: {exc}") from None
+
+
+def _run_source(args, axis: int) -> int:
+    """A measured run's source: --source, else by axis (M/H KTH, L/R MT)."""
+    word = getattr(args, "source", None)
+    if word is not None:
+        return bl.KTH_SOURCE if word == "kth" else bl.MT_SOURCE
+    return bl.MT_SOURCE if axis < 2 else bl.KTH_SOURCE
+
+
+def _count_sign(args, source: int) -> int:
+    cs = getattr(args, "count_sign", None)
+    if cs is None:
+        if source == bl.MT_SOURCE:
+            raise Refused("count-sign: required for an MT run (+1 when a positive duty raises the wheel's count, -1 "
+                          "when it lowers it; L/R directions are unconfirmed -- plan 4.5 A1c decision 11)")
+        return 1
+    return int(cs)
 
 
 def _link_factory(holder: dict, product_reader=usb_product_of_fd):
@@ -2703,18 +2770,43 @@ def _bench_ask(args) -> bl.BenchAsk | None:
         v = getattr(args, k, None)
         if v is not None and not math.isfinite(v):
             raise Refused(f"{k.replace('_', '-')}: a finite number")
-    turns = getattr(args, "stop_kth_turns", None)
-    source, stop, count_sign = 0, 0, int(getattr(args, "count_sign", 1) or 1)
-    if turns is not None:
-        try:
-            stop = bl.kth_stop_counts(turns, float(args.duty), count_sign)
-        except bl.LimitRefused as exc:
-            raise Refused(str(exc)) from None
-        source = 1
-    elif getattr(args, "kth_measure", False):
-        source = 1  # measuring only (no distance stop)
-    ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
-                      getattr(args, "bench_time_max", None), source=source, stop_counts=stop, count_sign=count_sign)
+    axis = AXES[args.axis]
+    dist = [k for k in ("stop_kth_turns", "stop_turns", "stop_counts") if getattr(args, k, None) is not None]
+    kth_measure, measure = bool(getattr(args, "kth_measure", False)), bool(getattr(args, "measure", False))
+    # the options exclude each other before any is read (plan 4.5 A1c decision 11, Codex plan round 2 P2-5)
+    if len(dist) > 1:
+        raise Refused("stop: one of --stop-kth-turns, --stop-turns or --stop-counts")
+    if dist and (kth_measure or measure):
+        raise Refused("stop: a distance run is not a measuring run (--measure/--kth-measure)")
+    if kth_measure and measure:
+        raise Refused("measure: --measure or --kth-measure, not both")
+    source, stop, units = 0, 0, None
+    if "stop_kth_turns" in dist or kth_measure:
+        if getattr(args, "source", None) == "mt":
+            raise Refused("source mt: --stop-kth-turns and --kth-measure are KTH's (use --stop-turns or --measure)")
+        source = bl.KTH_SOURCE  # fixed to KTH: refused on L/R as before, never an MT run (Codex plan round 1 P1-5)
+    elif dist or measure:
+        source = _run_source(args, axis)
+    elif getattr(args, "source", None) is not None:
+        raise Refused("source: only with --stop-turns, --stop-counts, --measure or --hold")
+    count_sign = _count_sign(args, source) if source else int(getattr(args, "count_sign", None) or 1)
+    if source == bl.MT_SOURCE:
+        units = _mt_units(axis)
+    try:
+        if "stop_kth_turns" in dist:
+            stop = bl.kth_stop_counts(args.stop_kth_turns, float(args.duty), count_sign)
+        elif "stop_turns" in dist:
+            if source == bl.MT_SOURCE and units.motor_cpr is None:
+                raise Refused(f"no_motor_cpr: {units.why} -- MT turns need the motor shaft CPR (use --stop-counts)")
+            cpr = units.motor_cpr if source == bl.MT_SOURCE else bl.KTH_COUNTS_PER_TURN
+            stop = bl.turns_stop_counts(args.stop_turns, cpr, float(args.duty), count_sign, "stop-turns")
+        elif "stop_counts" in dist:
+            stop = bl.counts_stop(args.stop_counts, float(args.duty), count_sign)
+    except bl.LimitRefused as exc:
+        raise Refused(str(exc)) from None
+    ask = bl.BenchAsk(axis, names, getattr(args, "bench_duty_max", None),
+                      getattr(args, "bench_time_max", None), source=source, stop_counts=stop, count_sign=count_sign,
+                      units=None if units is None else units.record())
     if (why := bl.bench_refusal(ask)) is not None:
         raise Refused(why)
     return ask
@@ -2723,8 +2815,9 @@ def _bench_ask(args) -> bl.BenchAsk | None:
 def _hold_ask(args) -> bl.BenchAsk:
     """A hold run's BENCH_SET and BENCH_HOLD settings (plan 4.3 A1b-2 decision 10): steering or lift, the KTH
     source, no distance; --duty is the cap."""
-    if getattr(args, "stop_kth_turns", None) is not None or getattr(args, "kth_measure", False):
-        raise Refused("hold: no --stop-kth-turns or --kth-measure (a hold measures by its own count)")
+    if (any(getattr(args, k, None) is not None for k in ("stop_kth_turns", "stop_turns", "stop_counts"))
+            or getattr(args, "kth_measure", False) or getattr(args, "measure", False)):
+        raise Refused("hold: no distance or measuring option (a hold measures by its own count)")
     try:
         names = bl.parse_bench_bypass(getattr(args, "bench_bypass", None))
         kind, value = bl.parse_hold_target(args.hold)
@@ -2737,11 +2830,21 @@ def _hold_ask(args) -> bl.BenchAsk:
     if not args.duty > 0:
         raise Refused("hold: --duty is the hold's duty cap, a positive number (the controller picks the sign)")
     v = {k: (HOLD_ARG_DEFAULTS[k] if getattr(args, k, None) is None else getattr(args, k)) for k in HOLD_ARGS}
+    axis = AXES[args.axis]
+    source = _run_source(args, axis)
+    count_sign = _count_sign(args, source)
+    cpr, units = bl.KTH_COUNTS_PER_TURN, None
+    if source == bl.MT_SOURCE:
+        units = _mt_units(axis)
+        if units.motor_cpr is None:
+            raise Refused(f"no_motor_cpr: {units.why} -- an MT hold needs the motor shaft CPR (plan 4.5 A1c 11)")
+        cpr = units.motor_cpr
     hold = bl.HoldAsk(kind, value, kp=float(v["hold_kp"]), ki=float(v["hold_ki"]), kd=float(v["hold_kd"]),
-                      deadband=int(v["hold_deadband"]), min_duty=float(v["hold_min_duty"]), cap=float(args.duty))
-    ask = bl.BenchAsk(AXES[args.axis], names, getattr(args, "bench_duty_max", None),
-                      getattr(args, "bench_time_max", None), source=1, count_sign=int(args.count_sign or 1), mode=2,
-                      hold=hold)
+                      deadband=int(v["hold_deadband"]), min_duty=float(v["hold_min_duty"]), cap=float(args.duty),
+                      source=source, cpr=cpr)
+    ask = bl.BenchAsk(axis, names, getattr(args, "bench_duty_max", None),
+                      getattr(args, "bench_time_max", None), source=source, count_sign=count_sign, mode=2,
+                      hold=hold, units=None if units is None else units.record())
     if (why := bl.bench_refusal(ask)) is not None:
         raise Refused(why)
     return ask
@@ -2761,6 +2864,10 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         raise Refused("bench: a plain run only (no --single-axis, --scenario or --profile-tri)")
     if names and axis >= 2:
         raise Refused("bypass: the encoder early stop is a wheel's (L or R)")
+    if (bench is not None and bench.source == bl.MT_SOURCE and (bench.hold_run or bench.distance)
+            and {"enc_stuck", "enc_polarity"} & set(names)):
+        # a feedback run does not start with its source's detection bypassed (plan 2, 4.5 A1c decision 11)
+        raise Refused("bypass: an MT hold or distance run needs its encoder checks (no enc_stuck/enc_polarity)")
     # fw-single (partial-parts plan 2026-11-25 PR-B): steering and lift only with the motor off the mechanism, with
     # a hand-checked KTH window or none (--sensorless); both are bypasses of the firmware's sensor checks
     single = getattr(args, "single_axis", False)
@@ -2896,7 +3003,11 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         hold_max = AXIS_HOLD_MAX_S.get(axis, COMMISSION_HOLD_MAX_S)
         if single and detached and axis >= 2:
             hold_max = bl.SINGLE_DETACHED_HOLD_MAX_S  # a detached motor: the firmware's 2 s, kept a margin under
-        if not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
+        if bench is not None and bench.hold_run:
+            # an MT hold on a wheel: its length is not its continuous output, as on M/H (plan 4.5 A1c decision 6)
+            if not 1.2 <= seconds <= HOLD_SECONDS_MAX:
+                raise Refused(f"seconds: a hold runs 1.2 .. {HOLD_SECONDS_MAX:g} s")
+        elif not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
             raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
     if axis >= 2 and not sensorless:
         if args.window is None or not args.window[0] < args.window[1]:
@@ -3069,7 +3180,9 @@ def execute(args, bench: Bench) -> dict:
             conditions = {"bypass": list(names), "large": session.large,
                           "bench": None if session.bench is None else {
                               "bypass": list(session.bench.names), "duty_max": session.bench.duty_max,
-                              "time_max_s": session.bench.time_max_s},
+                              "time_max_s": session.bench.time_max_s,
+                              # an MT run's units as read, fixed with the record (plan 4.5 A1c decision 11)
+                              "source": session.bench.source, "units": session.bench.units},
                           "asked": {"duty": ask.duty, "seconds": ask.seconds},
                           "profile_tri": None if profile is None else list(args.profile_tri)}
             bench.emit({"t": "run_conditions", **conditions})
@@ -3221,7 +3334,8 @@ def execute(args, bench: Bench) -> dict:
         # every field that moves with verdict 1 from the same last evidence (Codex B2a-1 impl round 3 P2-1)
         result["bench_result"] = br
         result["bench_run"] = br
-        if session.bench is not None and session.bench.source == 1 and not session._hold_run():
+        if (session.bench is not None and session.bench.source in (bl.KTH_SOURCE, bl.MT_SOURCE)
+                and not session._hold_run()):
             result.update(_kth_verdicts(session, br))
         if isinstance(result.get("hold"), dict):
             result["hold"]["verdict1"] = again

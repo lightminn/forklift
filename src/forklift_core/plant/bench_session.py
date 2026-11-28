@@ -308,13 +308,48 @@ REST_EVIDENCE_MS = 100
 REST_GAP_US = 15_000  # 1.5 x the 10 ms STATE period (plan 3): a 100 Hz observation, never 50 Hz
 
 
-def rest_position(samples) -> dict:
+REST_OBSERVE_MT_S = 1.0  # plan 4.5 A1c decision 9: the wheel's inertia may move it past 0.1 s; KTH keeps 0.6 s
+MT_SOURCE = 2
+
+
+def _rest_mt(samples) -> dict:
+    """The MT rest position (plan 4.5 A1c decision 9): back from the last pair, the contiguous segment with one count
+    where every pair is this run's MT on its axis, VALID, without the live UNCLEAN mark, with a sample accepted at its
+    own tick (raw_angle 0 = MT sample age 0) and within REST_GAP_US of the next; 0.5 s of it is ``unchanged_at_100hz``
+    -- never ``settled``: a stopped MT count has no read freshness evidence."""
+    t_last, last = samples[-1]
+    start, why = t_last, None
+    for i in range(len(samples) - 1, -1, -1):
+        t, b = samples[i]
+        if (b.run_id != last.run_id or b.source != MT_SOURCE or b.axis != last.axis
+                or b.count_state != int(BenchCountState.VALID) or b.run_flags & int(BenchRunFlag.UNCLEAN)):
+            why = "continuity"
+            break
+        if b.raw_angle != 0:
+            why = "stale_read"  # this pair's read failed: its count is an older sample's
+            break
+        if b.cumulative != last.cumulative:
+            why = "not_settled"
+            break
+        if i + 1 < len(samples) and not 0 < samples[i + 1][0] - t <= REST_GAP_US:
+            why = "sparse"
+            break
+        start = t
+    if t_last - start < REST_SETTLE_US:
+        return {"result": "unconfirmed", "cumulative": last.cumulative, "why": why or "too_short"}
+    return {"result": "unchanged_at_100hz", "cumulative": last.cumulative,
+            "wording": "100 Hz 관측에서 0.5 s 동안 카운트 그대로(MT 는 읽기 신선도를 확인할 수 없음)"}
+
+
+def rest_position(samples, source: int = 1) -> dict:
     """The position after DISARMED (plan 4.2 A1b-1 decision 4): ``samples`` are (mcu_time_us, BenchState) of the
     run axis after DISARMED, oldest first. Settled only when the live count stayed whole (bit0 clear, VALID), the
     count did not change for 0.5 s of the 100 Hz samples and the evidence is fresh; worded as a 100 Hz observation.
-    Otherwise the last value is recorded as unconfirmed."""
+    Otherwise the last value is recorded as unconfirmed. The MT source has its own rule (``_rest_mt``)."""
     if not samples:
         return {"result": "unconfirmed", "why": "no_sample"}
+    if source == MT_SOURCE:
+        return _rest_mt(samples)
     t_last, last = samples[-1]
     if last.run_flags & int(BenchRunFlag.UNCLEAN) or last.count_state != int(BenchCountState.VALID):
         return {"result": "unconfirmed", "cumulative": last.cumulative, "why": "continuity"}
@@ -349,13 +384,16 @@ HOLD_SETTLE_MIN = 50
 HOLD_INSIDE_RATIO = 0.8
 HOLD_TAIL_US = 200_000
 HOLD_EVIDENCE_MS = 100
+HOLD_EVIDENCE_MT_MS = 1000  # plan 1, 4.5 A1c decision 8: the MT evidence (the last qualified progress) within 1 s
 
 
-def _inside(b, deadband: int) -> bool:
+def _inside(b, deadband: int, source: int = 1) -> bool:
+    if source == MT_SOURCE:  # a sample accepted at its own pair's tick only (plan 4.5 A1c decision 10)
+        return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle == 0
     return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle != 0  # a tentative 0 is never inside
 
 
-def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> dict:
+def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int, source: int = 1) -> dict:
     """Verdict ② of a hold run (decision 9): failure, then hold-back, then the settling judgement.
 
     ``pairs``: (mcu_time_us, Mode, BenchState) of the run in receipt order; ``result``: the board's result
@@ -370,7 +408,13 @@ def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> d
     if BenchRunFlag.RES_UNCLEAN in flags:
         return {"result": "failed", "why": ["continuity"]}
     age = result.get("end_evidence_age_ms")
-    if age is None or int(age) > HOLD_EVIDENCE_MS:
+    mt = source == MT_SOURCE
+    if age is None or int(age) > (HOLD_EVIDENCE_MT_MS if mt else HOLD_EVIDENCE_MS):
+        if mt:
+            # a settled MT hold has no fresh evidence by nature (plan 4.5 A1c decision 8): held, with what was observed
+            seen = _settle_seen(pairs, run_id, deadband, source)
+            return {"result": "held", "why": ["mt_evidence_age"], "evidence_age_ms": age,
+                    "note": "MT 는 멈춰 있으면 읽기가 살아 있는지 확인할 수 없음", **seen}
         return {"result": "held", "why": ["0 프레임만 — 고착과 구별 불가"]}
     if BenchRunFlag.RES_TENTATIVE in flags:
         return {"result": "held", "why": ["tentative_end"]}
@@ -395,12 +439,12 @@ def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> d
             break
         seg.append(i)
     seg.reverse()
-    first_in = next((i for i in seg if _inside(run[i][2], deadband)), None)
+    first_in = next((i for i in seg if _inside(run[i][2], deadband, source)), None)
     if first_in is None:
         return {**out, "result": "unmet", "why": ["never_inside"]}
     settled = [i for i in seg if i >= first_in]
     t0 = run[first_in][0]
-    inside = sum(1 for i in settled if _inside(run[i][2], deadband))
+    inside = sum(1 for i in settled if _inside(run[i][2], deadband, source))
     out["settle"] = {"from_us": t0, "to_us": t_last, "samples": len(settled), "inside": inside}
     why = []
     if t_last - t0 < HOLD_SETTLE_US:
@@ -409,11 +453,24 @@ def hold_verdict(pairs, result: dict, *, deadband: int | None, run_id: int) -> d
         why.append("settle_few")
     if inside < HOLD_INSIDE_RATIO * len(settled):
         why.append("settle_ratio")
-    if any(not _inside(run[i][2], deadband) for i in settled if run[i][0] >= t_last - HOLD_TAIL_US):
+    if any(not _inside(run[i][2], deadband, source) for i in settled if run[i][0] >= t_last - HOLD_TAIL_US):
         why.append("tail_outside")
     if why:
         return {**out, "result": "unmet", "why": why}
     return {**out, "result": "met", "why": []}
+
+
+def _settle_seen(pairs, run_id: int, deadband: int, source: int) -> dict:
+    """What a held MT hold observed: the time from the first pair inside the deadband to the last driving pair of the
+    run, and the share inside (shown with the hold-back, plan 4.5 A1c decision 8)."""
+    run = [(t, m, b) for t, m, b in pairs if b.run_id == run_id and b.mode == 2]
+    drv = [(t, b) for t, m, b in run if m == Mode.ARMED and b.drive_state == BenchDriveState.DRIVING]
+    first = next((i for i, (t, b) in enumerate(drv) if _inside(b, deadband, source)), None)
+    if first is None:
+        return {"inside_s": 0.0}
+    tail = drv[first:]
+    inside = sum(1 for _t, b in tail if _inside(b, deadband, source))
+    return {"inside_s": round((tail[-1][0] - tail[0][0]) / 1e6, 3), "inside_share": round(inside / len(tail), 3)}
 
 
 ENTRY_WINDOW_US = 1_000_000

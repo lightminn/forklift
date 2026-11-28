@@ -270,6 +270,8 @@ class HoldAsk:
     deadband: int = 12
     min_duty: float = 0.12
     cap: float = 0.15
+    source: int = 1  # bench8 (plan 4.5 A1c): 1 KTH (cpr 4096), 2 MT (the wheel's motor shaft CPR from vehicle.yaml)
+    cpr: int = 4096
 
     @property
     def duty_max_e4(self) -> int:
@@ -292,6 +294,13 @@ def hold_refusal(h: HoldAsk, axis_duty_max_e4: int) -> str | None:
         return f"hold duty cap: (0, {axis_duty_max_e4 / 10000:g}] (the run axis's duty limit)"
     if not math.isfinite(h.min_duty) or h.min_duty_e4 < 0 or h.min_duty_e4 > h.duty_max_e4:
         return "hold-min-duty: 0 .. the duty cap"
+    if h.source == MT_SOURCE:
+        if h.kind in (HOLD_TARGETS["zero"], HOLD_TARGETS["abs"]):
+            return "hold: the MT count is relative -- here or rel:N only (plan 4.5 A1c decision 5)"
+        if not isinstance(h.cpr, int) or not 1 <= h.cpr <= MT_CPR_MAX:
+            return f"hold: the MT motor shaft CPR 1..{MT_CPR_MAX}"
+    elif h.cpr != KTH_COUNTS_PER_TURN:
+        return "hold: the KTH CPR is 4096"
     return None
 
 
@@ -304,11 +313,12 @@ class BenchAsk:
     names: tuple[str, ...]
     duty_max: float | None  # None: the image's default for the axis
     time_max_s: float | None
-    source: int = 0  # bench6: 1 the run axis's KTH count (M, H)
+    source: int = 0  # bench6: 1 the run axis's KTH count (M, H); bench8: 2 the run wheel's MT count (L, R)
     stop_counts: int = 0  # bench6: the signed distance stop in counts, 0 none
     count_sign: int = 1  # bench6: the duty sign x the count's direction
     mode: int = 1  # BenchMode: 1 duty, 2 hold (bench7)
     hold: HoldAsk | None = None  # bench7: the hold run's settings
+    units: dict | None = None  # bench8: an MT run's units as read (MtUnits.record), fixed for the record
 
     @property
     def hold_run(self) -> bool:
@@ -344,24 +354,105 @@ class BenchAsk:
 
 HIGH_DUTY_DISTANCE = 0.4  # above this a distance stop is shown as unverified, never refused (lead 2026-11-28)
 KTH_COUNTS_PER_TURN = 4096
+KTH_SOURCE, MT_SOURCE = 1, 2
+MT_CPR_MAX = 65535
 
 
-def kth_stop_counts(turns: float, duty: float, count_sign: int) -> int:
-    """The distance stop for ``turns`` sensor turns in the duty's direction (plan 4.2 A1b-1 decision 8):
-    ``round(turns x 4096) x count_sign x sign(duty)``, refused unless 1 <= |counts| < 2^31 (a tiny distance never
-    rounds to 0, which would mean no distance stop)."""
+def turns_stop_counts(turns: float, counts_per_turn: int, duty: float, count_sign: int,
+                      label: str = "stop-kth-turns") -> int:
+    """The distance stop for ``turns`` turns of the source's shaft in the duty's direction (plan 4.2 A1b-1 decision 8,
+    4.5 A1c decision 11): ``round(turns x counts_per_turn) x count_sign x sign(duty)``, refused unless 1 <= |counts| <
+    2^31 (a tiny distance never rounds to 0, which would mean no distance stop)."""
     if not math.isfinite(turns) or turns <= 0:
-        raise LimitRefused("stop-kth-turns: a positive finite number of turns")
-    if turns >= 2 ** 31 / KTH_COUNTS_PER_TURN:
-        raise LimitRefused(f"stop-kth-turns: {turns} turns is past 2^31-1 counts")
+        raise LimitRefused(f"{label}: a positive finite number of turns")
+    if turns >= 2 ** 31 / counts_per_turn:
+        raise LimitRefused(f"{label}: {turns} turns is past 2^31-1 counts")
     if count_sign not in (1, -1):
         raise LimitRefused("count-sign: 1 or -1")
     if duty == 0 or not math.isfinite(duty):
-        raise LimitRefused("stop-kth-turns: needs a non-zero duty (its sign is the direction)")
-    mag = round(turns * KTH_COUNTS_PER_TURN)
+        raise LimitRefused(f"{label}: needs a non-zero duty (its sign is the direction)")
+    mag = round(turns * counts_per_turn)
     if not 1 <= mag < 2 ** 31:
-        raise LimitRefused(f"stop-kth-turns: {turns} turns is {mag} counts; 1 .. 2^31-1 counts")
+        raise LimitRefused(f"{label}: {turns} turns is {mag} counts; 1 .. 2^31-1 counts")
     return mag * count_sign * (1 if duty > 0 else -1)
+
+
+def kth_stop_counts(turns: float, duty: float, count_sign: int) -> int:
+    """The KTH sensor turns' distance stop (plan 4.2 A1b-1 decision 8)."""
+    return turns_stop_counts(turns, KTH_COUNTS_PER_TURN, duty, count_sign)
+
+
+def counts_stop(counts, duty: float, count_sign: int) -> int:
+    """A distance stop given in counts (plan 4.5 A1c decision 11): a positive whole magnitude 1..2^31-1 (0 would mean
+    no stop on the wire), signed by ``count_sign x sign(duty)``."""
+    if isinstance(counts, bool) or not isinstance(counts, int):
+        raise LimitRefused("stop-counts: a whole number of counts")
+    if not 1 <= counts < 2 ** 31:
+        raise LimitRefused("stop-counts: 1 .. 2^31-1 counts (its sign comes from the duty and count-sign)")
+    if count_sign not in (1, -1):
+        raise LimitRefused("count-sign: 1 or -1")
+    if duty == 0 or not math.isfinite(duty):
+        raise LimitRefused("stop-counts: needs a non-zero duty (its sign is the direction)")
+    return counts * count_sign * (1 if duty > 0 else -1)
+
+
+@dataclass(frozen=True)
+class MtUnits:
+    """One wheel's MT units from ``config/real/vehicle.yaml`` ``wheel_counts.<side>`` (plan 0.1, 4.5 A1c decision 11):
+    the motor shaft CPR (None when the side gives only counts per wheel turn, or a CPR outside 1..65535 or not whole --
+    then MT turns and MT hold are refused), the gear ratio, the counts per wheel turn and whether they were measured."""
+
+    side: str
+    motor_cpr: int | None
+    gear_ratio: float | None
+    counts_per_wheel_rev: float
+    measured: bool
+    why: str | None = None
+
+    def record(self) -> dict:
+        return {"side": self.side, "motor_cpr": self.motor_cpr, "gear_ratio": self.gear_ratio,
+                "counts_per_wheel_rev": self.counts_per_wheel_rev, "measured": self.measured,
+                "no_motor_cpr": self.why}
+
+
+def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
+    """L and R from vehicle.yaml's content (its ``wheel_counts``); the loader keeps the motor shaft CPR the vehicle
+    config folds into counts per wheel turn."""
+    out = []
+    for side in ("left", "right"):
+        entry = (data.get("wheel_counts") or {}).get(side)
+        if not isinstance(entry, dict):
+            raise ValueError(f"wheel_counts.{side} must be a mapping")
+        keys = set(entry) - {"provenance"}
+        prov = entry.get("provenance") or {}
+        measured = bool(prov.get("measured", False)) if isinstance(prov, dict) else False
+        if keys == {"motor_counts_per_rev", "gear_ratio"}:
+            raw, gear = entry["motor_counts_per_rev"], float(entry["gear_ratio"])
+            cpr, why = None, None
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(float(raw)):
+                why = "motor_counts_per_rev is not a number"
+            elif float(raw) != int(raw):
+                why = f"motor_counts_per_rev {raw} is not whole"
+            elif not 1 <= int(raw) <= MT_CPR_MAX:
+                why = f"motor_counts_per_rev {int(raw)} is outside 1..{MT_CPR_MAX}"
+            else:
+                cpr = int(raw)
+            per_wheel = float(raw) * gear if why is None or "whole" in why or "outside" in why else float("nan")
+            out.append(MtUnits(side, cpr, gear, per_wheel, measured, why))
+        elif keys == {"counts_per_wheel_rev"}:
+            out.append(MtUnits(side, None, None, float(entry["counts_per_wheel_rev"]), measured,
+                               "this side gives counts per wheel turn only"))
+        else:
+            raise ValueError(f"wheel_counts.{side} takes either motor_counts_per_rev + gear_ratio or counts_per_wheel_rev")
+    return out[0], out[1]
+
+
+def mt_units(path) -> tuple[MtUnits, MtUnits]:
+    import yaml
+
+    from pathlib import Path
+
+    return mt_units_from_mapping(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
 
 
 def bench_refusal(ask: BenchAsk) -> str | None:
@@ -373,22 +464,28 @@ def bench_refusal(ask: BenchAsk) -> str | None:
         return "bench-bypass steer_range: the steering axis (M) only"
     if "lift_range" in ask.names and ask.axis != 3:
         return "bench-bypass lift_range: the lift axis (H) only"
-    if ask.mode == 2 and (ask.source != 1 or ask.axis not in (2, 3)):
-        return "hold: the KTH count of M or H"  # named before the source rules below speak of distances
-    if ask.source not in (0, 1):
-        return "bench source: none or kth (the MT source comes with A1c)"
-    if ask.source == 1 and ask.axis not in (2, 3):
+    # the source and axis pairs (bench8, plan 4.5 A1c decision 3): KTH on M or H, MT on L or R
+    paired = (ask.source == KTH_SOURCE and ask.axis in (2, 3)) or (ask.source == MT_SOURCE and ask.axis in (0, 1))
+    if ask.mode == 2 and not paired:
+        return "hold: the KTH count of M or H, or the MT count of L or R"  # before the distance words below
+    if ask.source not in (0, KTH_SOURCE, MT_SOURCE):
+        return "bench source: none, kth or mt"
+    if ask.source == KTH_SOURCE and ask.axis not in (2, 3):
         return "stop-kth-turns: the KTH count is M's or H's"
-    if ask.stop_counts != 0 and ask.source != 1:
-        return "stop-kth-turns: a distance stop needs the KTH source"
+    if ask.source == MT_SOURCE and ask.axis not in (0, 1):
+        return "source mt: the MT count is L's or R's"
+    if ask.stop_counts != 0 and ask.source == 0:
+        return "stop: a distance stop needs a measured source"
     if ask.mode not in (1, 2):
         return "bench mode: duty or hold"
     if ask.hold_run:
-        if ask.source != 1 or ask.axis not in (2, 3):
-            return "hold: the KTH count of M or H"
+        if not paired:
+            return "hold: the KTH count of M or H, or the MT count of L or R"
         if ask.stop_counts != 0:
             return "hold: no distance stop"
         if ask.hold is None:
             return "hold: no settings"
+        if ask.hold.source != ask.source:
+            return "hold: its source must be the run's"
         return hold_refusal(ask.hold, ask.duty_max_e4()[ask.axis])
     return None
