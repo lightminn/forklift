@@ -202,7 +202,7 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
   }
 }
 
-const FIELD_IDS = { hold_target: "bn-hold-target", hold_value: "bn-hold-value", hold_cap: "bn-hold-cap",
+const FIELD_IDS = { duty: "bn-duty", hold_target: "bn-hold-target", hold_value: "bn-hold-value", hold_cap: "bn-hold-cap",
   hold_kp: "bn-hold-kp",
   hold_ki: "bn-hold-ki", hold_kd: "bn-hold-kd", hold_deadband: "bn-hold-db", hold_min_duty: "bn-hold-min",
   count_sign: "bn-count-sign", stop_turns: "bn-stop-turns", measure: "bn-measure", same_setup: "bn-same-setup" };
@@ -250,7 +250,10 @@ export function renderBench(m, { rejectText }) {
   // B2: the hold, the stop and the sign rows follow the axis, the source and the mode
   const modeSel = document.getElementById("bn-mode");
   modeSel.querySelector('option[value="hold"]').disabled = !fs.holdOpen;
-  if (!fs.holdOpen && modeSel.value === "hold") modeSel.value = "duty";
+  if (!fs.holdOpen && modeSel.value === "hold") {
+    modeSel.value = "duty";
+    clearFields(clearedOnChange("mode")); // the automatic return to a duty run drives nothing typed before (r2 P1)
+  }
   const kind = runKind(form());
   document.getElementById("bn-hold-row").hidden = kind !== "hold";
   document.getElementById("bn-hold-hint").hidden = kind !== "hold";
@@ -273,8 +276,9 @@ export function renderBench(m, { rejectText }) {
   markEl.hidden = !mark;
   markEl.textContent = mark ? T.rangeMark[mark] : "";
   // the advisories of the run going on (the back end's own) while one goes, the form's otherwise
-  const adv = run ? (run.advisories ?? []).map((a) => (a === "high_duty_distance_unverified" ? "highDutyDistance" : a))
-    : advice(f);
+  // while a run goes: the back end's own advice (the motor-off advice) and advisories (the high-duty stop) together
+  const adv = run ? [...(run.advice ?? []).map(() => "rangeOff"),
+    ...(run.advisories ?? []).map((a) => (a === "high_duty_distance_unverified" ? "highDutyDistance" : a))] : advice(f);
   const advEl = document.getElementById("bn-advice");
   advEl.hidden = adv.length === 0;
   advEl.textContent = adv.map((a) => T.advice[a] ?? a).join(" · ");
@@ -345,13 +349,15 @@ function renderResult(m) {
     row(T.verdictRun, `${v.ok ? T.ok : T.notOk}${v.why.length ? ` · ${v.why.join(", ")}` : ""}`),
     row(T.verdictHold, holdText),
     row(v.measure || v.kind === "measure" ? T.verdictMeasure : T.verdictDistance, distText),
-    v.rest && v.rest.cumulative !== null ? row(T.rest, `누계 ${v.rest.cumulative} 카운트`
-      + `${v.rest.result === "settled_at_100hz" ? "" : ` (확인 못 함${v.rest.why ? `: ${v.rest.why}` : ""})`}`) : null,
+    v.rest ? row(T.rest, `${v.rest.cumulative !== null ? `누계 ${v.rest.cumulative} 카운트 · ` : ""}`
+      + `${v.rest.result === "settled_at_100hz" ? T.restSettled
+        : `확인 못 함${v.rest.why ? `(${T.restWhy[v.rest.why] ?? v.rest.why})` : ""}`}`) : null,
     v.holdNotes.length ? row("메모", v.holdNotes.join(" · ")) : null,
     v.resultBypass.length ? row(T.runBypass, v.resultBypass.map((n) => T.bypass[n] ?? n).join(", ")) : null,
     v.previous ? row(T.previousRun, `${v.previous.kind ?? "—"} · ${v.previous.stopReason ?? "—"}`
       + `${v.previous.target !== null ? ` · 목표 ${v.previous.target}` : ""}`
-      + `${v.previous.holdVerdict ? ` · ${T.holdResult[v.previous.holdVerdict] ?? v.previous.holdVerdict}` : ""}`) : null,
+      + `${v.previous.holdVerdict ? ` · ${T.holdResult[v.previous.holdVerdict] ?? v.previous.holdVerdict}` : ""}`
+      + `${v.previous.holdWhy.length ? `(${v.previous.holdWhy.join(", ")})` : ""}`) : null,
     v.advisories.length ? row("안내", v.advisories.map((a) => (a === "high_duty_distance_unverified"
       ? T.advice.highDutyDistance : a)).join(" · ")) : null,
     v.copyError ? row(T.copyError, v.copyError) : null,
@@ -403,10 +409,15 @@ function drawGraph(m, axis) {
   const errs = ser.map((s) => s.holdError).filter((e) => e !== null && Number.isFinite(e));
   if (errs.length) {
     const emax = Math.max(20, ...errs.map((e) => Math.abs(e)));
+    // the target itself on the error's scale is the zero line: drawn dashed so 'at the target' reads at a glance
+    ctx.setLineDash([4, 4]);
+    line(ser.map((s) => [s.t, s.target === null ? null : 0]), 4, half - 8, -emax, emax, col("muted", "#999"));
+    ctx.setLineDash([]);
     line(ser.map((s) => [s.t, s.holdError]), 4, half - 8, -emax, emax, col("lidar", "#c8f"));
     ctx.fillStyle = col("muted", "#999");
     ctx.font = "11px sans-serif";
-    ctx.fillText(`목표까지 오차 ±${emax} 카운트`, W - 170, 14);
+    const tg = ser.map((s) => s.target).filter((x) => x !== null).at(-1);
+    ctx.fillText(`목표까지 오차 ±${emax} 카운트 · 점선 = 목표${tg !== undefined ? ` ${tg}` : ""}`, W - 250, 14);
   }
   const cur = ser.flatMap((s) => s.current).filter((c) => c !== null);
   const cmax = Math.max(1, ...cur.map((c) => Math.abs(c)));

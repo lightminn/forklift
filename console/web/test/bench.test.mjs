@@ -479,7 +479,7 @@ test("a hold target needs a whole number for abs and rel", () => {
 test("the KTH-only fields close on the none source and on L/R, and a mode change drops the stop", () => {
   assert.equal(runKind({ ...M, source: "none", mode: "hold", stop_turns: "1" }), "duty");
   assert.equal(runKind({ axis: "L", mode: "hold" }), "duty");
-  assert.deepEqual(clearedOnChange("mode"), ["stop_turns", "measure"]);
+  assert.deepEqual(clearedOnChange("mode"), ["stop_turns", "measure", "duty"]);  // a duty never carries over
   for (const k of ["count_sign", "hold_target", "stop_turns", "same_setup"]) assert.ok(clearedOnChange("axis").includes(k));
   assert.deepEqual(clearedOnChange("source"), clearedOnChange("axis"));
 });
@@ -523,6 +523,7 @@ test("the graph keeps the run's hold error and breaks on a null", () => {
   const s = g.series("M");
   assert.deepEqual(s.map((x) => x.holdError), [null, 40, null, 5]);
   assert.equal(s[1].deadband, 12);
+  assert.equal(g.series("M")[1].target, null);  // no target in these samples
   // another axis's graph never shows the M run's error (B2b r1 P2)
   assert.deepEqual(g.series("H").map((x) => x.holdError), [null, null, null, null]);
 });
@@ -543,10 +544,16 @@ test("a number the browser could not read is a typing error, never an empty fiel
     .problems.includes("hold_kp"));
 });
 
-test("values below the wire's resolution are the page's own problems", () => {
+test("values below the wire's resolution: the back end's own rounding, for a stop run only", () => {
   assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "0.0001", count_sign: "1" }).problems.includes("stop_turns_too_small"));
   assert.deepEqual(runFields({ ...M, duty: "0.2", stop_turns: "0.0002", count_sign: "1" }).problems, []);
-  assert.ok(runFields({ ...M, duty: "0.00001" }).problems.includes("duty_too_small"));
+  // exactly half a unit: Python rounds to the even neighbour (0), as the back end does -- refused here too
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: String(0.5 / 4096), count_sign: "1" })
+    .problems.includes("stop_turns_too_small"));
+  assert.ok(runFields({ ...M, duty: "0.00005", stop_turns: "0.5", count_sign: "1" }).problems.includes("duty_too_small"));
+  // a plain duty run's or a measuring run's small duty is the back end's to judge
+  assert.ok(!runFields({ ...M, duty: "0.00001" }).problems.includes("duty_too_small"));
+  assert.ok(!runFields({ ...M, duty: "0.00001", measure: true, count_sign: "1" }).problems.includes("duty_too_small"));
 });
 
 test("the bundle's setup mark goes with a speed check only, never beside a contradicting setup", () => {
@@ -572,6 +579,11 @@ test("the result view: a withheld measure, a missing distance result, the previo
   assert.deepEqual(v.resultBypass, ["steer_range"]);
   assert.equal(v.previous.target, 812);
   assert.equal(v.previous.holdVerdict, "undecidable");
+  assert.deepEqual(resultView({ previous_result: { kind: "hold", hold_verdict: { result: "undecidable",
+    why: ["판정 불가(설정·표본 없음)"] } }, verdict: { run_cleanup: { ok: true } } }).previous.holdWhy,
+  ["판정 불가(설정·표본 없음)"]);
+  assert.deepEqual(resultView({ rest: { result: "unconfirmed", why: "no_sample" }, verdict: { run_cleanup: { ok: true } } })
+    .rest, { result: "unconfirmed", cumulative: null, why: "no_sample", note: null });
   assert.equal(v.copyError, "disk");
   assert.equal(resultView({ kind: "distance", verdict: { run_cleanup: { ok: false } } }).distanceMissing, true);
 });

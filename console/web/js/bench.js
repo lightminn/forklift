@@ -43,6 +43,15 @@ export function fieldState(form) {
   };
 }
 
+// Python's round(): halves to the even neighbour (the back end's quantization, never JS Math.round's halves up)
+function pyRound(x) {
+  const f = Math.floor(x);
+  const d = x - f;
+  if (d > 0.5) return f + 1;
+  if (d < 0.5) return f;
+  return f % 2 === 0 ? f : f + 1;
+}
+
 function num(v) {
   if (v === "" || v === null || v === undefined) return null;
   const x = typeof v === "number" ? v : Number(v);
@@ -67,7 +76,8 @@ export function clearedOnChange(changed) {
     return ["hold_target", "hold_value", "hold_cap", "hold_kp", "hold_ki", "hold_kd", "hold_deadband",
       "hold_min_duty", "count_sign", "stop_turns", "measure", "same_setup"];
   }
-  if (changed === "mode") return ["stop_turns", "measure"];
+  // a mode change also empties the duty: a value typed for one kind of run never drives another (B2b r2 P1)
+  if (changed === "mode") return ["stop_turns", "measure", "duty"];
   // a value typed for 'move by N counts' never goes out as an absolute angle, nor the other way (B2b r1 P1-2)
   if (changed === "hold_target") return ["hold_value"];
   return [];
@@ -85,8 +95,11 @@ export function runFields(form) {
   const duty = num(kind === "hold" ? form.hold_cap : form.duty);
   const seconds = num(form.seconds);
   if ((duty === null && kind !== "hold") || Number.isNaN(duty)) problems.push(kind === "hold" ? "hold_cap" : "duty");
-  // the wire's own resolution: a duty that rounds to 0 is refused by the back end, said here first
-  if (duty !== null && !Number.isNaN(duty) && Math.round(Math.abs(duty) * 10000) < 1) problems.push("duty_too_small");
+  // the back end's own quantization check, the same kind and rounding: a distance run's duty must stay non-zero on the
+  // wire (B2b r2 P2-1); the other kinds' small duties are the back end's to judge
+  if (kind === "distance" && duty !== null && !Number.isNaN(duty) && pyRound(Math.abs(duty) * 10000) < 1) {
+    problems.push("duty_too_small");
+  }
   if (seconds === null || Number.isNaN(seconds)) problems.push("seconds");
   const fields = { axis, source: fs.source, mode: kind === "hold" ? "hold" : "duty", seconds,
     bypass: (form.bypass ?? []).filter((n) => fs.bypassOpen[n]),
@@ -126,7 +139,7 @@ export function runFields(form) {
   } else if (kind === "distance") {
     const turns = num(form.stop_turns);
     if (Number.isNaN(turns) || turns === null || turns <= 0) problems.push("stop_turns");
-    else if (Math.round(turns * 4096) < 1) problems.push("stop_turns_too_small"); // less than one count
+    else if (pyRound(turns * 4096) < 1) problems.push("stop_turns_too_small"); // less than one count
     else fields.stop = { turns };
   } else if (kind === "measure") {
     fields.measure = true;
@@ -219,12 +232,13 @@ export function resultView(result) {
     measure: result.measure ? { moved: result.measure.moved ?? null, status: result.measure.status ?? null } : null,
     // the back end's rest position is its cumulative count (bench_session.rest_position)
     rest: result.rest ? { result: result.rest.result ?? null, cumulative: result.rest.cumulative ?? null,
-      why: result.rest.why ?? null } : null,
+      why: result.rest.why ?? null, note: result.rest.note ?? null } : null,
     resultBypass: [...(result.bench_result?.result_bypass ?? result.bypass_mcu ?? [])],
     previous: result.previous_result ? {
       kind: result.previous_result.kind ?? null, stopReason: result.previous_result.stop_reason ?? null,
       target: result.previous_result.target ?? null,
       holdVerdict: result.previous_result.hold_verdict?.result ?? null,
+      holdWhy: [...(result.previous_result.hold_verdict?.why ?? [])],
     } : null,
     copyError: result.copy_error ?? null,
     holdNotes: [...(result.hold?.notes ?? [])],
@@ -271,6 +285,7 @@ export class Graph {
       // the run's own count values (null until they are this run's, and across a pair gap: plan 4.4 decision 5)
       runAxis: run?.axis ?? null,
       holdError: Number.isFinite(run?.error_counts) ? run.error_counts : null,
+      target: Number.isFinite(run?.target) ? run.target : null,
       deadband: Number.isFinite(run?.deadband) ? run.deadband : null,
       moved: Number.isFinite(run?.moved_counts) ? run.moved_counts : null });
   }
@@ -317,6 +332,7 @@ export class Graph {
       current: s.current,
       // a run's count values belong to its own axis: another axis's graph never shows them (B2b r1 P2)
       holdError: s.runAxis === axis ? s.holdError ?? null : null,
+      target: s.runAxis === axis ? s.target ?? null : null,
       deadband: s.runAxis === axis ? s.deadband ?? null : null,
       moved: s.runAxis === axis ? s.moved ?? null : null,
     }));
