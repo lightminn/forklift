@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from forklift_core.mcu_link.messages import BenchCountState, BenchDriveState, BenchRunFlag, Mode
+from forklift_core.mcu_link.messages import (
+    BenchCountState,
+    BenchDriveState,
+    BenchRunFlag,
+    Mode,
+)
 from forklift_core.plant import bench_limits as bl
 from forklift_core.plant import bench_session as bs
 
@@ -15,12 +20,12 @@ def units_of(left: dict, right: dict):
 
 
 def test_the_units_keep_the_motor_shaft_cpr():
-    l, r = units_of({"motor_counts_per_rev": 4096, "gear_ratio": 80.0, "provenance": {"measured": False}},
+    left, right = units_of({"motor_counts_per_rev": 4096, "gear_ratio": 80.0, "provenance": {"measured": False}},
                     {"motor_counts_per_rev": 8192, "gear_ratio": 40.0, "provenance": {"measured": True}})
     # the same counts per wheel turn, two different motor shaft CPRs (plan 4.5 decision 11)
-    assert l.counts_per_wheel_rev == r.counts_per_wheel_rev == 327680
-    assert (l.motor_cpr, r.motor_cpr) == (4096, 8192) and not l.measured and r.measured
-    assert l.record()["motor_cpr"] == 4096 and l.record()["no_motor_cpr"] is None
+    assert left.counts_per_wheel_rev == right.counts_per_wheel_rev == 327680
+    assert (left.motor_cpr, right.motor_cpr) == (4096, 8192) and not left.measured and right.measured
+    assert left.record()["motor_cpr"] == 4096 and left.record()["no_motor_cpr"] is None
 
 
 @pytest.mark.parametrize(("entry", "why"), [
@@ -30,16 +35,16 @@ def test_the_units_keep_the_motor_shaft_cpr():
     ({"motor_counts_per_rev": 0, "gear_ratio": 80.0}, "outside"),
 ])
 def test_a_side_without_a_usable_motor_cpr(entry, why):
-    l, r = units_of(entry, {"motor_counts_per_rev": 4096, "gear_ratio": 80.0})
-    assert l.motor_cpr is None and why in l.why
-    assert r.motor_cpr == 4096  # the other side keeps its own
+    left, right = units_of(entry, {"motor_counts_per_rev": 4096, "gear_ratio": 80.0})
+    assert left.motor_cpr is None and why in left.why
+    assert right.motor_cpr == 4096  # the other side keeps its own
 
 
 def test_the_real_vehicle_yaml_reads():
     from pathlib import Path
 
-    l, r = bl.mt_units(Path(__file__).resolve().parents[3] / "config" / "real" / "vehicle.yaml")
-    assert l.motor_cpr == r.motor_cpr == 4096 and l.gear_ratio == 80.0 and not l.measured
+    left, right = bl.mt_units(Path(__file__).resolve().parents[3] / "config" / "real" / "vehicle.yaml")
+    assert left.motor_cpr == right.motor_cpr == 4096 and left.gear_ratio == 80.0 and not left.measured
 
 
 def test_distance_stops_in_turns_and_counts():
@@ -158,10 +163,10 @@ def test_the_hold_carries_its_source_and_cpr():
 def test_a_cpr_that_is_no_number_leaves_no_nan_in_the_record():
     import json
 
-    l, _r = units_of({"motor_counts_per_rev": "4096", "gear_ratio": 80.0}, {"motor_counts_per_rev": 4096,
+    left, _right = units_of({"motor_counts_per_rev": "4096", "gear_ratio": 80.0}, {"motor_counts_per_rev": 4096,
                                                                            "gear_ratio": 80.0})
-    assert l.motor_cpr is None and l.counts_per_wheel_rev is None  # never NaN (Codex A1c-2 r1 P2-5)
-    json.dumps(l.record(), allow_nan=False)
+    assert left.motor_cpr is None and left.counts_per_wheel_rev is None  # never NaN (Codex A1c-2 r1 P2-5)
+    json.dumps(left.record(), allow_nan=False)
 
 
 def test_a_board_only_recovery_reads_the_results_own_axis_and_source():

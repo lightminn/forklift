@@ -474,7 +474,7 @@ def _settle_seen(pairs, run_id: int, deadband: int, source: int) -> dict:
     inside = sum(1 for _t, b in tail if _inside(b, deadband, source))
     # the time is the sum of the gaps between two neighbouring inside pairs no wider than HOLD_GAP_US: a reception
     # gap or a pair outside is never counted as seen inside (Codex A1c-2 r1 P2-3)
-    seen = sum(t1 - t0 for (t0, b0), (t1, b1) in zip(tail, tail[1:])
+    seen = sum(t1 - t0 for (t0, b0), (t1, b1) in zip(tail, tail[1:], strict=False)
                if _inside(b0, deadband, source) and _inside(b1, deadband, source) and 0 < t1 - t0 <= HOLD_GAP_US)
     return {"inside_s": round(seen / 1e6, 3), "inside_share": round(inside / len(tail), 3)}
 

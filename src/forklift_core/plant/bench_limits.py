@@ -448,9 +448,9 @@ def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
 
 
 def mt_units(path) -> tuple[MtUnits, MtUnits]:
-    import yaml
-
     from pathlib import Path
+
+    import yaml
 
     return mt_units_from_mapping(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
 
