@@ -20,14 +20,10 @@ static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
 #if defined(FW_BENCH_IMAGE)
-    encoder_read(in->wheel_hw, in->wheel_fresh, in->wheel_start_us); /* bench8: the core skips a failed read */
+    encoder_read_report(in->wheel_hw, in->wheel_fresh, in->wheel_start_us); /* bench8: the core skips a failed read */
     in->wheel_report = true;
 #else
-    bool ok[2];
-    uint32_t start_us[2];
-    encoder_read(in->wheel_hw, ok, start_us); /* the other images keep a failed read's previous value */
-    (void)ok;
-    (void)start_us;
+    encoder_read(in->wheel_hw);
 #endif
     kth_spi_snapshot(in->now_us, in->abs_frame, in->abs_fresh, in->abs_time_us); /* now_us set by the app */
 #if defined(FW_BENCH_IMAGE)

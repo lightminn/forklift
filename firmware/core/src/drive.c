@@ -672,10 +672,10 @@ static void read_sensors(drive *d, const drive_inputs *in)
     uint32_t bits = 0;
 #if defined(FW_CORE_BENCH)
     if (BENCH(c)) {
-        bench_read_wheels(d, in);
-    }
+        bench_read_wheels(d, in); /* the bench image's own wheel samples (plan 4.5 A1c decision 4) */
+    } else
 #endif
-    for (int i = 0; i < 2 && !BENCH(c); i++) {
+    for (int i = 0; i < 2; i++) {
         wheel_enc *e = &d->wheel[i];
         uint32_t dt_us = in->now_us - wheel_enc_last_us(e);
         bool drop = false;
