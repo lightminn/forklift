@@ -835,11 +835,7 @@ class CommissionSession(Session):
             self.pre_run_pair_t = b.host.bench_state_of.mcu_time_us  # the zero base of the entry window (round 12)
         if prev.result_run_id != 0:
             errors0 = b.record_errors
-            fields = result_fields(prev)
-            if fields.get("kind") == "hold":
-                # only the board's result was recovered: no settings or samples for verdict 2 (decision 9)
-                fields["hold_verdict"] = {"result": "undecidable", "why": ["판정 불가(설정·표본 없음)"]}
-            b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, **fields})
+            b.emit({"t": "bench_previous_result", "boot_id": b.state.boot_id, **recovered_fields(prev)})
             self._prev_result = (b.state.boot_id, prev.result_run_id)  # recorded again right before the BENCH_ARM
             b.flush_record()  # out of this process before the BENCH_ARM can clear the board's copy
             if b.record_errors != errors0:
@@ -949,7 +945,7 @@ class CommissionSession(Session):
         b, prev = self.b, self.b.host.bench_state
         if self._prev_result is None or prev is None or prev.result_run_id != self._prev_result[1]:
             return True
-        fields = result_fields(prev)
+        fields = recovered_fields(prev)
         if fields == self._prev_final:
             return True
         errors0 = b.record_errors
@@ -1074,7 +1070,10 @@ class CommissionSession(Session):
         try:
             self._hold_loop(end_ns, stop_ns, stop)
         finally:
-            # no queued HOLD outlives the renewals: the end zero goes out behind nothing of the hold (Codex A1b-2b r1)
+            # however the renewals ended (time, a window stop, an abort): the gate closes now, so a HOLD half written is
+            # abandoned, and no queued HOLD outlives them -- the end zero goes out behind nothing of the hold
+            if self.b.gate_holder is not None:
+                self.b.gate_holder["hold_until_ns"] = min(stop_ns, time.monotonic_ns())
             self.b.host.drop_frames(("BENCH_HOLD",), "hold_end")
 
     def _hold_loop(self, end_ns: int, stop_ns: int, stop) -> None:
@@ -1496,8 +1495,10 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     b, ask = bench, session.bench
     h = ask.hold
     pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
+    idents: list = []  # (boot_id, arm_gen) of each
 
     def keep(st, bs, rx):  # noqa: ARG001
+        idents.append((st.boot_id, st.arm_gen))
         pairs.append((st.mcu_time_us, st.mode, bs))
         # every pair in the record: verdict 2 and the entry window can be recomputed from the JSONL (Codex r1 P2)
         b.emit({"t": "bench_pair", "mcu_time_us": st.mcu_time_us, "boot_id": st.boot_id, "arm_gen": st.arm_gen,
@@ -1534,9 +1535,13 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         b.phase = "on"
         if session.aborted is None:
             # the settings the verdict needs, written before the first HOLD (a process lost after it keeps them)
+            errors0 = b.record_errors
             b.emit({"t": "hold_settings", "run_id": session.run_id, **_hold_settings(ask)})
             b.flush_record()
-            session.hold_run(seconds, stop)
+            if b.record_errors != errors0:
+                session.aborted = "hold_settings_not_recorded"  # verdict 2 needs them: no HOLD without them
+            else:
+                session.hold_run(seconds, stop)
             if session.board_ended is not None and session.stop_reason is None:
                 session.stop_reason = f"board_{session.board_ended}"
             if session.stop_reason is None and session.aborted is None:
@@ -1562,6 +1567,7 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     why = session_abort_reason(b.samples, i_arm)
     if why is not None:
         session.aborted = session.aborted or why
+    pairs = _run_pairs(pairs, idents, session.run_id)  # this run's boot and arming only
     verdict2 = (bench_session.hold_verdict(pairs, br, deadband=h.deadband, run_id=session.run_id)
                 if br.get("confirmed") else {"result": "undecidable", "why": ["no_result"]})
     pts = _entry_points(session, pairs)
@@ -1579,14 +1585,25 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         lo = min((w["lower"] or 0) for w in unk)
         hi = max((w["upper"] or 0) for w in unk if w["upper"] is not None)
         entries["label"] = f"데드밴드 반복 진입 미상(최근 1 s {lo}–{hi} 회)"
+    elif any(w["upper"] is None for w in unk):
+        lo = max((w["lower"] or 0) for w in unk)
+        entries["label"] = f"데드밴드 반복 진입 미상(최근 1 s 최소 {lo} 회, 무장 기준 없음)"
     else:
         entries["label"] = None
     last_pair = bench_session.pair_of(b.host.bench_state_of, b.host.bench_state)
+    board_end = (last_pair is not None and last_pair.mode == Mode.DISARMED and last_pair.result_run_id == session.run_id
+                 and (last_pair.boot_id, last_pair.arm_gen) == (idents[0] if idents else (None, None)))
+    if board_end and session.cleanup_confirmed is not True:
+        # the board's own end (this run's ENDED, then DISARMED) confirms the cleanup without the DISARM's echo (plan 3
+        # verdict 1; Codex A1b-2b round 2 P2)
+        session.cleanup_confirmed = True
+        b.emit({"t": "cleanup_confirmed_by_board", "run_id": session.run_id})
+    faults = [] if last_pair is None else [f.name for f in FaultFlag if f in last_pair.fault_flags
+                                          and f != FaultFlag.COMMAND_TIMEOUT]
     verdict1 = bench_session.run_verdict(
         closed="ended" if br.get("confirmed") else "no_drive", stop_reason=br.get("stop_reason"),
-        aborted=session.aborted, cleanup_confirmed=bool(session.cleanup_confirmed) or (
-            last_pair is not None and last_pair.mode == Mode.DISARMED and last_pair.result_run_id == session.run_id),
-        last=last_pair, record_errors=b.record_errors)
+        aborted=session.aborted, cleanup_confirmed=bool(session.cleanup_confirmed), last=last_pair,
+        record_errors=b.record_errors, unexpected_faults=tuple(faults))
     hold_out = {"settings": _hold_settings(ask), "verdict1": verdict1, "rest": rest,
                 "start": session.bench_start, "holds_sent": session.holds_sent, "verdict": verdict2,
                 "entries": entries, "pairs": len(pairs),
@@ -1596,6 +1613,24 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     result = "ok" if verdict1["ok"] else "aborted"
     return _final({"result": result, "stop": session.stop_reason, "hold": hold_out, "bench_result": br,
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
+
+
+def _run_pairs(pairs: list, idents: list, run_id: int) -> list:
+    """The pairs of this run's boot and arming (those of its first pair naming it while armed), and any before it on
+    that boot (the entry window's zero base)."""
+    ident = next((idents[i] for i, (_t, m, bs) in enumerate(pairs) if bs.run_id == run_id and m == Mode.ARMED), None)
+    if ident is None:
+        return pairs
+    return [p for p, idn in zip(pairs, idents) if idn == ident or (idn[0] == ident[0] and p[2].run_id != run_id)]
+
+
+def recovered_fields(bs) -> dict:
+    """A recovered result (the previous run's, read before a new ARM): ``result_fields``, and for a hold only the
+    board's result -- no settings or samples for verdict 2 (decision 9)."""
+    fields = result_fields(bs)
+    if fields.get("kind") == "hold":
+        fields["hold_verdict"] = {"result": "undecidable", "why": ["판정 불가(설정·표본 없음)"]}
+    return fields
 
 
 def _hold_settings(ask: bl.BenchAsk) -> dict:
@@ -2316,10 +2351,13 @@ def main(argv=None) -> int:
     # MCU deadline past the approved end
     # one executor per MCU device, listeners included (real safety wiring design 8.1)
     gate_holder: dict = {"host": None, "cancelled": False, "hold_until_ns": None}
-    link_factory = _link_factory(gate_holder) if args.cmd == "commission" else None
+    link_kw = {}
+    if args.cmd == "commission":
+        # one read of the opened node's product string picks the link and tells the host (Codex A1b-2b round 2 P2)
+        link_kw = {"link_factory": _link_factory(gate_holder), "product_reader": _product_of_opening(gate_holder)}
     link = ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns, exclusive=True,
                             opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]),
-                            link_factory=link_factory)
+                            **link_kw)
     markers = None
     if getattr(args, "markers", False):
         # an asked-for marker input that cannot work (no terminal) is said out loud and in the record, not left to
@@ -2404,10 +2442,23 @@ def _link_factory(holder: dict, product_reader=usb_product_of_fd):
     A1b-2b round 1 P1): the bench7 image gets the gated ``BenchTtyLink`` whatever the run's arguments; every other
     image keeps the plain ``TtyLink``."""
     def make(fd: int):
-        if bl.bench_image(product_reader(fd)):
+        product = product_reader(fd)
+        holder["opening"] = (fd, product)  # the host is told this same value (_product_of_opening)
+        if bl.bench_image(product):
             return BenchTtyLink(fd, gate=lambda f, write: _cli_gate(holder, f, write))
         return TtyLink(fd)
     return make
+
+
+def _product_of_opening(holder: dict, product_reader=usb_product_of_fd):
+    """ReconnectingLink's product reader: the value the link factory read for this fd (never a second read that could
+    differ from the one that chose the link)."""
+    def read(fd: int):
+        opening = holder.get("opening")
+        if opening is not None and opening[0] == fd:
+            return opening[1]
+        return product_reader(fd)
+    return read
 
 
 def _cli_gate(holder: dict, f, write) -> bool:

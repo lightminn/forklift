@@ -618,3 +618,64 @@ def test_the_cli_gate_stops_holds_at_the_renewal_end():
     zero = SimpleNamespace(kind="COMMISSION", nonzero=False, generation=1, expires_ns=now + 10**9)
     assert not bringup._cli_gate(holder, hold, lambda: None)  # past T - HANDOVER_S: never completed before the zero
     assert bringup._cli_gate(holder, zero, lambda: None)
+
+
+def test_one_product_read_picks_the_link_and_tells_the_host():
+    """A product read that changes between two reads can never give the host bench7 on a plain link (Codex A1b-2b
+    round 2 P2): the factory's read is the value the host gets."""
+    import os
+
+    from real_mcu_link import TtyLink
+
+    reads = iter([None, BENCH5])
+    holder = {"host": None, "cancelled": False, "hold_until_ns": None}
+    reader = lambda fd: next(reads)  # noqa: E731
+    r, w = os.pipe()
+    try:
+        link = bringup._link_factory(holder, reader)(w)
+        assert type(link) is TtyLink
+        assert bringup._product_of_opening(holder, reader)(w) is None  # the same value, not the second read
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_a_hold_whose_settings_cannot_be_written_sends_no_hold(model, monkeypatch):
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    orig = bringup.Bench.emit
+
+    def emit(self, row):
+        if row.get("t") == "hold_settings":
+            self.record_errors += 1
+            return
+        return orig(self, row)
+
+    monkeypatch.setattr(bringup.Bench, "emit", emit)
+    res = bringup.execute(hargs(hold="here", seconds=1.4), b)
+    assert res["aborted"] == "hold_settings_not_recorded", res
+    assert "BENCH_HOLD" not in kinds_written(b)
+
+
+def test_a_window_stop_closes_the_hold_gate(model):
+    """A hold stopped early by its window: the gate refuses any HOLD from then on, so none completes behind the end
+    zero (Codex A1b-2b round 2 P2)."""
+    import time
+
+    b = model("--bench", "1", "--kth-start-raw", "1000,1000")
+    b.host.usb_product = BENCH5
+    b.gate_holder = {"host": b.host, "cancelled": False, "hold_until_ns": None}
+    res = bringup.execute(hargs(hold="rel:200", seconds=3.0, bench_bypass=None, window=(-0.1, 0.05)), b)
+    assert res["stop"] == "window", res
+    assert b.gate_holder["hold_until_ns"] is not None and b.gate_holder["hold_until_ns"] <= time.monotonic_ns()
+
+
+def test_a_recovered_hold_result_is_undecidable():
+    from forklift_core.mcu_link.messages import BenchRunFlag, BenchState
+
+    bs = BenchState(1, 5, 5, 2, 1, 1, 0, 100, 990, 1000, 0, 995, 1, 0, 0, 0, 5, 5, 0, 0x23, 0,
+                    int(BenchRunFlag.RES_HOLD), 2, 1, 3, 1)
+    f = bringup.recovered_fields(bs)
+    assert f["kind"] == "hold" and f["target"] == 1000 and f["result_bypass"] == ["steer_range"]
+    assert f["hold_verdict"]["result"] == "undecidable"
+    assert "hold_verdict" not in bringup.result_fields(bs)
