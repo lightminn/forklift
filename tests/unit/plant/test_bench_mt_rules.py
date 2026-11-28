@@ -78,9 +78,9 @@ def test_the_mt_hold_checks():
     assert bl.bench_refusal(bl.BenchAsk(1, (), None, None, source=2, mode=2, hold=bl.HoldAsk(2, 0, **mt))) is None
 
 
-def pair(t_us, cum, *, age=0, run=7, flags=0, count_state=int(BenchCountState.VALID), source=2, axis=0):
+def pair(t_us, cum, *, age=0, run=7, flags=0, count_state=int(BenchCountState.VALID), source=2, axis=0, gen=3):
     return (t_us, SimpleNamespace(run_id=run, source=source, axis=axis, count_state=count_state, run_flags=flags,
-                                  raw_angle=age, cumulative=cum, evidence_age_ms=0xFFFF))
+                                  raw_angle=age, cumulative=cum, evidence_age_ms=0xFFFF, conn_gen=gen))
 
 
 def test_the_mt_rest_position():
@@ -96,13 +96,17 @@ def test_the_mt_rest_position():
     assert bs.rest_position(lost, source=2)["why"] == "continuity"
     short = [pair(10_000 * k, 500) for k in range(30)]
     assert bs.rest_position(short, source=2)["why"] == "too_short"
+    # two short stretches across a board connection change never join (Codex A1c-2 r1 P2-1)
+    joined = [pair(10_000 * k, 500, gen=3) for k in range(30)] + [pair(300_000 + 10_000 * k, 500, gen=4)
+                                                                   for k in range(30)]
+    assert bs.rest_position(joined, source=2) == {"result": "unconfirmed", "cumulative": 500, "why": "continuity"}
     # the KTH rule is unchanged: the same MT-shaped samples are not re-anchored there
     assert bs.rest_position(still, source=1)["result"] == "unconfirmed"
 
 
-def hold_pair(t_us, cum, *, age=0, drive=BenchDriveState.DRIVING, run=9):
+def hold_pair(t_us, cum, *, age=0, drive=BenchDriveState.DRIVING, run=9, count_state=int(BenchCountState.VALID)):
     b = SimpleNamespace(run_id=run, mode=2, drive_state=drive, target=1000, cumulative=cum, raw_angle=age,
-                        result_run_id=run)
+                        result_run_id=run, count_state=count_state)
     return (t_us, Mode.ARMED, b)
 
 
@@ -122,6 +126,19 @@ def test_a_settled_mt_hold_is_held_with_what_it_saw():
     assert bs.hold_verdict(pairs, result, deadband=12, run_id=9, source=1)["result"] == "held"  # KTH: 0.1 s
 
 
+def test_the_seen_time_counts_only_contiguous_inside_pairs():
+    """Two inside pairs 2 s apart, or pairs outside between, are not 2 s seen inside (Codex A1c-2 r1 P2-3)."""
+    result = {"stop_reason": "end_zero", "run_flags": int(BenchRunFlag.RES_HOLD), "end_evidence_age_ms": 3000,
+              "target": 1000, "cut_position": 1000}
+    two = [hold_pair(0, 1000), hold_pair(2_000_000, 1000)]
+    assert bs.hold_verdict(two, result, deadband=12, run_id=9, source=2)["inside_s"] == 0.0
+    mixed = [hold_pair(10_000 * k, 1000 if k % 2 == 0 else 1100) for k in range(100)]
+    v = bs.hold_verdict(mixed, result, deadband=12, run_id=9, source=2)
+    assert v["inside_s"] == 0.0 and v["inside_share"] == 0.5
+    lost = [hold_pair(10_000 * k, 1000, count_state=int(BenchCountState.LOST)) for k in range(100)]
+    assert bs.hold_verdict(lost, result, deadband=12, run_id=9, source=2)["inside_s"] == 0.0  # VALID only
+
+
 def test_an_mt_inside_pair_is_one_read_at_its_tick():
     b = SimpleNamespace(target=1000, cumulative=1005, raw_angle=0)
     assert bs._inside(b, 12, source=2)
@@ -136,3 +153,40 @@ def test_the_hold_carries_its_source_and_cpr():
     assert (bl.HoldAsk(2, 0).source, bl.HoldAsk(2, 0).cpr) == (1, 4096)  # the KTH default unchanged
     assert not math.isnan(units_of({"motor_counts_per_rev": 4096, "gear_ratio": 80.0},
                                    {"counts_per_wheel_rev": 1000})[1].counts_per_wheel_rev)
+
+
+def test_a_cpr_that_is_no_number_leaves_no_nan_in_the_record():
+    import json
+
+    l, _r = units_of({"motor_counts_per_rev": "4096", "gear_ratio": 80.0}, {"motor_counts_per_rev": 4096,
+                                                                           "gear_ratio": 80.0})
+    assert l.motor_cpr is None and l.counts_per_wheel_rev is None  # never NaN (Codex A1c-2 r1 P2-5)
+    json.dumps(l.record(), allow_nan=False)
+
+
+def test_a_board_only_recovery_reads_the_results_own_axis_and_source():
+    """A pair whose current SET is M/KTH while its result is R/MT: the recovery reads the result's fields (plan 4.5
+    decision 11, Codex plan round 8 P2-4) -- in counts only."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import bringup
+
+    st = SimpleNamespace(stop_reason=5, run_flags=int(BenchRunFlag.RES_DISTANCE) | int(BenchRunFlag.RES_UNCLEAN),
+                         result_run_id=11, result_axis=1, result_source=2, axis=2, source=1, blocked=0,
+                         distance_confirm=0, distance_ref=100, cut_position=900, end_evidence_age_ms=4,
+                         result_bypass=0, target=0, deadband_entries=0)
+    out = bringup.result_fields(st)
+    assert out["axis"] == "R" and out["source"] == 2 and out["kind"] == "distance"
+    assert out["distance"]["result"] == "failed_continuity" and out["measure"]["status"] == "withheld:continuity"
+    assert "turns" not in json_keys(out)
+
+
+def json_keys(d) -> set:
+    keys = set()
+    for k, v in d.items():
+        keys.add(k)
+        if isinstance(v, dict):
+            keys |= json_keys(v)
+    return keys

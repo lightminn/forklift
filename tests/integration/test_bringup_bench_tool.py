@@ -421,8 +421,8 @@ def test_a_hold_on_a_stuck_count_stops_and_fails(model):
 
 
 @pytest.mark.parametrize(("kw", "why"), [
-    (dict(stop_kth_turns=0.5), "no --stop-kth-turns"),
-    (dict(axis="L", bench_bypass=None), "M or H"),
+    (dict(stop_kth_turns=0.5), "no distance or measuring option"),
+    (dict(axis="L", bench_bypass=None, source="kth"), "M or H"),  # L's default source is MT now (plan 4.5 A1c)
     (dict(hold_kp=0.0), "hold-kp"),
     (dict(hold_deadband=600), "hold-deadband"),
     (dict(duty=0.2), "duty cap"),

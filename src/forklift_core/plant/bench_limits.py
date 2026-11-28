@@ -405,7 +405,7 @@ class MtUnits:
     side: str
     motor_cpr: int | None
     gear_ratio: float | None
-    counts_per_wheel_rev: float
+    counts_per_wheel_rev: float | None  # None when the CPR is not a number (never NaN in a record)
     measured: bool
     why: str | None = None
 
@@ -437,7 +437,7 @@ def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
                 why = f"motor_counts_per_rev {int(raw)} is outside 1..{MT_CPR_MAX}"
             else:
                 cpr = int(raw)
-            per_wheel = float(raw) * gear if why is None or "whole" in why or "outside" in why else float("nan")
+            per_wheel = float(raw) * gear if why is None or "whole" in why or "outside" in why else None
             out.append(MtUnits(side, cpr, gear, per_wheel, measured, why))
         elif keys == {"counts_per_wheel_rev"}:
             out.append(MtUnits(side, None, None, float(entry["counts_per_wheel_rev"]), measured,

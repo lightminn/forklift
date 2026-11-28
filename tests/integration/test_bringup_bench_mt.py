@@ -30,7 +30,7 @@ def test_an_mt_distance_run_on_l_stops_at_its_counts(model):
     (cond,) = [r for r in rows(b) if r["t"] == "run_conditions"]
     assert cond["bench"]["source"] == 2 and cond["bench"]["units"]["motor_cpr"] == 4096  # the units fixed
     rest = [r for r in rows(b) if r["t"] == "bench_rest_position"]
-    assert rest and rest[-1]["result"] in ("unchanged_at_100hz", "unconfirmed")  # never "settled" for MT
+    assert rest and rest[-1]["result"] == "unchanged_at_100hz", rest  # 1.0 s window; never "settled" for MT
     pairs = [r for r in rows(b) if r["t"] == "bench_pair"]
     assert pairs and "result_source" in pairs[-1] and "result_axis" in pairs[-1]
 
@@ -64,3 +64,45 @@ def test_an_mt_hold_sends_its_source_and_motor_cpr(model):
     v2 = res["hold"]["verdict"]
     # a still wheel under here: no qualified progress, so no MT evidence -- held, with what was seen (decision 8)
     assert v2["result"] == "held" and v2["why"] == ["mt_evidence_age"], v2
+
+
+def test_an_mt_distance_run_on_r_backwards(model):
+    b = model("--bench", "1")
+    res = bringup.execute(args(axis="R", duty=-0.1, seconds=1.0, stop_counts=1500, count_sign=1, observed="none",
+                               wheels_lifted=True), b)
+    assert res["bench_run"]["stop_reason"] == "distance_reached" and res["distance"]["result"] == "reached", res
+    assert res["bench_run"]["axis"] == "R" and res["bench_run"]["distance_ref"] > res["bench_run"]["cut_position"]
+
+
+def test_a_read_failure_while_driving_is_a_fault_and_withheld(model):
+    """L's reads fail 600 ms after the arming (after the 0.3 s readiness zero, while driving) for 40 ticks: past
+    20 ms the measured wheel's loss faults the run (plan 4.5 decision 4); the measuring verdict is withheld."""
+    b = model("--bench", "1", "--encoder-read-fail-armed", "0:600:40")
+    res = bringup.execute(args(axis="L", duty=0.1, seconds=1.0, measure=True, count_sign=1, observed="none",
+                               wheels_lifted=True), b)
+    assert res["bench_result"]["stop_reason"] == "fault", res
+    assert res["measure"]["status"] == "withheld:continuity", res
+
+
+def test_a_moving_mt_hold_that_settles_is_held_after_1_s(model):
+    """rel:600 on L: the wheel moves (qualified progress, evidence), then stands still in the band for more than 1 s
+    before the end: held by the MT evidence age, with the time it was seen inside (plan 4.5 decision 8)."""
+    b = model("--bench", "1")
+    res = bringup.execute(args(axis="L", duty=0.15, seconds=1.45, hold="rel:600", count_sign=1, observed="none",
+                               wheels_lifted=True), b)
+    v2 = res["hold"]["verdict"]
+    assert v2["result"] == "held" and v2["why"] == ["mt_evidence_age"] and v2["inside_s"] > 0.5, v2
+
+
+def test_another_vehicle_cpr_reaches_the_wire(model, tmp_path, monkeypatch):
+    y = tmp_path / "vehicle.yaml"
+    y.write_text("wheel_counts:\n  left: {motor_counts_per_rev: 8192, gear_ratio: 40.0}\n"
+                 "  right: {motor_counts_per_rev: 4096, gear_ratio: 80.0}\n")
+    monkeypatch.setattr(bringup, "VEHICLE_YAML", y)
+    b = model("--bench", "1")
+    res = bringup.execute(args(axis="L", duty=0.15, seconds=1.3, hold="here", count_sign=1, observed="none",
+                               wheels_lifted=True), b)
+    holds = [m for k, _t, m in b.written.values() if k == "BENCH_HOLD"]
+    assert holds and all(m.cpr == 8192 for m in holds), res
+    (cond,) = [r for r in rows(b) if r["t"] == "run_conditions"]
+    assert cond["bench"]["units"]["motor_cpr"] == 8192 and cond["bench"]["units"]["gear_ratio"] == 40.0

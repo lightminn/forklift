@@ -1313,14 +1313,23 @@ class CommissionSession(Session):
         mt = self.bench.source == bl.MT_SOURCE
         if seconds is None:
             seconds = bench_session.REST_OBSERVE_MT_S if mt else REST_OBSERVE_S
-        b, seen, end = self.b, [], time.monotonic() + seconds
+        # the window is ``seconds`` after the first DISARMED pair of this run (plan 4.2 decision 4, 4.5 A1c decision 9:
+        # "after DISARMED"), waiting at most STOPPING_WAIT_S for that pair -- never shortened by a late brake
+        b, seen = self.b, []
+        give_up = time.monotonic() + seconds + STOPPING_WAIT_S
+        end = None
         last = None
-        while time.monotonic() < end:
+        conn0 = b.conn  # this run's host opening: a reopening ends the observation's samples (Codex A1c-2 r1 P2-1)
+        while time.monotonic() < (end if end is not None else give_up):
             b.cycle()
             bs, st = b.host.bench_state, b.host.bench_state_of
             if bs is not None and st is not None and bs is not last and st.mode == Mode.DISARMED:
-                seen.append((st.mcu_time_us, bs))
                 last = bs
+                if (b.conn == conn0 and self.run_ident is not None
+                        and (st.boot_id, st.arm_gen) == self.run_ident and bs.run_id == self.run_id):
+                    seen.append((st.mcu_time_us, bs))
+                    if end is None:
+                        end = time.monotonic() + seconds
             time.sleep(0.005)
         out = bench_session.rest_position(seen, source=self.bench.source)
         b.emit({"t": "bench_rest_position", **out})
@@ -1457,17 +1466,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     if kth_run:
         b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents)
     if kth_run and session.bench.source == bl.MT_SOURCE:
-        # an MT run's counts are not yet a verified wheel motion (plan 4.5 A1c decisions 7, 11, 14): shown and recorded
-        units = session.bench.units or {}
-        b.emit({"t": "bench_advisory", "advisory": "mt_signal_unverified",
-                "units_measured": bool(units.get("measured")), "motor_cpr": units.get("motor_cpr")})
-        print("advisory: MT counts -- a count crossing, not a verified wheel motion (MT not fitted on the board yet); "
-              f"motor shaft CPR {units.get('motor_cpr')} from vehicle.yaml"
-              f"{'' if units.get('measured') else ' (an estimate, not measured)'}", file=sys.stderr)
-        if session.bench.count_sign == -1:
-            b.emit({"t": "bench_advisory", "advisory": "count_sign_against_board_encoder_sign"})
-            print("advisory: count-sign -1 declares the board's encoder sign opposite to the duty -- check the "
-                  "vehicle's encoder sign setting", file=sys.stderr)
+        _mt_advisories(b, session.bench)
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
         b.emit({"t": "bench_advisory", "advisory": "high_duty_distance_unverified", "duty": duty,
                 "above": bl.HIGH_DUTY_DISTANCE})  # shown and recorded, never refused (lead 2026-11-28)
@@ -1611,11 +1610,28 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                   session)
 
 
+def _mt_advisories(b: Bench, ask) -> None:
+    """An MT run's counts are not yet a verified wheel motion (plan 4.5 A1c decisions 7, 11, 14): shown and recorded,
+    with the units' provenance and a declared count sign against the board's encoder sign."""
+    units = ask.units or {}
+    b.emit({"t": "bench_advisory", "advisory": "mt_signal_unverified",
+            "units_measured": bool(units.get("measured")), "motor_cpr": units.get("motor_cpr")})
+    print("advisory: MT counts -- a count crossing, not a verified wheel motion (MT not fitted on the board yet); "
+          f"motor shaft CPR {units.get('motor_cpr')} from vehicle.yaml"
+          f"{'' if units.get('measured') else ' (an estimate, not measured)'}", file=sys.stderr)
+    if ask.count_sign == -1:
+        b.emit({"t": "bench_advisory", "advisory": "count_sign_against_board_encoder_sign"})
+        print("advisory: count-sign -1 declares the board's encoder sign opposite to the duty -- check the "
+              "vehicle's encoder sign setting", file=sys.stderr)
+
+
 def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     """A bench7 hold run (plan 4.3 A1b-2 decisions 9-10): armed with its readiness zero on its own axis, the
     BENCH_HOLDs for ``seconds``, the end zero, the cleanup; then verdict ② from every pair of the run and the board's
     result, and the last second's deadband entries (shown, never blocking)."""
     b, ask = bench, session.bench
+    if ask.source == bl.MT_SOURCE:
+        _mt_advisories(b, ask)
     pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
     idents: list = []  # (boot_id, arm_gen) of each
     keep, accepted_ = _run_recorders(b, pairs, idents)
@@ -2435,8 +2451,9 @@ def main(argv=None) -> int:
                     help="bench image (bench7): steering/lift only -- measure the run by the KTH count without a "
                          "distance stop (the end displacement and how far it is trusted)")
     cm.add_argument("--hold", metavar="TARGET",
-                    help="bench image (bench7): hold steering/lift at zero | here | abs:V (raw 0..4095) | rel:N "
-                         "(counts) for --seconds, closed loop on the KTH count; --duty is the cap (plan 4.3 A1b-2)")
+                    help="bench image: hold steering/lift at zero | here | abs:V (raw 0..4095) | rel:N (counts) on "
+                         "the KTH count, or a wheel L/R at here | rel:N on its MT motor shaft count (bench8, needs "
+                         "--count-sign) for --seconds; --duty is the cap (plan 4.3 A1b-2, 4.5 A1c)")
     cm.add_argument("--hold-kp", type=float, help="hold: duty per rad (default 0.5, the 11-27 measured start)")
     cm.add_argument("--hold-ki", type=float, help="hold: duty per rad*s (default 0)")
     cm.add_argument("--hold-kd", type=float,
@@ -2789,6 +2806,8 @@ def _bench_ask(args) -> bl.BenchAsk | None:
         source = _run_source(args, axis)
     elif getattr(args, "source", None) is not None:
         raise Refused("source: only with --stop-turns, --stop-counts, --measure or --hold")
+    if source == bl.MT_SOURCE and axis >= 2:
+        raise Refused("source mt: the MT count is L's or R's")
     count_sign = _count_sign(args, source) if source else int(getattr(args, "count_sign", None) or 1)
     if source == bl.MT_SOURCE:
         units = _mt_units(axis)
@@ -2804,6 +2823,8 @@ def _bench_ask(args) -> bl.BenchAsk | None:
             stop = bl.counts_stop(args.stop_counts, float(args.duty), count_sign)
     except bl.LimitRefused as exc:
         raise Refused(str(exc)) from None
+    if stop != 0 and round(abs(float(args.duty)) * 10000) < 1:
+        raise Refused("duty: a distance run's duty rounds to 0 on the wire (at least 0.0001)")  # Codex A1c-2 r1 P2-4
     ask = bl.BenchAsk(axis, names, getattr(args, "bench_duty_max", None),
                       getattr(args, "bench_time_max", None), source=source, stop_counts=stop, count_sign=count_sign,
                       units=None if units is None else units.record())
@@ -2832,6 +2853,8 @@ def _hold_ask(args) -> bl.BenchAsk:
     v = {k: (HOLD_ARG_DEFAULTS[k] if getattr(args, k, None) is None else getattr(args, k)) for k in HOLD_ARGS}
     axis = AXES[args.axis]
     source = _run_source(args, axis)
+    if source == bl.MT_SOURCE and axis >= 2:
+        raise Refused("source mt: the MT count is L's or R's")
     count_sign = _count_sign(args, source)
     cpr, units = bl.KTH_COUNTS_PER_TURN, None
     if source == bl.MT_SOURCE:
@@ -2986,13 +3009,16 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if not range_off and not sensorless and (args.window is None or not args.window[0] < args.window[1]):
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
         return ask, profile, names + tuple(f"bench:{n}" for n in bench.names)
+    if bench is not None and bench.hold_run and not 1.2 <= seconds <= HOLD_SECONDS_MAX:
+        # a wheel hold's length (plan 4.5 A1c decision 6), large or not (Codex A1c-2 r1 P2-2)
+        raise Refused(f"seconds: a hold runs 1.2 .. {HOLD_SECONDS_MAX:g} s")
     if bl.is_large(ask):
         why = bl.large_refusal(ask, wheels_lifted=getattr(args, "wheels_lifted", False),
                                vcc_watched=getattr(args, "vcc_watched", False),
                                synthetic=getattr(args, "synthetic", False))
         if why is not None:
             raise Refused(why)
-        if not COMMISSION_HOLD_MIN_S <= seconds:
+        if not COMMISSION_HOLD_MIN_S <= seconds and not (bench is not None and bench.hold_run):
             raise Refused(f"seconds must be at least {COMMISSION_HOLD_MIN_S}")
         if args.duty == 0:
             raise Refused("duty must be nonzero")
@@ -3004,9 +3030,7 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if single and detached and axis >= 2:
             hold_max = bl.SINGLE_DETACHED_HOLD_MAX_S  # a detached motor: the firmware's 2 s, kept a margin under
         if bench is not None and bench.hold_run:
-            # an MT hold on a wheel: its length is not its continuous output, as on M/H (plan 4.5 A1c decision 6)
-            if not 1.2 <= seconds <= HOLD_SECONDS_MAX:
-                raise Refused(f"seconds: a hold runs 1.2 .. {HOLD_SECONDS_MAX:g} s")
+            pass  # an MT hold on a wheel: its length was checked above; it is not its continuous output
         elif not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
             raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
     if axis >= 2 and not sensorless:
@@ -3018,7 +3042,7 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         # a wheel: the run's own limits may only be lower than the image's (1.0, the validator's ms)
         if bench.duty_max is not None and abs(ask.duty) > bench.duty_max + 1e-12:
             raise Refused(f"duty must be within +-{bench.duty_max:g} (the bench run's limit)")
-        if bench.time_max_s is not None and seconds > bench.time_max_s - bl.TIME_MARGIN_S:
+        if bench.time_max_s is not None and seconds > bench.time_max_s - bl.TIME_MARGIN_S and not bench.hold_run:
             raise Refused(f"seconds must be at most {bench.time_max_s - bl.TIME_MARGIN_S:g} (the bench run's limit)")
         names = names + tuple(f"bench:{n}" for n in bench.names)
     return ask, profile, names

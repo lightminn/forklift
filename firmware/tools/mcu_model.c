@@ -33,6 +33,7 @@
   distance run can start on a non-zero frame (bench console plan 4.2 A1b-1b). --kth-zero-at-ms AXIS:MS (AXIS M or
   H): from MS on, that axis's reported KTH frame is 0x0000 (a MISO stuck low) while the plant goes on moving; the
   real position is in --axis-log.
+  --encoder-read-fail-armed W:MS:N: the same, MS after the first accepted BENCH_ARM.
   --encoder-read-fail W:MS:N (bench image): wheel W's stable reads fail for N ticks from MS on -- the core sees
   the board's read report with that wheel not fresh and the last good value (bench console plan 4.5 A1c decision 4).
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
@@ -97,6 +98,8 @@ typedef struct {
     bench_pwm_model pwm; /* bench7: the board's output rule and report (plan 4.3 A1b-2 decision 6) */
     int read_fail_wheel;  /* bench8 --encoder-read-fail W:MS:N: wheel W's reads fail for N ticks from MS (-1 none) */
     long read_fail_at_ms, read_fail_ticks;
+    bool read_fail_armed; /* --encoder-read-fail-armed: MS counts from the first bench arming, not the start */
+    long armed_at_ms;     /* the first BENCH_ARM accepted, -1 none yet */
     drive_outputs applied; /* what that rule wrote: the plant moves on it */
 } board;
 
@@ -174,7 +177,9 @@ static void hal_read(void *ctx, drive_inputs *in)
         static bool have_ok[2];
         in->wheel_report = true;
         for (int i = 0; i < 2; i++) {
-            bool fail = B.read_fail_wheel == i && t >= B.read_fail_at_ms && B.read_fail_ticks > 0;
+            long from = B.read_fail_armed ? (B.armed_at_ms < 0 ? -1 : B.armed_at_ms + B.read_fail_at_ms)
+                                          : B.read_fail_at_ms;
+            bool fail = B.read_fail_wheel == i && from >= 0 && t >= from && B.read_fail_ticks > 0;
             in->wheel_fresh[i] = !fail || !have_ok[i];
             in->wheel_start_us[i] = in->now_us;
             if (in->wheel_fresh[i]) {
@@ -434,6 +439,9 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
                           const drive *after)
 {
     (void)ctx;
+    if (m->type == LINK_BENCH_ARM && after->mode == DRIVE_MODE_ARMED && B.armed_at_ms < 0) {
+        B.armed_at_ms = elapsed_ms(); /* --encoder-read-fail-armed counts from here */
+    }
     if (B.accept_log == NULL) {
         return;
     }
@@ -541,7 +549,12 @@ int main(int argc, char **argv)
         cfg.command_timeout_ms = 150; /* as the board (board_config.c): the echo bounds of SET/ARM match it */
     }
     B.read_fail_wheel = -1;
+    B.armed_at_ms = -1;
     const char *read_fail = arg_str(argc, argv, "--encoder-read-fail");
+    if (read_fail == NULL && arg_str(argc, argv, "--encoder-read-fail-armed") != NULL) {
+        read_fail = arg_str(argc, argv, "--encoder-read-fail-armed");
+        B.read_fail_armed = true;
+    }
     if (read_fail != NULL) {
         int w = -1;
         long at = -1, n = -1;

@@ -57,6 +57,8 @@ def test_an_mt_run_needs_its_sign():
     (dict(source="mt"), "only with"),
     (dict(hold="here", duty=0.15, seconds=2.0, stop_counts=100), "no distance or measuring"),
     (dict(stop_counts=0), "1 .. 2^31-1"),
+    (dict(stop_counts=2000, duty=0.00004), "rounds to 0 on the wire"),
+    (dict(axis="M", window=(-0.3, 0.3), source="mt", measure=True), "MT count is L's or R's"),
 ])
 def test_the_options_exclude_each_other(kw, words):
     assert words in refused(count_sign=1, **kw)
@@ -74,6 +76,9 @@ def test_an_mt_hold_on_a_wheel(monkeypatch):
     assert ask.hold_run and ask.source == 2 and (ask.hold.source, ask.hold.cpr) == (2, 4096)
     assert "relative" in refused(hold="zero", duty=0.15, seconds=2.0, count_sign=1)
     assert "a hold runs 1.2" in refused(hold="here", duty=0.15, seconds=0.6, count_sign=1)
+    assert "a hold runs 1.2" in refused(hold="here", duty=0.15, seconds=61.0, count_sign=1, wheels_lifted=True)
+    # the hold's length is not its continuous output: a run time limit below it is no refusal (Codex A1c-2 r1 P2-2)
+    bringup._check_commission_args(args(hold="here", duty=0.15, seconds=1.4, count_sign=1, bench_time_max=1.0))
     bringup._check_commission_args(args(hold="here", duty=0.15, seconds=30.0, count_sign=1, wheels_lifted=True))  # a hold's length, not hold_max (30 s is a large wheel run)
 
 

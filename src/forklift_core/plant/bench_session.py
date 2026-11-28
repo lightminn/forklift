@@ -322,6 +322,7 @@ def _rest_mt(samples) -> dict:
     for i in range(len(samples) - 1, -1, -1):
         t, b = samples[i]
         if (b.run_id != last.run_id or b.source != MT_SOURCE or b.axis != last.axis
+                or getattr(b, "conn_gen", None) != getattr(last, "conn_gen", None)
                 or b.count_state != int(BenchCountState.VALID) or b.run_flags & int(BenchRunFlag.UNCLEAN)):
             why = "continuity"
             break
@@ -388,8 +389,9 @@ HOLD_EVIDENCE_MT_MS = 1000  # plan 1, 4.5 A1c decision 8: the MT evidence (the l
 
 
 def _inside(b, deadband: int, source: int = 1) -> bool:
-    if source == MT_SOURCE:  # a sample accepted at its own pair's tick only (plan 4.5 A1c decision 10)
-        return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle == 0
+    if source == MT_SOURCE:  # a VALID sample accepted at its own pair's tick only (plan 4.5 A1c decisions 8, 10)
+        return (abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle == 0
+                and getattr(b, "count_state", int(BenchCountState.VALID)) == int(BenchCountState.VALID))
     return abs(counts_diff(b.target, b.cumulative)) <= deadband and b.raw_angle != 0  # a tentative 0 is never inside
 
 
@@ -470,7 +472,11 @@ def _settle_seen(pairs, run_id: int, deadband: int, source: int) -> dict:
         return {"inside_s": 0.0}
     tail = drv[first:]
     inside = sum(1 for _t, b in tail if _inside(b, deadband, source))
-    return {"inside_s": round((tail[-1][0] - tail[0][0]) / 1e6, 3), "inside_share": round(inside / len(tail), 3)}
+    # the time is the sum of the gaps between two neighbouring inside pairs no wider than HOLD_GAP_US: a reception
+    # gap or a pair outside is never counted as seen inside (Codex A1c-2 r1 P2-3)
+    seen = sum(t1 - t0 for (t0, b0), (t1, b1) in zip(tail, tail[1:])
+               if _inside(b0, deadband, source) and _inside(b1, deadband, source) and 0 < t1 - t0 <= HOLD_GAP_US)
+    return {"inside_s": round(seen / 1e6, 3), "inside_share": round(inside / len(tail), 3)}
 
 
 ENTRY_WINDOW_US = 1_000_000
