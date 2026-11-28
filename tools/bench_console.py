@@ -1253,6 +1253,8 @@ class BenchConsole:
         a = r.ask
         v = self._window_out(r, states)
         if a.kind in ("hold", "distance") and self._ended_by_board(r):
+            # only driving (ARMED) samples: the coast after the board's own end is no window stop (impl r6 P2)
+            v = self._window_out(r, [x for x in states if x[0].mode == Mode.ARMED])
             if v is not None:
                 # a driving sample out of the window before the board's own end in the same read: kept (impl r5 P2)
                 r.window_stop = f"window:{v}"

@@ -540,3 +540,23 @@ def test_a_window_sample_before_the_boards_end_in_one_read_is_kept(rig, monkeypa
     monkeypatch.undo()
     assert run_until(lambda: b.results, 6.0)
     assert not b.results[-1]["verdict"]["run_cleanup"]["ok"]
+
+
+def test_the_coast_after_the_boards_end_in_the_same_read_is_no_window_stop(rig, monkeypatch):  # noqa: F811
+    import dataclasses
+
+    from forklift_core.mcu_link.messages import Mode
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    r = c.run
+    r.ask = dataclasses.replace(r.ask, window=(-0.05, 0.05), range_off=False)
+    st = c.host.state
+    inside = dataclasses.replace(st, steering_rad=0.04, mcu_time_us=st.mcu_time_us + 1)
+    coast = dataclasses.replace(st, mode=Mode.STOPPING, steering_rad=0.06, mcu_time_us=st.mcu_time_us + 2)
+    monkeypatch.setattr(c, "_ended_by_board", lambda run: True)
+    c._drive(r, c.clock(), [(inside, c.clock()), (coast, c.clock())])
+    assert r.phase == "stop" and r.window_stop is None and not r.late_failures
+    monkeypatch.undo()
+    assert run_until(lambda: b.results, 6.0)
