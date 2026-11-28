@@ -446,6 +446,7 @@ class Run:
     rest_closed: str | None = None
     arm_rx_conn: int | None = None
     pair_wait_noted: bool = False
+    last_pair: object = None  # bs.Pair of this arming's last accepted pair
 
 
 @dataclass
@@ -587,6 +588,8 @@ class BenchConsole:
             return
         r.pairs.append((st.mcu_time_us, st.mode, bst))
         r.idents.append((st.boot_id, st.arm_gen, bst.conn_gen, self.rx_conn))
+        if r.arm_ident is not None and (st.boot_id, st.arm_gen) == r.arm_ident:
+            r.last_pair = bs.pair_of(st, bst)  # this arming's last pair, kept across a reopening (verdict 1)
         if r.arm_written_ns is None and st.mode == Mode.DISARMED:
             r.pre_run_pair_t = st.mcu_time_us  # the last pair before the ARM (the entry window's zero base)
         if r.first_seq is not None and r.bench_start is None:
@@ -1483,6 +1486,10 @@ class BenchConsole:
             self._phase(r, "rest", now)
             return
         p = self.pair()
+        if r.last_pair is not None and (p is None or r.arm_ident is None or (p.boot_id, p.arm_gen) != r.arm_ident):
+            # the host's kept pair gone (a reopening) or of another arming: this arming's own last pair decides
+            # (Codex B2a-2 impl round 3 P2)
+            p = r.last_pair
         latched = self._latched_result(r)
         # the run's own frames still queued go with it (round 4 P2-2): an unsent stop DISARM would otherwise be
         # refused at every gate and handed back to the queue head, in front of the next run's BENCH_SET

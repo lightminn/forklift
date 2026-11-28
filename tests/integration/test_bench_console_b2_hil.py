@@ -269,6 +269,7 @@ def test_a_clear_during_the_rest_position_is_busy(rig):  # noqa: F811
     rid = b.send("clear_faults", cause="test")
     assert run_until(lambda: rid in b.replies, 1.0)
     assert b.replies[rid]["t"] == "reject" and "busy_running" in json.dumps(b.replies[rid])
+    assert run_until(lambda: b.results, 3.0)  # the run (and its record) closed before the test ends
 
 
 def test_a_hold_whose_settings_cannot_be_written_sends_no_hold(rig):  # noqa: F811
@@ -426,6 +427,40 @@ def test_a_reopening_during_the_rest_position_keeps_the_boards_result(rig):  # n
     assert res["closed"] == "ended" and res["stop_reason"] == "distance_reached", res
     assert res["distance"]["result"] == "reached" and res["bench_result"]["confirmed"], res
     assert res["rest"] is None and "reopened" in res["rest_note"]
+    assert res["final"] is not None and res["verdict"]["run_cleanup"]["ok"], res  # the cleanup seen before it holds
+
+
+def test_a_stopping_state_closes_the_gate_on_our_stop_frames(rig):  # noqa: F811
+    """Our own stop zero is let through the gate while the board is armed; once the latest STATE of the run's boot is
+    STOPPING (the board stopping itself), the same frame -- its first byte or the rest of it -- is refused (plan 4.4,
+    Codex plan round 2 P1-1; impl round 3 P2: the gate itself, not the 20 ms continuation limit)."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from forklift_core.mcu_link.messages import Mode
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    r = c.run
+    r.cancel = "stop"
+    c._enter_stop(r, "stop", c.clock())
+    seq = 0xABCD
+    c.cleanup_seqs.add(seq)
+    f = SimpleNamespace(kind="COMMISSION", nonzero=False, seq=seq, expires_ns=None, echo=None,
+                        generation=c.host.auth_epoch)
+    assert c.frame_allowed(f)
+    host_cls = type(c.host)
+    prop = host_cls.state
+    st = prop.fget(c.host)
+    try:
+        host_cls.state = property(lambda h: dataclasses.replace(st, mode=Mode.STOPPING,
+                                                                mcu_time_us=st.mcu_time_us + 1))
+        c._stop(r, c.clock())
+        assert not c.frame_allowed(f)
+    finally:
+        host_cls.state = prop
+    assert run_until(lambda: b.results, 6.0)  # the run (and its record) closed before the test ends
 
 
 def test_a_stop_zero_torn_while_the_board_stops_itself_is_abandoned(rig):  # noqa: F811
