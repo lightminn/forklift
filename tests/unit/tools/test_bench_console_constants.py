@@ -21,7 +21,11 @@ def test_an_ended_model_is_a_lost_device(tmp_path):
     console stops being ready instead of showing its last state (Codex C round 3 P2-5)."""
     import time
 
-    dev = bench_console.ModelDevice("/bin/true", gate=lambda f, w: (w(), True)[1])
+    # a model that says its product (bench8, plan 4.5 A1c decision 2) and then ends at once
+    exe = tmp_path / "ending_model"
+    exe.write_text("#!/bin/sh\necho 'product: forklift-mcu commission OPEN model rec=00000000 lim=lr1 bench8'\n")
+    exe.chmod(0o755)
+    dev = bench_console.ModelDevice(str(exe), gate=lambda f, w: (w(), True)[1])
     console = bench_console.BenchConsole(dev, runs_root=tmp_path)
     try:
         end = time.monotonic() + 5.0
