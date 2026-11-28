@@ -1447,6 +1447,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     kth_run = getattr(session, "bench_image", False) and session.bench is not None and session.bench.source == 1
     rec_pairs: list = []
     rec_idents: list = []
+    session.run_pairs = (rec_pairs, rec_idents)  # execute's end reads the same record (its cleanup retry's pairs too)
     if kth_run:
         b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents)
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
@@ -1547,11 +1548,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         br = session.bench_result() or {}
         # a driving sample is a DRIVING pair of this run's arming (plan 4.4 B2): an accepting STATE whose pair was
         # lost, or a first STATE already STOPPING, is no driving sample (Codex B2a-1 impl P2-2)
-        ident = session.run_ident
-        no_drive_sample = not any(
-            mode == Mode.ARMED and (bs_.drive & 0x3) == int(BenchDriveState.DRIVING) and bs_.run_id == session.run_id
-            and (idn is None or ident is None or idn == ident)
-            for (_t, mode, bs_), idn in zip(rec_pairs, rec_idents, strict=True))
+        no_drive_sample = not _driving_seen(session, rec_pairs, rec_idents)
         if no_drive_sample and br.get("confirmed") and br.get("run_id") == session.run_id:
             # 100 Hz may miss a short distance run's acceptance and cut: the board's latched result says it drove;
             # the duty and current figures then have no sample (plan 4.2 A1b-1 decision 8)
@@ -1698,6 +1695,13 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
     return _final({"result": result, "stop": session.stop_reason, "hold": hold_out, "bench_result": br,
                    "verdict1": verdict1,
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags]}, session)
+
+
+def _driving_seen(session: CommissionSession, pairs: list, idents: list) -> bool:
+    """A DRIVING pair of this run's arming among the recorded pairs (plan 4.4 B2: the driving-sample criterion)."""
+    ident = session.run_ident
+    return any(mode == Mode.ARMED and (bs.drive & 0x3) == int(BenchDriveState.DRIVING) and bs.run_id == session.run_id
+               and (ident is None or idn == ident) for (_t, mode, bs), idn in zip(pairs, idents, strict=True))
 
 
 def _kth_verdicts(session: CommissionSession, br: dict) -> dict:
@@ -3177,6 +3181,9 @@ def execute(args, bench: Bench) -> dict:
                 session.cleanup_confirmed = False
                 result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
                 result["result"] = "aborted" if result.get("result") == "ok" else result.get("result", "aborted")
+                # the operator's interruption stays in the final verdict, the board's stop or not (impl r4 P2-1)
+                session.aborted = session.aborted or f"cleanup_{type(exc).__name__}"
+                session.late_failures = [*getattr(session, "late_failures", []), "cleanup_interrupted"]
             result["cleanup_confirmed"] = session.cleanup_confirmed
     if args.cmd == "commission" and conditions is not None:
         # the run's conditions and marks on every result once its arguments were taken, an exception's or an
@@ -3207,6 +3214,12 @@ def execute(args, bench: Bench) -> dict:
         basis = result.get("result_basis")
         if session._hold_run():
             basis = "ok" if again["ok"] else "aborted"  # a hold's result is its verdict 1
+        elif (session._distance_run() and br.get("confirmed") and br.get("run_id") == session.run_id
+              and basis in ("no_acceptance", "ok") and not _driving_seen(session, *getattr(session, "run_pairs", ([], [])))):
+            # the board's record first read here (a cleanup retry) and no driving pair: the record alone (impl r4 P2-2)
+            basis = "board_record_only"
+            if "보드 기록만(구동 표본 없음)" not in again["labels"]:
+                again["labels"].append("보드 기록만(구동 표본 없음)")
         if basis is not None:
             result.update({k: v for k, v in _final({"result": basis}, session).items() if k != "result_basis"})
         if not again["ok"] and result.get("result") == "ok":
