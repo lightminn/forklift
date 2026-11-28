@@ -3,8 +3,8 @@
 // both (and their handlers) on any other welcome or a disconnect, draws, and sends through the controller. The big
 // STOP is the shared one (pressStop): the bench screen adds only its own requests.
 
-import { AXES, BYPASS, DEFAULT_SOURCE, advice, bypassChips, clearView, fieldState, largePhrase,
-  resultView } from "./bench.js";
+import { AXES, BYPASS, DEFAULT_SOURCE, HOLD_TARGETS, advice, bypassChips, clearView, clearedOnChange, fieldState,
+  largePhrase, rangeMarkBefore, resultView, runKind } from "./bench.js";
 import { BENCH_TEXT as T, benchDetailText } from "./profile.js";
 
 const VIEW = "bench";
@@ -27,7 +27,7 @@ function buildPage() {
   const sourceSel = el("select", { id: "bn-source", "aria-label": "원천" });
   const modeSel = el("select", { id: "bn-mode", "aria-label": "모드" },
     el("option", { value: "duty", text: T.mode.duty }),
-    el("option", { value: "hold", text: `${T.mode.hold} · ${T.waitB2}`, disabled: true }));
+    el("option", { value: "hold", text: T.mode.hold }));
   const num = (id, label, step) => el("label", { class: "bn-field" }, el("span", { text: label }),
     el("input", { id, type: "number", step, "aria-label": label }));
   const check = (id, label) => el("label", { class: "bn-check" }, el("input", { id, type: "checkbox" }),
@@ -50,11 +50,27 @@ function buildPage() {
     el("div", { class: "bn-grid" },
       el("div", { class: "bn-col" },
         el("div", { class: "bn-row" }, axisSel, sourceSel, modeSel),
-        el("div", { class: "bn-row" }, num("bn-duty", "듀티", "0.01"), num("bn-seconds", "시간 s", "0.1"),
+        el("div", { class: "bn-row" }, num("bn-duty", "출력(듀티)", "0.01"), num("bn-seconds", "시간 s", "0.1"),
           num("bn-duty-max", "듀티 상한(선택)", "0.01"), num("bn-time-max", "시간 상한 s(선택)", "0.1")),
         el("div", { class: "bn-row", id: "bn-window-row" }, num("bn-win-lo", "창 아래", "0.01"),
           num("bn-win-hi", "창 위", "0.01"), el("span", { class: "hint", id: "bn-win-unit" })),
-        el("div", { class: "bn-row hint" }, el("span", { text: `정지: N 회전 / N 카운트 · ${T.waitB2}` })),
+        el("div", { class: "bn-row", id: "bn-hold-row", hidden: true },
+          el("label", { class: "bn-field" }, el("span", { text: T.hold.target }),
+            el("select", { id: "bn-hold-target", "aria-label": T.hold.target },
+              ...HOLD_TARGETS.map((t) => el("option", { value: t, text: T.hold.targets[t] })))),
+          num("bn-hold-value", T.hold.value, "1"), num("bn-hold-kp", T.hold.kp, "0.1"),
+          num("bn-hold-ki", T.hold.ki, "0.1"), num("bn-hold-kd", T.hold.kd, "0.01"),
+          num("bn-hold-db", T.hold.deadband, "1"), num("bn-hold-min", T.hold.minDuty, "0.01")),
+        el("div", { class: "hint", id: "bn-hold-hint", hidden: true }, el("div", { text: T.hold.defaults }),
+          el("div", { class: "warn", text: T.hold.kdNote })),
+        el("div", { class: "bn-row", id: "bn-stop-row", hidden: true }, num("bn-stop-turns", T.stopTurns, "0.01"),
+          check("bn-measure", T.measureOnly), el("span", { class: "hint", text: `MT 카운트 정지 · ${T.waitA1c}` })),
+        el("div", { class: "bn-row", id: "bn-sign-row", hidden: true },
+          el("select", { id: "bn-count-sign", "aria-label": T.countSign[""] },
+            ...Object.entries(T.countSign).map(([v, t]) => el("option", { value: v, text: t }))),
+          check("bn-same-setup", T.sameSetup),
+          el("span", { class: "chip", id: "bn-range-mark", hidden: true })),
+        el("div", { class: "hint", id: "bn-sign-hint", hidden: true, text: T.countSignHint }),
         bypassRow,
         el("div", { class: "bn-advice warn", id: "bn-advice", hidden: true }),
         el("div", { class: "bn-row" }, check("bn-power", T.confirm.power_switch_in_hand),
@@ -98,7 +114,11 @@ function form() {
   const v = (id) => document.getElementById(id)?.value ?? "";
   const c = (id) => document.getElementById(id)?.checked === true;
   return {
-    axis: v("bn-axis"), source: v("bn-source"), duty: v("bn-duty"), seconds: v("bn-seconds"),
+    axis: v("bn-axis"), source: v("bn-source"), mode: v("bn-mode"), duty: v("bn-duty"), seconds: v("bn-seconds"),
+    hold_target: v("bn-hold-target"), hold_value: v("bn-hold-value"), hold_kp: v("bn-hold-kp"),
+    hold_ki: v("bn-hold-ki"), hold_kd: v("bn-hold-kd"), hold_deadband: v("bn-hold-db"),
+    hold_min_duty: v("bn-hold-min"), stop_turns: v("bn-stop-turns"), measure: c("bn-measure"),
+    count_sign: v("bn-count-sign"), same_setup: c("bn-same-setup"),
     bench_duty_max: v("bn-duty-max"), bench_time_max: v("bn-time-max"), window_lo: v("bn-win-lo"),
     window_hi: v("bn-win-hi"), bypass: Object.keys(BYPASS).filter((n) => c(`bn-bp-${n}`)),
     power_switch_in_hand: c("bn-power"), wheels_lifted: c("bn-lifted"), vcc_watched: c("bn-vcc"),
@@ -153,6 +173,9 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
         srcSel.dataset.list = "";
         srcSel.dataset.axis = "";
       }
+      // a sign, a target, a stop typed for one axis or source never goes out with another (plan 4.4 decision 6)
+      const changed = { "bn-axis": "axis", "bn-source": "source", "bn-mode": "mode" }[id];
+      if (changed) clearFields(clearedOnChange(changed));
       renderBench(m, { rejectText });
     }, opt);
     page.addEventListener("input", (ev) => {
@@ -167,6 +190,20 @@ export function syncBench(m, { showView, pressStop, rejectText }) {
     mounted.page.remove();
     mounted = null;
     if (wasShown) showView("monitor");
+  }
+}
+
+const FIELD_IDS = { hold_target: "bn-hold-target", hold_value: "bn-hold-value", hold_kp: "bn-hold-kp",
+  hold_ki: "bn-hold-ki", hold_kd: "bn-hold-kd", hold_deadband: "bn-hold-db", hold_min_duty: "bn-hold-min",
+  count_sign: "bn-count-sign", stop_turns: "bn-stop-turns", measure: "bn-measure", same_setup: "bn-same-setup" };
+
+function clearFields(keys) {
+  for (const k of keys) {
+    const e = document.getElementById(FIELD_IDS[k]);
+    if (!e) continue;
+    if (e.type === "checkbox") e.checked = false;
+    else if (e.tagName === "SELECT") e.selectedIndex = 0;
+    else e.value = "";
   }
 }
 
@@ -199,6 +236,26 @@ export function renderBench(m, { rejectText }) {
     }
   }
   document.getElementById("bn-window-row").hidden = !fs.windowOpen;
+  // B2: the hold, the stop and the sign rows follow the axis, the source and the mode
+  const modeSel = document.getElementById("bn-mode");
+  modeSel.querySelector('option[value="hold"]').disabled = !fs.holdOpen;
+  if (!fs.holdOpen && modeSel.value === "hold") modeSel.value = "duty";
+  const kind = runKind(form());
+  document.getElementById("bn-hold-row").hidden = kind !== "hold";
+  document.getElementById("bn-hold-hint").hidden = kind !== "hold";
+  const tgt = document.getElementById("bn-hold-target").value;
+  document.getElementById("bn-hold-value").closest("label").hidden = !(tgt === "abs" || tgt === "rel");
+  document.getElementById("bn-stop-row").hidden = !fs.stopOpen;
+  document.getElementById("bn-measure").disabled = !fs.measureOpen;
+  const signed = kind !== "duty";
+  document.getElementById("bn-sign-row").hidden = !signed;
+  document.getElementById("bn-sign-hint").hidden = !signed;
+  const duty = document.getElementById("bn-duty").closest("label").querySelector("span");
+  duty.textContent = kind === "hold" ? `${T.hold.cap}(선택)` : "출력(듀티)";
+  const mark = rangeMarkBefore(form());
+  const markEl = document.getElementById("bn-range-mark");
+  markEl.hidden = !mark;
+  markEl.textContent = mark ? T.rangeMark[mark] : "";
   const adv = advice(f);
   const advEl = document.getElementById("bn-advice");
   advEl.hidden = adv.length === 0;
@@ -256,16 +313,31 @@ function renderResult(m) {
     return;
   }
   const row = (k, val) => el("div", { class: "bn-kv" }, el("span", { class: "hint", text: k }), el("span", { text: val }));
+  const hv = v.holdVerdict;
+  const dv = v.distanceVerdict;
+  const holdText = !hv ? T.verdictNone : `${T.holdResult[hv.result] ?? hv.result}`
+    + `${hv.endError !== null ? ` · 끝 오차 ${hv.endError} 카운트` : ""}`
+    + `${hv.insideShare !== null ? ` · 허용 오차 안 ${Math.round(hv.insideShare * 100)}%` : ""}`
+    + `${hv.why.length ? ` · ${hv.why.join(", ")}` : ""}${hv.entries ? ` · ${hv.entries}` : ""}`;
+  const distText = dv ? `${T.distanceResult[dv.result] ?? dv.result} · 목표 ${dv.stopCounts ?? "—"} · 차단 때 `
+    + `${dv.movedAtCut ?? "—"} 카운트` : v.measure ? `${v.measure.moved} 카운트 (${v.measure.status})` : T.verdictNone;
   box.replaceChildren(
     el("h3", { text: own ? T.result : `${T.result} · 직전 실행(이 탭이 시작한 실행이 아닐 수 있음)` }),
     row(T.verdictRun, `${v.ok ? T.ok : T.notOk}${v.why.length ? ` · ${v.why.join(", ")}` : ""}`),
-    row(T.verdictHold, T.verdictLater),
-    row(T.verdictDistance, T.verdictLater),
+    row(T.verdictHold, holdText),
+    row(v.measure ? T.verdictMeasure : T.verdictDistance, distText),
+    v.rest ? row(T.rest, `${v.rest.position ?? "—"} (${v.rest.result ?? "—"})`) : null,
+    v.labels.length ? row(T.labels, v.labels.join(" · ")) : null,
+    v.notes.length ? row("알림", v.notes.map((n) => T.notes[n] ?? n).join(" · ")) : null,
+    v.rangeMark ? row("실물 확인", T.rangeMark[v.rangeMark] ?? v.rangeMark) : null,
     row("닫힘", v.closed ?? "—"),
     row("정지 원인", v.stopReason ?? "—"),
-    row("중단", v.aborted ?? "—"),
+    v.boardCause ? row(T.boardCause, v.boardCause) : null,
+    row("중단", [v.aborted, ...v.lateAborts].filter(Boolean).join(", ") || "—"),
+    v.start ? row(T.start, v.start) : null,
     row("축", v.axis ?? "—"),
     row("최고 전류 mA", v.peakCurrentMa ? v.peakCurrentMa.join(" / ") : "—"),
+    v.recordComplete === false ? row(T.recordComplete, "아니오 · 기록 파일의 마지막 줄을 확인하세요") : null,
     row("기록", v.record ?? "—"));
 }
 
@@ -299,6 +371,15 @@ function drawGraph(m, axis) {
   const lo = vals.length ? Math.min(...vals) : 0, hi = vals.length ? Math.max(...vals) : 1;
   line(ser.map((s) => [s.t, s.value]), 4, half - 8, lo, hi === lo ? lo + 1 : hi, col("accent", "#4af"));
   line(ser.map((s) => [s.t, s.duty]), 4, half - 8, -1, 1, col("warn", "#fa4"));
+  // a hold's error to its target in counts (the run's own values only; null breaks the line)
+  const errs = ser.map((s) => s.holdError).filter((e) => e !== null && Number.isFinite(e));
+  if (errs.length) {
+    const emax = Math.max(20, ...errs.map((e) => Math.abs(e)));
+    line(ser.map((s) => [s.t, s.holdError]), 4, half - 8, -emax, emax, col("lidar", "#c8f"));
+    ctx.fillStyle = col("muted", "#999");
+    ctx.font = "11px sans-serif";
+    ctx.fillText(`목표까지 오차 ±${emax} 카운트`, W - 170, 14);
+  }
   const cur = ser.flatMap((s) => s.current).filter((c) => c !== null);
   const cmax = Math.max(1, ...cur.map((c) => Math.abs(c)));
   ["ok", "lidar", "teleop", "crit"].forEach((k, i) =>

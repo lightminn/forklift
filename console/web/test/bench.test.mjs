@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSession } from "../js/protocol.js";
-import { Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
+import { HIGH_DUTY_DISTANCE, clearedOnChange, rangeMarkBefore, runKind, Graph, advice, bypassChips, clearView, createBenchController, fieldState, isBenchWelcome, largePhrase,
   resultView, runFields, wheelDelta } from "../js/bench.js";
 
 // docs/plans/2026-11-27-bench-console.md 4 and 4.1: the bench screen's model on the real console session
@@ -99,7 +99,7 @@ test("replies are kept with their reason and detail", async () => {
   assert.equal(largePhrase("something else"), null);
 });
 
-test("fields that do not fit the axis or the source are closed; hold, stop, MT and kth_invalid wait for B2/A2", () => {
+test("fields that do not fit the axis or the source are closed; hold and stop open on the KTH source only", () => {
   const l = fieldState({ axis: "L" });
   assert.deepEqual(l.sources, ["none"]);
   assert.equal(l.source, "none");
@@ -114,9 +114,14 @@ test("fields that do not fit the axis or the source are closed; hold, stop, MT a
   const off = fieldState({ axis: "M", bypass: ["steer_range"] });
   assert.equal(off.windowOpen, false);
   assert.equal(off.rangeOff, true);
+  assert.equal(l.holdOpen, false);
+  assert.equal(l.stopOpen, false);
+  assert.equal(m.holdOpen, true);
+  assert.equal(m.stopOpen, true);
+  const none = fieldState({ axis: "M", source: "none" });
+  assert.equal(none.holdOpen, false);
+  assert.equal(none.stopOpen, false);
   for (const f of [l, m]) {
-    assert.equal(f.holdOpen, false);
-    assert.equal(f.stopOpen, false);
     assert.equal(f.mtOpen, false);
     assert.equal(f.kthInvalidOpen, false);
   }
@@ -424,4 +429,97 @@ test("an earlier run's late ACK never clears the next run's result (round 4 P2-1
   s.onMessage({ t: "ack", of: "bench_run", request_id: a }); // A's resend answered late
   await new Promise((r) => setImmediate(r));
   assert.equal(b.result?.request_id, bId);
+});
+
+
+// ---- B2 (plan 4.4 decisions 2 and 6) -------------------------------------------------------------------------------
+const M = { axis: "M", source: "kth", seconds: 2, power_switch_in_hand: true, bypass: ["steer_range"] };
+
+test("a hold: the target, its gains and the sign the operator gave; the cap may be left out", () => {
+  const { fields, problems } = runFields({ ...M, mode: "hold", hold_target: "rel", hold_value: "60", hold_kd: "0.02",
+    count_sign: "1" });
+  assert.deepEqual(problems, []);
+  assert.equal(fields.mode, "hold");
+  assert.equal(fields.duty, undefined);
+  assert.deepEqual(fields.hold, { target: "rel:60", kd: 0.02 });
+  assert.equal(fields.count_sign, 1);
+  assert.equal(fields.stop, undefined);
+  assert.equal(runKind({ ...M, mode: "hold" }), "hold");
+});
+
+test("a hold or a stop without its sign is the page's own problem, never a default", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "here" }).problems.includes("count_sign"));
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "0.5" }).problems.includes("count_sign"));
+  assert.ok(runFields({ ...M, duty: "0.2", measure: true }).problems.includes("count_sign"));
+  assert.deepEqual(runFields({ ...M, duty: "0.2" }).problems, []);  // a plain duty run needs none
+});
+
+test("a stop after N turns and a measuring run", () => {
+  const d = runFields({ ...M, duty: "0.2", stop_turns: "0.5", count_sign: "-1" });
+  assert.deepEqual(d.problems, []);
+  assert.deepEqual(d.fields.stop, { turns: 0.5 });
+  assert.equal(d.fields.count_sign, -1);
+  assert.equal(d.fields.measure, undefined);
+  const m = runFields({ ...M, duty: "0.2", measure: true, count_sign: "1" });
+  assert.equal(m.fields.measure, true);
+  assert.equal(m.fields.stop, undefined);
+  // a measuring box left on with a stop typed: the stop wins, the box is not sent
+  assert.equal(runKind({ ...M, duty: "0.2", stop_turns: "0.5", measure: true }), "distance");
+  assert.ok(runFields({ ...M, duty: "0.2", stop_turns: "-1", count_sign: "1" }).problems.includes("stop_turns"));
+});
+
+test("a hold target needs a whole number for abs and rel", () => {
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "abs", hold_value: "12.5", count_sign: "1" })
+    .problems.includes("hold_value"));
+  assert.ok(runFields({ ...M, mode: "hold", hold_target: "abs", count_sign: "1" }).problems.includes("hold_value"));
+  assert.ok(runFields({ ...M, mode: "hold", hold_deadband: "3.5", hold_target: "zero", count_sign: "1" })
+    .problems.includes("hold_deadband"));
+});
+
+test("the KTH-only fields close on the none source and on L/R, and a mode change drops the stop", () => {
+  assert.equal(runKind({ ...M, source: "none", mode: "hold", stop_turns: "1" }), "duty");
+  assert.equal(runKind({ axis: "L", mode: "hold" }), "duty");
+  assert.deepEqual(clearedOnChange("mode"), ["stop_turns", "measure"]);
+  for (const k of ["count_sign", "hold_target", "stop_turns", "same_setup"]) assert.ok(clearedOnChange("axis").includes(k));
+  assert.deepEqual(clearedOnChange("source"), clearedOnChange("axis"));
+});
+
+test("a high duty stop is shown, a negative one too, never refused", () => {
+  assert.ok(advice({ ...M, duty: "0.45", stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.ok(advice({ ...M, duty: "-0.45", stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.ok(!advice({ ...M, duty: String(HIGH_DUTY_DISTANCE), stop_turns: "0.5" }).includes("highDutyDistance"));
+  assert.equal(rangeMarkBefore({ ...M, duty: "0.2", stop_turns: "0.5" }), "unchecked");
+  assert.equal(rangeMarkBefore({ ...M, mode: "hold" }), "not_applicable");
+  assert.equal(rangeMarkBefore({ ...M, duty: "0.2" }), null);
+});
+
+test("the result view carries verdicts 2 and 3 and the B2 labels", () => {
+  const v = resultView({ kind: "hold", closed: "ended", stop_reason: "end_zero", start: "accepted", cleanup: "confirmed",
+    record_complete: true, verdict: { run_cleanup: { ok: true, why: [], labels: [] } },
+    hold: { verdict: { result: "met", end_error: 3, settle: { inside_share: 0.97 } }, entries: { label: null },
+      settings: { target: "here" } } });
+  assert.equal(v.holdVerdict.result, "met");
+  assert.equal(v.holdVerdict.endError, 3);
+  assert.equal(v.holdVerdict.insideShare, 0.97);
+  assert.equal(v.distanceVerdict, null);
+  const d = resultView({ kind: "distance", verdict: { run_cleanup: { ok: true, why: [], labels: ["보드 기록만(구동 표본 없음)"] } },
+    distance: { result: "reached", stop_counts: 2048, moved_at_cut: 2050 }, rest: { result: "settled_at_100hz", position: 2100 },
+    range_mark: "unchecked", late_aborts: ["stop"] });
+  assert.equal(d.distanceVerdict.result, "reached");
+  assert.deepEqual(d.labels, ["보드 기록만(구동 표본 없음)"]);
+  assert.equal(d.rest.position, 2100);
+  assert.deepEqual(d.lateAborts, ["stop"]);
+  assert.equal(d.rangeMark, "unchecked");
+});
+
+test("the graph keeps the run's hold error and breaks on a null", () => {
+  const g = new Graph(10000);
+  const st = (err) => ({ board: { boot_id: 1, duty_e4: [0, 0, 100, 0], current_ma: [0, 0, 0, 0], steering_rad: 0.1,
+    lift_m: 0, wheel_count: [0, 0] }, run: { error_counts: err, deadband: 12 } });
+  g.push(0, st(null));
+  g.push(10, st(40));
+  g.push(20, st(5));
+  const s = g.series("M");
+  assert.deepEqual(s.map((x) => x.holdError), [null, 40, 5]);
+  assert.equal(s[1].deadband, 12);
 });

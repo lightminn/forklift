@@ -1,13 +1,16 @@
-// The bench console's screen model (docs/plans/2026-11-27-bench-console.md 4, 4.1). Pure module: no DOM, no sockets.
-// The back end (tools/bench_console.py, B1) judges every request; this page shapes what the operator typed, keeps the
-// bench requests it sent (dropped on a disconnect, never resent on the next connection) and the last 10 s for the
-// graph. Hold and the distance stop come with B2 (A1b/A1c): their fields stay disabled here.
+// The bench console's screen model (docs/plans/2026-11-27-bench-console.md 4, 4.1, 4.4 B2). Pure module: no DOM, no
+// sockets. The back end (tools/bench_console.py) judges every request; this page shapes what the operator typed, keeps
+// the bench requests it sent (dropped on a disconnect, never resent on the next connection) and the last 10 s for the
+// graph. B2: a hold (position kept by the KTH count), a stop after N turns, a measuring run -- steering and lift on
+// the KTH source only; the MT source (A1c) and the second bypass bits (A2) stay closed.
 
 export const AXES = ["L", "R", "M", "H"];
 export const DEFAULT_SOURCE = { L: "none", R: "none", M: "kth", H: "kth" };
 // the MCU bypass bits this image has (A1a); kth_invalid comes with A2
 export const BYPASS = { steer_range: "M", lift_range: "H" };
 export const GRAPH_WINDOW_MS = 10000;
+export const HOLD_TARGETS = ["zero", "here", "abs", "rel"];
+export const HIGH_DUTY_DISTANCE = 0.4; // a distance stop above this duty is shown as unverified, never refused
 const BENCH_REQUESTS = new Set(["bench_run", "bench_stop", "bench_disarm", "clear_faults"]);
 
 export function isBenchWelcome(welcome) {
@@ -20,11 +23,17 @@ export function fieldState(form) {
   const sources = axis === "M" || axis === "H" ? ["kth", "none"] : ["none"];
   const rangeName = axis === "M" ? "steer_range" : axis === "H" ? "lift_range" : null;
   const rangeOff = rangeName !== null && (form.bypass ?? []).includes(rangeName);
+  const source = sources.includes(form.source) ? form.source : DEFAULT_SOURCE[axis];
+  const kth = source === "kth";
+  const mode = kth && form.mode === "hold" ? "hold" : "duty";
   return {
     sources,
-    source: sources.includes(form.source) ? form.source : DEFAULT_SOURCE[axis],
-    holdOpen: false, // B2 (A1b)
-    stopOpen: false, // B2 (A1b/A1c)
+    source,
+    mode,
+    holdOpen: kth, // a hold needs the KTH count (steering, lift)
+    stopOpen: kth && mode === "duty", // a stop after N turns: a duty run on the KTH count
+    measureOpen: kth && mode === "duty" && !(num(form.stop_turns) > 0 || num(form.stop_turns) < 0),
+    signNeeded: kth && (mode === "hold" || num(form.stop_turns) !== null || form.measure === true),
     mtOpen: false, // A1c
     kthInvalidOpen: false, // A2
     bypassOpen: Object.fromEntries(Object.entries(BYPASS).map(([name, ax]) => [name, ax === axis])),
@@ -40,21 +49,79 @@ function num(v) {
   return Number.isFinite(x) ? x : NaN;
 }
 
+// The run's kind as the back end reads it (plan 4.4 decision 2): a hold, a stop after N turns, a measuring run, or a
+// plain duty run (a B1-style request with the KTH source stays a plain duty run).
+export function runKind(form) {
+  const fs = fieldState(form);
+  if (fs.mode === "hold") return "hold";
+  if (fs.stopOpen && num(form.stop_turns) !== null) return "distance";
+  if (fs.measureOpen && form.measure === true) return "measure";
+  return "duty";
+}
+
+// What a change of axis, source or mode leaves behind (plan 4.4 decision 6): the hold, the stop, the sign and the
+// measuring box belong to the run they were typed for -- an axis or a source change clears them, so a sign typed for M
+// never goes out with H. Returns the form keys to empty.
+export function clearedOnChange(changed) {
+  if (changed === "axis" || changed === "source") {
+    return ["hold_target", "hold_value", "hold_kp", "hold_ki", "hold_kd", "hold_deadband", "hold_min_duty",
+      "count_sign", "stop_turns", "measure", "same_setup"];
+  }
+  if (changed === "mode") return ["stop_turns", "measure"];
+  return [];
+}
+
 // The bench_run fields from the form; problems are the page's own shape checks (the server judges the limits).
 export function runFields(form) {
   const fs = fieldState(form);
   const problems = [];
   const axis = AXES.includes(form.axis) ? form.axis : null;
   if (!axis) problems.push("axis");
+  const kind = runKind(form);
   const duty = num(form.duty);
   const seconds = num(form.seconds);
-  if (duty === null || Number.isNaN(duty)) problems.push("duty");
+  // a hold's duty is its cap and may be left out (the back end then takes 0.15, as the CLI does)
+  if ((duty === null && kind !== "hold") || Number.isNaN(duty)) problems.push("duty");
   if (seconds === null || Number.isNaN(seconds)) problems.push("seconds");
-  const fields = { axis, source: fs.source, mode: "duty", duty, seconds,
+  const fields = { axis, source: fs.source, mode: kind === "hold" ? "hold" : "duty", seconds,
     bypass: (form.bypass ?? []).filter((n) => fs.bypassOpen[n]),
     power_switch_in_hand: form.power_switch_in_hand === true,
     wheels_lifted: form.wheels_lifted === true,
     vcc_watched: form.vcc_watched === true };
+  if (duty !== null) fields.duty = duty;
+  if (kind !== "duty") {
+    // the sensor's sign is the operator's, never a default (plan 4.4, independent review P1-2)
+    const cs = num(form.count_sign);
+    if (cs !== 1 && cs !== -1) problems.push("count_sign");
+    else fields.count_sign = cs;
+    if (form.same_setup === true) fields.same_setup_as_bundle = true;
+  }
+  if (kind === "hold") {
+    const t = HOLD_TARGETS.includes(form.hold_target) ? form.hold_target : null;
+    if (!t) problems.push("hold_target");
+    const hold = {};
+    if (t === "zero" || t === "here") hold.target = t;
+    else if (t) {
+      const v = num(form.hold_value);
+      if (v === null || Number.isNaN(v) || !Number.isInteger(v)) problems.push("hold_value");
+      else hold.target = `${t}:${v}`;
+    }
+    for (const [k, key] of [["hold_kp", "kp"], ["hold_ki", "ki"], ["hold_kd", "kd"], ["hold_min_duty", "min_duty"]]) {
+      const v = num(form[k]);
+      if (Number.isNaN(v)) problems.push(k);
+      else if (v !== null) hold[key] = v;
+    }
+    const db = num(form.hold_deadband);
+    if (Number.isNaN(db) || (db !== null && !Number.isInteger(db))) problems.push("hold_deadband");
+    else if (db !== null) hold.deadband = db;
+    fields.hold = hold;
+  } else if (kind === "distance") {
+    const turns = num(form.stop_turns);
+    if (Number.isNaN(turns) || turns === null || turns <= 0) problems.push("stop_turns");
+    else fields.stop = { turns };
+  } else if (kind === "measure") {
+    fields.measure = true;
+  }
   for (const k of ["bench_duty_max", "bench_time_max"]) {
     const v = num(form[k]);
     if (Number.isNaN(v)) problems.push(k);
@@ -77,11 +144,23 @@ export function largePhrase(detail) {
   return m ? m[1] : null;
 }
 
-// Plan 0.2: shown and recorded, never enforced.
+// Plan 0.2 and 4.4: shown and recorded, never enforced.
 export function advice(form) {
   const out = [];
   if (fieldState(form).rangeOff) out.push("rangeOff");
+  const duty = num(form.duty);
+  if (runKind(form) === "distance" && duty !== null && Math.abs(duty) > HIGH_DUTY_DISTANCE) out.push("highDutyDistance");
   return out;
+}
+
+// The checked-range mark before the start (plan 4.4 decision 2): the 5.1 bundle's range is not in yet, so a stop after
+// N turns or a measuring run is 'unchecked'; a hold's gains and settling are checked apart. The result carries the back
+// end's own mark.
+export function rangeMarkBefore(form) {
+  const kind = runKind(form);
+  if (kind === "hold") return "not_applicable";
+  if (kind === "distance" || kind === "measure") return "unchecked";
+  return null;
 }
 
 // The bypass chips: what the MCU confirmed (its BENCH_STATE) apart from what the host applies.
@@ -104,8 +183,31 @@ export function resultView(result) {
     peakCurrentMa: Array.isArray(result.peak_current_ma) ? [...result.peak_current_ma] : null,
     record: result.record ?? null,
     axis: result.axis ?? null,
-    holdVerdict: null, // B2
-    distanceVerdict: null, // B2
+    kind: result.kind ?? "duty",
+    start: result.start ?? null,
+    labels: [...(v.labels ?? [])],
+    notes: [...(result.notes ?? [])],
+    lateAborts: [...(result.late_aborts ?? [])],
+    boardCause: result.board_cause ?? null,
+    cleanup: result.cleanup ?? null,
+    recordComplete: result.record_complete ?? null,
+    rangeMark: result.range_mark ?? null,
+    advisories: [...(result.advisories ?? [])],
+    holdVerdict: result.hold ? {
+      result: result.hold.verdict?.result ?? null,
+      why: [...(result.hold.verdict?.why ?? [])],
+      endError: result.hold.verdict?.end_error ?? null,
+      insideShare: result.hold.verdict?.settle?.inside_share ?? null,
+      entries: result.hold.entries?.label ?? null,
+      target: result.hold.settings?.target ?? null,
+    } : null,
+    distanceVerdict: result.distance ? {
+      result: result.distance.result ?? null,
+      stopCounts: result.distance.stop_counts ?? null,
+      movedAtCut: result.distance.moved_at_cut ?? null,
+    } : null,
+    measure: result.measure ? { moved: result.measure.moved ?? null, status: result.measure.status ?? null } : null,
+    rest: result.rest ? { result: result.rest.result ?? null, position: result.rest.position ?? null } : null,
   };
 }
 
@@ -141,9 +243,14 @@ export class Graph {
       if (this.samples.length && !this.samples.at(-1).gap) this.samples.push({ t: atMs, gap: true });
       return;
     }
+    const run = state?.run ?? null;
     this.samples.push({ t: atMs, boot: b.boot_id ?? null, duty: [...(b.duty_e4 ?? [0, 0, 0, 0])],
       current: [...(b.current_ma ?? [0, 0, 0, 0])], steer: b.steering_rad ?? null, lift: b.lift_m ?? null,
-      wheel: [...(b.wheel_count ?? [0, 0])] });
+      wheel: [...(b.wheel_count ?? [0, 0])],
+      // the run's own count values (null until they are this run's, and across a pair gap: plan 4.4 decision 5)
+      holdError: Number.isFinite(run?.error_counts) ? run.error_counts : null,
+      deadband: Number.isFinite(run?.deadband) ? run.deadband : null,
+      moved: Number.isFinite(run?.moved_counts) ? run.moved_counts : null });
   }
 
   // drop what is older than the window (called with each sample and by the screen with its clock)
@@ -186,6 +293,9 @@ export class Graph {
       value: axis === "M" ? s.steer : axis === "H" ? s.lift : counts[i],
       duty: s.duty[AXES.indexOf(axis)] / 1e4,
       current: s.current,
+      holdError: s.holdError ?? null,
+      deadband: s.deadband ?? null,
+      moved: s.moved ?? null,
     }));
   }
 }
