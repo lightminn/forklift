@@ -178,6 +178,7 @@ def test_a_cpr_that_is_no_number_leaves_no_nan_in_the_record():
     {"motor_counts_per_rev": 4096, "gear_ratio": float("inf")},
     {"motor_counts_per_rev": 4096, "gear_ratio": 1e308},
     {"counts_per_wheel_rev": float("inf")},
+    {"motor_counts_per_rev": 10 ** 400, "gear_ratio": 80.0},
 ])
 def test_no_infinity_or_nan_in_the_units_record(entry):
     import json

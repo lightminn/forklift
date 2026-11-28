@@ -94,7 +94,9 @@ def test_a_moving_mt_hold_that_settles_is_held_after_1_s(model):
     # the model's settling time varies with the host's timing: held when the last qualified progress is more than 1 s
     # before the end (the usual case), met when it lands within it -- each checked by its own evidence age
     if v2["result"] == "held":
-        assert v2["why"] == ["mt_evidence_age"] and br["end_evidence_age_ms"] > 1000 and v2["inside_s"] > 0.5, v2
+        # moved, then still: evidence older than 1 s but present (0xFFFF would be no progress at all -- r3 P2-2)
+        assert v2["why"] == ["mt_evidence_age"] and 1000 < br["end_evidence_age_ms"] < 0xFFFF, (v2, br)
+        assert v2["inside_s"] > 0.5, v2
     else:
         assert v2["result"] == "met" and br["end_evidence_age_ms"] <= 1000, (v2, br)
 
@@ -119,3 +121,15 @@ def test_a_read_failure_while_a_distance_drives_fails_its_continuity(model):
                                wheels_lifted=True), b)
     assert res["bench_result"]["stop_reason"] == "fault", res
     assert res["distance"]["result"] == "failed_continuity", res
+
+
+def test_a_wheel_that_keeps_creeping_is_never_unchanged(model):
+    """The model turns L slowly by hand from its start (1 wheel turn over 10 s, about 33 counts/ms): after the cut the
+    count keeps changing, so the rest is unconfirmed, not unchanged (Codex A1c-2 r3 P2-3)."""
+    b = model("--bench", "1", "--hand-turn-wheel", "0", "--hand-turn-revs", "1", "--hand-turn-ms", "0",
+              "--hand-turn-duration-ms", "10000")
+    bringup.execute(args(axis="L", duty=0.1, seconds=1.0, stop_counts=2000, count_sign=1, observed="none",
+                         wheels_lifted=True), b)
+    rest = [r for r in rows(b) if r["t"] == "bench_rest_position"]
+    assert rest and rest[-1]["result"] == "unconfirmed" and rest[-1]["why"] == "not_settled", rest
+

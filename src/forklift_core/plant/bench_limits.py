@@ -418,7 +418,10 @@ class MtUnits:
 def _finite_pos(v) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:
+        return None  # an integer past the float range (Codex A1c-2 r3 P3)
     return f if math.isfinite(f) and f > 0 else None
 
 
@@ -449,8 +452,8 @@ def mt_units_from_mapping(data: dict) -> tuple[MtUnits, MtUnits]:
             if gear is None:
                 cpr, why = None, why or "gear_ratio is not a finite positive number"
             per_wheel = raw * gear if raw is not None and gear is not None else None
-            if per_wheel is not None and not math.isfinite(per_wheel):
-                per_wheel, cpr, why = None, None, why or "the counts per wheel turn overflow"
+            if per_wheel is not None and not (math.isfinite(per_wheel) and per_wheel > 0):
+                per_wheel, cpr, why = None, None, why or "the counts per wheel turn are not a finite positive number"
             out.append(MtUnits(side, cpr, gear, per_wheel, measured, why))
         elif keys == {"counts_per_wheel_rev"}:
             out.append(MtUnits(side, None, None, _finite_pos(entry["counts_per_wheel_rev"]), measured,

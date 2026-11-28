@@ -1317,24 +1317,31 @@ class CommissionSession(Session):
         mt = self.bench.source == bl.MT_SOURCE
         if seconds is None:
             seconds = bench_session.REST_OBSERVE_MT_S if mt else REST_OBSERVE_S
-        # the window is ``seconds`` after the first DISARMED pair of this run (plan 4.2 decision 4, 4.5 A1c decision 9:
-        # "after DISARMED"), waiting at most STOPPING_WAIT_S for that pair -- never shortened by a late brake
-        b, seen = self.b, []
+        # the window is ``seconds`` of MCU time after the first DISARMED pair of this run (plan 4.2 decision 4, 4.5 A1c
+        # decision 9: "after DISARMED"), that pair counted even when it came during the cleanup (Codex A1c-2 r3 P2-1);
+        # only pairs of the arming's boot, arming, host opening and board connection generation
+        b = self.b
+        recorded, conns = getattr(self, "run_pairs", None), getattr(self, "run_conns", None)
+        if recorded is None or conns is None:
+            return None
+        pairs, idents = recorded
+
+        def mine() -> list:
+            return [(t, bs) for (t, mode, bs), idn, c in zip(pairs, idents, conns, strict=False)
+                    if mode == Mode.DISARMED and idn == self.run_ident and bs.run_id == self.run_id
+                    and self.arm_conn is not None and c == self.arm_conn and bs.conn_gen == self.arm_conn_gen]
+
+        span_us = int(seconds * 1e6)
         give_up = time.monotonic() + seconds + STOPPING_WAIT_S
-        end = None
-        last = None
-        conn0, gen0 = self.arm_conn, self.arm_conn_gen  # the arming's opening and board connection generation
-        while time.monotonic() < (end if end is not None else give_up):
+        while time.monotonic() < give_up:
+            got = mine()
+            if got and got[-1][0] - got[0][0] >= span_us:
+                break
             b.cycle()
-            bs, st = b.host.bench_state, b.host.bench_state_of
-            if bs is not None and st is not None and bs is not last and st.mode == Mode.DISARMED:
-                last = bs
-                if (conn0 is not None and b.conn == conn0 and bs.conn_gen == gen0 and self.run_ident is not None
-                        and (st.boot_id, st.arm_gen) == self.run_ident and bs.run_id == self.run_id):
-                    seen.append((st.mcu_time_us, bs))
-                    if end is None:
-                        end = time.monotonic() + seconds
             time.sleep(0.005)
+        seen = mine()
+        if seen:
+            seen = [x for x in seen if x[0] <= seen[0][0] + span_us]
         out = bench_session.rest_position(seen, source=self.bench.source)
         b.emit({"t": "bench_rest_position", **out})
         return out
@@ -1468,7 +1475,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     rec_idents: list = []
     session.run_pairs = (rec_pairs, rec_idents)  # execute's end reads the same record (its cleanup retry's pairs too)
     if kth_run:
-        b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents)
+        session.run_conns = []
+        b.host.on_pair, b.host.on_accepted = _run_recorders(b, rec_pairs, rec_idents, session.run_conns)
     if kth_run and session.bench.source == bl.MT_SOURCE:
         _mt_advisories(b, session.bench)
     if distance_run and abs(duty) > bl.HIGH_DUTY_DISTANCE:
@@ -1638,7 +1646,8 @@ def run_hold(bench: Bench, session: CommissionSession, seconds: float) -> dict:
         _mt_advisories(b, ask)
     pairs: list = []  # (mcu_time_us, Mode, BenchState) of every pair the host accepted, in order
     idents: list = []  # (boot_id, arm_gen) of each
-    keep, accepted_ = _run_recorders(b, pairs, idents)
+    session.run_conns = []
+    keep, accepted_ = _run_recorders(b, pairs, idents, session.run_conns)
     b.host.on_pair, b.host.on_accepted = keep, accepted_
     warned = {"label": None}
     i_arm = len(b.samples)
@@ -1765,7 +1774,7 @@ def _kth_verdicts(session: CommissionSession, br: dict) -> dict:
         cut_position=br.get("cut_position", 0))}
 
 
-def _run_recorders(b: Bench, pairs: list, idents: list):
+def _run_recorders(b: Bench, pairs: list, idents: list, conns: list | None = None):
     """The host hooks a bench7 KTH run keeps for its whole length (plan 4.4 B2: verdicts and the first answer can be
     recomputed from the JSONL alone): every accepted pair as a ``bench_pair`` row with its receipt time, the host's
     connection and the board's connection generation, and every STATE the host accepted as a ``state_accepted`` row
@@ -1774,6 +1783,8 @@ def _run_recorders(b: Bench, pairs: list, idents: list):
     def keep(st, bs, rx):
         idents.append((st.boot_id, st.arm_gen))
         pairs.append((st.mcu_time_us, st.mode, bs))
+        if conns is not None:
+            conns.append(b.conn)  # the host opening of each pair (the rest observation keeps to the arming's)
         b.emit({"t": "bench_pair", "rx_ns": rx, "conn": b.conn, "conn_gen": bs.conn_gen,
                 "mcu_time_us": st.mcu_time_us, "boot_id": st.boot_id, "arm_gen": st.arm_gen,
                 "mode": st.mode.name, "last_rx_seq": st.last_rx_seq, "run_id": bs.run_id,
