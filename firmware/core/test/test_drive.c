@@ -3444,6 +3444,79 @@ static void hold_time_is_the_hal_window(void)
     in.pwm_report = false;
 }
 
+/* a skipped HAL read: the fallback's tick is not counted again from the HAL window that follows (Codex round 3) */
+static void hold_skipped_read_counts_once(void)
+{
+    boot_with(mod_bench);
+    CHECK(hold_start(103, 1000, BENCH_HOLD_TARGET_REL, 100));
+    pwm_sim = false;
+    in.applied_e4[DRIVE_CH_M] = 1200;
+    in.applied_any[DRIVE_CH_M] = true;
+    in.abs_start_known[0] = true;
+    int n = 0;
+    while (d.mode == DRIVE_MODE_ARMED && n < 400) {
+        bool skip = n == 150;
+        in.pwm_report = !skip;
+        in.applied_window_us = n == 151 ? 2000u : 1000u; /* the HAL's window across the skipped read */
+        in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+        if (n % 50 == 0) {
+            hold();
+        } else {
+            tick();
+        }
+        n++;
+    }
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_NO_PROGRESS);
+    CHECK_EQ_I(n, 300); /* counted twice, the skipped tick would stop it at 299 */
+    in.pwm_report = false;
+}
+
+/* the run's time limit stops a hold whose output never reached a whole zero window: 2 ms on M, a 0 requested
+   after it, the HAL still reporting the old 1200 (no update), then a request out of the deadband again -> STOPPING
+   as 3 with commission_time_limit, before the new request (Codex round 3) */
+static void hold_time_limit_stops(void)
+{
+    boot_with(mod_bench);
+    kraw(0, 1000);
+    ticks(3);
+    link_bench_set b = bench_defaults(104, DRIVE_CH_M);
+    b.mode = DRIVE_BENCH_MODE_HOLD;
+    b.source = DRIVE_BENCH_SOURCE_KTH;
+    b.bypass = DRIVE_BENCH_STEER_RANGE;
+    b.time_ms[DRIVE_CH_M] = 2;
+    send(bench_set_msg(10, b));
+    send(bench_arm_msg(11, 104, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    hcfg = (link_bench_hold){.boot_id = d.boot_id, .arm_gen = d.arm_gen, .valid_after_echo_ms = 100, .run_id = 104,
+                             .axis = DRIVE_CH_M, .source = DRIVE_BENCH_SOURCE_KTH,
+                             .target_kind = BENCH_HOLD_TARGET_REL, .target_value = 100, .cpr = 4096, .kp = 0.5f,
+                             .deadband_counts = 12, .duty_max_e4 = 1500, .min_duty_e4 = 1200, .sign = 1};
+    cm(0);
+    hold();
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    pwm_sim = false;
+    in.pwm_report = true;
+    in.applied_window_us = 1000;
+    in.applied_e4[DRIVE_CH_M] = 1200;
+    in.applied_any[DRIVE_CH_M] = true;
+    in.abs_start_known[0] = true;
+    in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+    tick();
+    in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+    tick();
+    kraw(0, 1095); /* inside: 0 requested, the 1200 still active */
+    in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+    tick();
+    kraw(0, 1000); /* out again */
+    in.abs_start_us[0] = in.now_us + cfg.period_us - 50u;
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(bench_state_now().stop_reason, DRIVE_BENCH_STOP_TIME_LIMIT);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    CHECK(out.duty[DRIVE_CH_M] == 0.0f);
+    in.pwm_report = false;
+}
+
 static void mod_bench_m_reversed(drive_config *c)
 {
     mod_bench(c);
@@ -3557,6 +3630,8 @@ static void bench_hold_tests(void)
     hold_interval_closes_on_the_report();
     hold_progress_needs_the_report();
     hold_time_is_the_hal_window();
+    hold_skipped_read_counts_once();
+    hold_time_limit_stops();
     hold_blocked_is_its_axis_only();
     hold_entry_on_the_end_tick();
 }

@@ -131,7 +131,7 @@ static void report_never_misses_an_active_output(void)
         }
         uint32_t x = next();
         o.duty[DRIVE_CH_M] = duties[x % 4u];
-        uint32_t when = (x >> 3) % 14u; /* 0: none; 1..12: after that write of the call (M's are 9..12); 13: before */
+        uint32_t when = (x >> 3) % 14u; /* 0: none; 1..12: after that write of the call (L and R write twice each: M's from 5); 13: before */
         if (when == 13u) {
             regmodel_uev();
         } else if (when != 0u) {
