@@ -1251,10 +1251,14 @@ class BenchConsole:
 
     def _drive(self, r: Run, now: int, states: list) -> None:
         a = r.ask
+        v = self._window_out(r, states)
         if a.kind in ("hold", "distance") and self._ended_by_board(r):
+            if v is not None:
+                # a driving sample out of the window before the board's own end in the same read: kept (impl r5 P2)
+                r.window_stop = f"window:{v}"
+                r.late_failures.append(r.window_stop)
             self._end(r, now)  # the board's own end (distance 8-12, hold 10-12, a limit, an expiry)
             return
-        v = self._window_out(r, states)
         if v is not None:
             r.window_stop = f"window:{v}"
         elif a.axis < 2:

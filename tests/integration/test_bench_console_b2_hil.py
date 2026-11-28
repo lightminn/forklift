@@ -496,8 +496,9 @@ def test_a_stop_zero_torn_while_the_board_stops_itself_is_abandoned(rig):  # noq
 
 
 def test_a_fault_state_seen_before_a_loss_in_the_rest_position_fails_verdict1(rig):  # noqa: F811
-    """A FAULT STATE of this arming received during the rest position, its pair never in, then the link lost: the
-    verdict reads that STATE (the host's is cleared by the loss), not the earlier DISARMED pair (impl round 4 P2)."""
+    """A FAULT STATE of this arming reaches the console's receipt callback during the rest position, its pair never
+    in, then the device is lost (the host's STATE cleared): the verdict reads that STATE, not the earlier DISARMED
+    pair (impl rounds 4-5 P2). No pty read follows, so nothing newer can cover it."""
     import dataclasses
 
     from forklift_core.mcu_link.messages import FaultFlag, Mode
@@ -507,11 +508,35 @@ def test_a_fault_state_seen_before_a_loss_in_the_rest_position_fails_verdict1(ri
     b.send("bench_run", **M, duty=0.2, seconds=0.8, measure=True, count_sign=1, source="kth")
     assert run_until(lambda: c.run is not None and c.run.phase == "rest", 8.0)
     r = c.run
-    st = r.last_state
-    r.last_state = dataclasses.replace(st, mode=Mode.FAULT, fault_flags=FaultFlag.DRIVER_FAULT_M,
-                                       mcu_time_us=st.mcu_time_us + 5_000)
-    c.dev.extra_events.append(HostEvent("connected", {"path": "pty", "product": BENCH5}))
-    assert run_until(lambda: b.results, 3.0)
-    res = b.results[-1]
+    st = c.host.state
+    now = c.clock()
+    c._on_state(dataclasses.replace(st, mode=Mode.FAULT, fault_flags=FaultFlag.DRIVER_FAULT_M,
+                                    mcu_time_us=st.mcu_time_us + 5_000), now)  # the host's accepted-STATE hook
+    for e in c.host.disconnected(now):
+        c._device_event(e, now)
+    c._device_event(HostEvent("disconnected", {}), now)
+    assert c.host.state is None or c.host.state.mode != Mode.FAULT  # the host kept nothing of it
+    c._step(r, now + 1)  # the rest position ends on the loss, without another read
+    res = b.results[-1] if b.results else c.last_result
     v1 = res["verdict"]["run_cleanup"]
-    assert not v1["ok"] and any("DRIVER_FAULT_M" in w or "last_mode:FAULT" in w for w in v1["why"]), res
+    assert not v1["ok"] and res["final"]["mode"] == "FAULT", res
+
+
+def test_a_window_sample_before_the_boards_end_in_one_read_is_kept(rig, monkeypatch):  # noqa: F811
+    """A driving sample out of the window and the board's own end seen in the same cycle: the window stop is kept
+    (verdict 1 fails), the board's end still decides what is sent (impl round 5 P2)."""
+    import dataclasses
+
+    c, b, run_until = rig(*KTH)
+    b.send("bench_run", **hold(seconds=3.0))
+    assert run_until(lambda: c.run is not None and c.run.phase == "drive", 6.0)
+    r = c.run
+    r.ask = dataclasses.replace(r.ask, window=(-0.01, 0.01), range_off=False)
+    st = c.host.state
+    out = dataclasses.replace(st, steering_rad=0.06, mcu_time_us=st.mcu_time_us + 1)
+    monkeypatch.setattr(c, "_ended_by_board", lambda run: True)
+    c._drive(r, c.clock(), [(out, c.clock())])
+    assert r.phase == "stop" and r.window_stop == "window:0.06" and "window:0.06" in r.late_failures
+    monkeypatch.undo()
+    assert run_until(lambda: b.results, 6.0)
+    assert not b.results[-1]["verdict"]["run_cleanup"]["ok"]
